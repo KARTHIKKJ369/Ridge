@@ -6,7 +6,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from langchain_openrouter import ChatOpenRouter
+from langchain_ollama import ChatOllama
 from langgraph.graph import StateGraph, END
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_chroma import Chroma
@@ -18,10 +18,14 @@ vectorstore = Chroma(persist_directory="./chroma_db", embedding_function=embeddi
 
 retriever = vectorstore.as_retriever(
     search_type="mmr",
-    search_kwargs={"k": 3, "fetch_k": 10, "lambda_mult": 0.5}
+    search_kwargs={"k": 5, "fetch_k": 15, "lambda_mult": 0.5}
 )
 
-llm = ChatOpenRouter(model="meta-llama/llama-3.3-70b-instruct:free", temperature=0)
+llm = ChatOllama(
+    model="gemma4:12b",  # verified via curl http://100.75.99.22:11434/api/tags — has tools capability, needed for structured grading
+    base_url="http://100.75.99.22:11434",
+    temperature=0,
+)
 
 # --- 2. DEFINE STATE & SCHEMAS ---
 class GraphState(TypedDict):
@@ -31,8 +35,10 @@ class GraphState(TypedDict):
     loop_count: int
     past_queries: List[str]  # short-term memory so rewrite doesn't repeat itself
 
+from typing import Literal
+
 class Grade(BaseModel):
-    score: str = Field(description="Are the documents relevant to the question? 'yes' or 'no'")
+    score: Literal["yes", "no"] = Field(description="Are the documents relevant to the question? 'yes' or 'no'")
 
 structured_grader = llm.with_structured_output(Grade)
 
@@ -48,11 +54,12 @@ def retrieve(state: GraphState):
 import time
 
 def _get_retry_after(exc, default=5):
-    """Pull the provider-suggested wait time out of an OpenRouter error, if present."""
+    """Pull a provider-suggested wait time out of the error if present (OpenRouter-style).
+    Falls back to `default` for local Ollama errors, which won't have this metadata."""
     try:
         err_data = exc.args[0].error.metadata.get("retry_after_seconds")
         if err_data:
-            return float(err_data) + 1  # small buffer
+            return float(err_data) + 1
     except Exception:
         pass
     return default
@@ -70,7 +77,20 @@ def grade_documents(state: GraphState):
     # generate (using just that doc set) instead of rewriting unnecessarily.
     relevant_docs = []
     for i, doc in enumerate(doc_texts):
-        prompt = f"You are a grader assessing relevance.\n\nDocument: {doc}\nQuestion: {question}"
+        prompt = (
+            f"You are a grader assessing whether a retrieved document is relevant to a user question.\n\n"
+            f"Document:\n{doc}\n\n"
+            f"Question: {question}\n\n"
+            f"Give a binary score 'yes' or 'no' based on TOPIC overlap, not structural similarity.\n"
+            f"Score 'yes' only if the document discusses the same subject matter as the question "
+            f"(shares specific keywords, entities, or concepts about that subject), even if it doesn't "
+            f"fully answer it.\n"
+            f"Score 'no' if the document is about a different subject, even if it happens to share a "
+            f"generic format (e.g. a list, a template, or placeholder text) with no actual topical connection.\n"
+            f"Example: if the question is about baking a cake, a document listing generic placeholder "
+            f"goals like '{{{{user goal 1}}}}' with no mention of baking, cake, or food is 'no' — "
+            f"shared list structure is not topic relevance."
+        )
 
         result = None
         last_err = None
@@ -89,12 +109,18 @@ def grade_documents(state: GraphState):
             print(f"  Doc {i+1}/{len(doc_texts)}: giving up after 3 attempts, treating as 'no'. Last error: {last_err}")
             continue
 
+        preview = doc[:200].replace("\n", " ")
         print(f"  Doc {i+1}/{len(doc_texts)} decision: '{result.score}'")
+        print(f"    content preview: \"{preview}...\"")
         if result.score == "yes":
             relevant_docs.append(doc)
 
     if relevant_docs:
         print(f"Decision: 'yes' ({len(relevant_docs)}/{len(doc_texts)} docs relevant)")
+        print("--- FULL CONTENT OF RELEVANT DOCS (what generate will see) ---")
+        for j, rd in enumerate(relevant_docs):
+            print(f"  [Relevant Doc {j+1}] {rd}")
+            print("  " + "-" * 40)
         return {"generation": "yes", "documents": relevant_docs}
 
     print("Decision: 'no' (no relevant docs found)")
@@ -208,7 +234,7 @@ app = workflow.compile()
 
 # --- RUN THE SYSTEM ---
 if __name__ == "__main__":
-    test_question = "How do I bake a perfect chocolate cake?"
+    test_question = "What is task decomposition in LLM agents?"
     print(f"\n=== TESTING QUERY: {test_question} ===")
 
     final_state = app.invoke({
