@@ -6,6 +6,7 @@ langchain-ollama
 langchain-openrouter
 langchain-text-splitters
 langgraph
+pypdf
 python-dotenv
 requests
 sentence-transformers
