@@ -38,8 +38,16 @@ def get_settings() -> dict:
             "sentence-transformers/all-MiniLM-L6-v2",
         ),
         "chroma_dir": os.getenv("CHROMA_DIR", "./chroma_db"),
-        "ollama_model": os.getenv("OLLAMA_MODEL", "gemma4:12b"),
+        # Lean/fast model for grading + rewrite (called up to retriever_k times per loop)
+        "ollama_grade_model": os.getenv("OLLAMA_GRADE_MODEL", os.getenv("OLLAMA_MODEL", "llama3.1:8b")),
+        # Stronger model for the final answer the user actually reads
+        "ollama_generate_model": os.getenv("OLLAMA_GENERATE_MODEL", os.getenv("OLLAMA_MODEL", "gemma4:12b")),
         "ollama_base_url": os.getenv("OLLAMA_BASE_URL", "http://localhost:11434"),
+        # How long Ollama keeps a model resident in memory after last use.
+        # 16GB unified memory can't comfortably hold both models at once, so
+        # this just avoids reloading if you ask several questions in a row —
+        # not a permanent "keep both loaded forever" setting.
+        "ollama_keep_alive": os.getenv("OLLAMA_KEEP_ALIVE", "10m"),
         "retriever_k": int(os.getenv("RETRIEVER_K", "5")),
         "retriever_fetch_k": int(os.getenv("RETRIEVER_FETCH_K", "15")),
         "retriever_lambda_mult": float(os.getenv("RETRIEVER_LAMBDA_MULT", "0.5")),
@@ -76,12 +84,19 @@ def build_app():
         },
     )
 
-    llm = ChatOllama(
-        model=settings["ollama_model"],
+    llm_grade = ChatOllama(
+        model=settings["ollama_grade_model"],
         base_url=settings["ollama_base_url"],
         temperature=0,
+        keep_alive=settings["ollama_keep_alive"],
     )
-    structured_grader = llm.with_structured_output(Grade)
+    llm_generate = ChatOllama(
+        model=settings["ollama_generate_model"],
+        base_url=settings["ollama_base_url"],
+        temperature=0,
+        keep_alive=settings["ollama_keep_alive"],
+    )
+    structured_grader = llm_grade.with_structured_output(Grade)
 
     def retrieve(state: GraphState):
         print("\n--- NODE: RETRIEVE ---")
@@ -150,19 +165,29 @@ def build_app():
     def generate(state: GraphState):
         print("--- NODE: GENERATE ---")
         question = state["question"]
-        context = "\n\n".join(state["documents"])
+        docs = state["documents"]
+        context = "\n\n".join(docs)
+
+        print("--- FULL CONTEXT PASSED TO GENERATE ---")
+        for j, d in enumerate(docs):
+            print(f"  [Doc {j + 1}] {d}")
+            print("  " + "-" * 40)
+        print(f"  Total context length: {len(context)} chars")
 
         prompt = (
-            "You are an AI assistant. Answer the question using ONLY the provided "
-            "context. If the context does not contain the answer, cleanly state "
-            "that you cannot find it.\n\n"
+            "You are an AI assistant answering a question using ONLY the provided context.\n"
+            "The context below may contain multiple separate excerpts from a source document — "
+            "synthesize across ALL of them rather than relying on just one.\n"
+            "Write a complete answer: include specific details, examples, methods, or terms named "
+            "in the context that relate to the question, not just a one-line summary.\n"
+            "If the context does not contain the answer, cleanly state that you cannot find it.\n\n"
             f"Context:\n{context}\n\n"
             f"Question: {question}"
         )
 
         for attempt in range(3):
             try:
-                response = llm.invoke(prompt)
+                response = llm_generate.invoke(prompt)
                 return {"generation": response.content}
             except Exception as e:
                 wait = _get_retry_after(e, default=2 * (attempt + 1))
@@ -191,7 +216,7 @@ def build_app():
         new_query = None
         for attempt in range(3):
             try:
-                response = llm.invoke(prompt)
+                response = llm_grade.invoke(prompt)
                 new_query = response.content.strip().replace("`", "").replace('"', "")
                 break
             except Exception as e:
