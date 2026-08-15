@@ -46,8 +46,8 @@ export default function App() {
   const fetchSuggestionsAndStats = async () => {
     try {
       const [sugRes, statRes] = await Promise.all([
-        fetch('http://localhost:8000/api/suggestions'),
-        fetch('http://localhost:8000/api/stats')
+        fetch('/api/suggestions'),
+        fetch('/api/stats')
       ]);
       const sugData = await sugRes.json();
       const statData = await statRes.json();

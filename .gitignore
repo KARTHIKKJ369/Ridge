@@ -18,8 +18,11 @@ recall-env/
 .env.*
 !.env.example
 
-# Generated vector database
+# Generated vector database (rebuilt at runtime)
 chroma_db/
+
+# FlashRank model cache (downloaded at Docker build time)
+.flashrank_cache/
 
 # OS/editor noise
 .DS_Store
@@ -29,3 +32,7 @@ Thumbs.db
 
 # Logs
 *.log
+
+# Node
+frontend/node_modules/
+frontend/.vite/

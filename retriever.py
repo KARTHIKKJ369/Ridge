@@ -15,7 +15,7 @@ PERSIST_DIR = os.getenv("CHROMA_DIR", "./chroma_db")
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "sentence-transformers/all-MiniLM-L6-v2")
 
 
-def rebuild_vectorstore(sources: list[str]):
+def rebuild_vectorstore(sources: list[str]) -> Chroma:
     print("1. Loading embedding model...")
     embeddings = HuggingFaceEmbeddings(model_name=EMBEDDING_MODEL)
 
@@ -34,7 +34,7 @@ def rebuild_vectorstore(sources: list[str]):
     )
 
 
-def main():
+def main() -> None:
     # Sources: any mix of http(s):// URLs, .pdf, .md, .txt file paths.
     # e.g. python retriver.py https://example.com/post1 ./notes.pdf ./readme.md
     sources = sys.argv[1:] or [os.getenv("ARTICLE_URL", DEFAULT_ARTICLE_URL)]

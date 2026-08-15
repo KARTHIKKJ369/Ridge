@@ -1,0 +1,8 @@
+recall-env/
+chroma_db/
+.git/
+frontend/node_modules/
+frontend/dist/
+.env
+__pycache__/
+*.pyc
