@@ -31,7 +31,8 @@ import {
   Paperclip,
   ArrowUp,
   LogOut,
-  LogIn
+  LogIn,
+  Square
 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import { AuthModal } from './components/AuthModal';
@@ -225,6 +226,18 @@ export default function App() {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const userDropdownRef = useRef<HTMLDivElement>(null);
+  const abortControllerRef = useRef<AbortController | null>(null);
+
+  // Stop Generation Handler
+  const handleStopGeneration = () => {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      abortControllerRef.current = null;
+    }
+    setIsLoading(false);
+    updateCurrentMessages(prev => prev.map(msg => msg.isStreaming ? { ...msg, isStreaming: false } : msg));
+    showToast('Ascent generation stopped', 'info');
+  };
 
   // Close dropdown on outside click
   useEffect(() => {
@@ -285,7 +298,7 @@ export default function App() {
     setTimeout(() => setToast(null), 3500);
   };
 
-  // Keyboard Shortcuts (Command+K for new ascent)
+  // Keyboard Shortcuts (Command+K for new ascent, Esc to stop/close)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
@@ -293,6 +306,9 @@ export default function App() {
         handleNewChat();
       }
       if (e.key === 'Escape') {
+        if (isLoading) {
+          handleStopGeneration();
+        }
         setIsIngestOpen(false);
         setIsExportOpen(false);
         setSelectedSourceModal(null);
@@ -305,7 +321,7 @@ export default function App() {
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [sessions]);
+  }, [sessions, isLoading]);
 
   // Auto-resize textarea
   useEffect(() => {
@@ -322,7 +338,8 @@ export default function App() {
     if (token) {
       headers.set('Authorization', `Bearer ${token}`);
     }
-    const res = await fetch(url, { ...options, headers });
+    const signal = options.signal || abortControllerRef.current?.signal;
+    const res = await fetch(url, { ...options, headers, signal });
     if (res.status === 401 && authConfig?.enabled) {
       setUser(null);
       localStorage.removeItem('ridge_token');
@@ -493,11 +510,15 @@ export default function App() {
     setIsLoading(true);
     setExpandedThinking(prev => ({ ...prev, [assistantId]: true }));
 
+    const abortController = new AbortController();
+    abortControllerRef.current = abortController;
+
     try {
       const response = await fetchWithAuth('/ask', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ question: userMessage.content })
+        body: JSON.stringify({ question: userMessage.content }),
+        signal: abortController.signal,
       });
 
       if (!response.ok) throw new Error('Failed to query assistant');
@@ -542,6 +563,10 @@ export default function App() {
         }
       }
     } catch (error: any) {
+      if (error.name === 'AbortError' || error.message?.includes('aborted')) {
+        console.log('Ascent streaming aborted by user');
+        return;
+      }
       console.error(error);
       updateCurrentMessages(prev => prev.map(msg =>
         msg.id === assistantId
@@ -550,6 +575,7 @@ export default function App() {
       ));
       showToast('Error during pipeline ascent', 'error');
     } finally {
+      abortControllerRef.current = null;
       updateCurrentMessages(prev => prev.map(msg =>
         msg.id === assistantId ? { ...msg, isStreaming: false } : msg
       ));
@@ -1405,20 +1431,31 @@ export default function App() {
               </div>
 
               <div className="toolbar-right">
-                <span className="keyboard-enter-hint">Enter ↵</span>
-                <button 
-                  className={`recall-send-btn ${input.trim() && !isLoading ? 'ready' : ''}`}
-                  onClick={() => handleSend()}
-                  disabled={isLoading || !input.trim()}
-                  title="Send message (Enter)"
-                  aria-label="Send message"
-                >
-                  {isLoading ? (
-                    <RotateCw size={16} className="spin-slow" />
-                  ) : (
-                    <ArrowUp size={17} strokeWidth={2.4} />
-                  )}
-                </button>
+                {isLoading ? (
+                  <button 
+                    type="button"
+                    className="recall-stop-btn"
+                    onClick={handleStopGeneration}
+                    title="Stop ascent generation (Esc)"
+                    aria-label="Stop generation"
+                  >
+                    <Square size={11} fill="currentColor" />
+                  </button>
+                ) : (
+                  <>
+                    <span className="keyboard-enter-hint">Enter ↵</span>
+                    <button 
+                      type="button"
+                      className={`recall-send-btn ${input.trim() ? 'ready' : ''}`}
+                      onClick={() => handleSend()}
+                      disabled={!input.trim()}
+                      title="Send message (Enter)"
+                      aria-label="Send message"
+                    >
+                      <ArrowUp size={17} strokeWidth={2.4} />
+                    </button>
+                  </>
+                )}
               </div>
             </div>
           </div>

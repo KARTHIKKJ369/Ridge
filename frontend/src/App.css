@@ -1489,6 +1489,32 @@ textarea:focus-visible,
   pointer-events: none;
 }
 
+.recall-stop-btn {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  background-color: var(--recall-surface);
+  border: 1.5px solid #EF4444;
+  color: #EF4444;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  flex-shrink: 0;
+  box-shadow: 0 2px 8px rgba(239, 68, 68, 0.2);
+}
+
+.recall-stop-btn:hover {
+  background-color: rgba(239, 68, 68, 0.12);
+  transform: scale(1.08);
+  box-shadow: 0 3px 12px rgba(239, 68, 68, 0.35);
+}
+
+.recall-stop-btn:active {
+  transform: scale(0.93);
+}
+
 .input-deck-footer-meta {
   display: flex;
   align-items: center;

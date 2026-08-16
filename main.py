@@ -196,17 +196,19 @@ def build_app():
 
     from duckduckgo_search import DDGS
 
-    llm_grade = ChatGroq(
+    llm_fast = ChatGroq(
         api_key=settings["groq_api_key"],
-        model_name=settings["groq_model"],
-        temperature=0,
+        model_name="llama-3.1-8b-instant",
+        temperature=0.1,
+        max_tokens=256,
     )
     llm_generate = ChatGroq(
         api_key=settings["groq_api_key"],
         model_name=settings["groq_model"],
         temperature=0,
     )
-    structured_grader = llm_grade.with_structured_output(BatchGrades)
+    # Fast 8B model for grading - 20,000 TPM limit (prevents 429 rate limits & delivers sub-200ms latency)
+    structured_grader = llm_fast.with_structured_output(BatchGrades)
 
     def retrieve(state: GraphState) -> dict:
         t0 = time.time()
@@ -246,37 +248,38 @@ def build_app():
 
         if not doc_texts:
             print("Decision: 'no' (empty database results)")
-            return {"generation": "no"}
+            return {"generation": "no", "documents": [], "documents_metadata": [], "doc_grades": [], "latency_ms": int((time.time() - t0) * 1000)}
 
         docs_str = "\n".join(
             f"--- Document {i} ---\n{doc}\n" for i, doc in enumerate(doc_texts)
         )
 
         prompt = (
-            "You are an expert relevance evaluator for a technical retrieval system.\n"
+            "You are an expert relevance evaluator for a technical document retrieval system.\n"
             "Assess whether the retrieved document is relevant or helpful for answering the user question.\n\n"
-            f"Question: {question}\n\n"
-            f"Documents:\n{docs_str}\n\n"
-            "Grading instructions:\n"
-            "1. Score 'yes' if the document contains facts, concepts, algorithms, heuristics, definitions, or methods relevant or partially relevant to the question.\n"
-            "2. Score 'no' ONLY if the document is completely unrelated to the domain or subject matter of the question.\n"
-            "Be helpful and objective. For questions asking about benefits, advantages, implications, or summaries of the documented methods, score 'yes' if the document discusses those methods."
+            f"User Question: {question}\n\n"
+            f"Retrieved Documents:\n{docs_str}\n\n"
+            "Evaluation Rules:\n"
+            "1. GIBBERISH / NOISE FILTER: If the user question is random characters, keyboard mash, or nonsensical gibberish (e.g. 'euhygvdvg vbhsd', 'asdfghjkl'), you MUST score 'no' for all documents with rationale 'Question is gibberish/unintelligible'.\n"
+            "2. IDENTITY & PROFILE QUESTIONS: If the question asks 'who is [Name]' or asks about a person, and the document contains their resume, biography, education, contact info, or background, score 'yes'.\n"
+            "3. TECHNICAL CONCEPTS: If the question asks about a method, algorithm, concept, or technical subject, score 'yes' if the document discusses or defines it.\n"
+            "4. UNRELATED DOCUMENTS: Score 'no' if the document is on a completely different subject with no bearing on the question.\n"
+            "Be helpful, practical, and objective."
         )
 
         result = None
         last_err = None
-        for attempt in range(3):
+        for attempt in range(2):
             try:
                 result = structured_grader.invoke(prompt)
                 break
             except Exception as e:
                 last_err = e
-                wait = _get_retry_after(e, default=2 * (attempt + 1))
-                print(f"  Grading attempt {attempt + 1}/3 failed: {e}. Waiting {wait}s...")
-                time.sleep(wait)
+                print(f"  Grading attempt {attempt + 1} failed: {e}")
+                time.sleep(0.5)
 
         if result is None:
-            print(f"  Grading gave up after 3 attempts. Treating all as 'no'. Last error: {last_err}")
+            print(f"  Grading gave up. Last error: {last_err}")
             return {"generation": "no", "documents": [], "documents_metadata": [], "doc_grades": [], "latency_ms": int((time.time() - t0) * 1000)}
 
         relevant_docs = []
@@ -287,10 +290,8 @@ def build_app():
                 score = g.score.lower()
                 meta = doc_metas[g.index] if g.index < len(doc_metas) else {}
                 doc_grades.append({"index": g.index, "score": score, "rationale": g.rationale, "source": meta.get("source", "unknown"), "relevance": float(meta.get("score", 0))})
-                preview = doc_texts[g.index][:150].replace("\n", " ")
                 print(f"  Doc {g.index + 1}/{len(doc_texts)} decision: '{score}'")
                 print(f"    rationale: {g.rationale}")
-                print(f"    content preview: \"{preview}...\"")
                 if score == "yes":
                     relevant_docs.append(doc_texts[g.index])
                     relevant_metas.append(meta)
@@ -307,68 +308,63 @@ def build_app():
         t0 = time.time()
         print("--- NODE: GENERATE ---")
         question = state.get("original_question") or state["question"]
-        docs = state["documents"]
-        context = "\n\n".join(docs)
+        docs = state.get("documents", [])
+        context = "\n\n".join(docs).strip()
 
-        print("--- FULL CONTEXT PASSED TO GENERATE ---")
-        for j, d in enumerate(docs):
-            print(f"  [Doc {j + 1}] {d}")
-            print("  " + "-" * 40)
         print(f"  Total context length: {len(context)} chars")
 
         prompt = (
-            "You are Ridge, an expert AI assistant providing detailed, clear, and well-structured answers.\n"
-            "Use the provided context to thoroughly answer the user's question.\n\n"
+            "You are Ridge, an expert AI assistant.\n"
+            "Answer the user's question clearly.\n\n"
+            f"Context findings:\n{context or 'No local document match found.'}\n\n"
+            f"Question: {question}\n\n"
             "Guidelines:\n"
-            "1. Synthesize insights across all provided document excerpts and web search findings.\n"
-            "2. Explain technical mechanisms, implications, benefits, and practical use cases derived from the context.\n"
-            "3. If the context covers specific methods (such as Union by Rank, Path Compression, tree operations, time complexities), directly explain their purpose, efficiency gains (e.g. reducing tree height from O(N) to near O(1)/O(α(N))), and operational advantages.\n"
-            "4. Format your answer with clean markdown headings, bullet points, and code/formulas where helpful.\n\n"
-            f"Context:\n{context}\n\n"
-            f"Question: {question}"
+            "1. If the question is random keystrokes or nonsensical gibberish (e.g. 'euhygvdvg vbhsd'), politely state that the input is unintelligible and ask for a clear query.\n"
+            "2. If verified context from indexed documents or web search is provided, synthesize the facts thoroughly with technical precision.\n"
+            "3. If context is empty or unrelated, provide a comprehensive, direct explanation of the requested topic using your verified knowledge, mentioning that it was synthesized outside the indexed documents.\n"
+            "4. Format your response with clean markdown headings, bullet points, and code/formulas where helpful."
         )
 
-        for attempt in range(3):
+        # Primary: 70B Model with instant 8B fallback on rate-limit
+        try:
+            response = llm_generate.invoke(prompt)
+            return {"generation": response.content, "latency_ms": int((time.time() - t0) * 1000)}
+        except Exception as e:
+            print(f"Primary generation rate-limited or error ({e}). Switching instantly to fast model...")
             try:
-                response = llm_generate.invoke(prompt)
+                response = llm_fast.invoke(prompt)
                 return {"generation": response.content, "latency_ms": int((time.time() - t0) * 1000)}
-            except Exception as e:
-                wait = _get_retry_after(e, default=2 * (attempt + 1))
-                print(f"  generate attempt {attempt + 1}/3 failed: {e}. Waiting {wait}s...")
-                time.sleep(wait)
-
-        return {
-            "generation": "Sorry, the model provider is currently unavailable after multiple retries.",
-            "latency_ms": int((time.time() - t0) * 1000)
-        }
+            except Exception as e2:
+                print(f"Fallback generation error: {e2}")
+                return {
+                    "generation": f"Model provider error: {e2}",
+                    "latency_ms": int((time.time() - t0) * 1000)
+                }
 
     def rewrite(state: GraphState) -> dict:
+        t0 = time.time()
         print("--- NODE: REWRITE QUERY ---")
         original_q = state.get("original_question") or state["question"]
         current_loops = state.get("loop_count", 0) + 1
         past_queries = state.get("past_queries", [])
 
         prompt = (
-            "You are an expert search query optimizer for a technical document retrieval system.\n"
+            "You are a search query optimizer for a technical retriever.\n"
             f"Original user question: {original_q}\n"
-            f"Previously attempted search queries that yielded no matches: {past_queries}\n\n"
-            "Generate a different, focused search query using alternative core keywords, technical terms, or broader concepts related to the original question.\n"
-            "Do NOT drift into unrelated topics.\n"
-            "Output only the raw search query string without quotes or markdown."
+            f"Previous attempts that had no matches: {past_queries}\n\n"
+            "Generate a single, focused 3 to 6 word search query.\n"
+            "Do NOT repeat words or output long repetitive lists.\n"
+            "Output ONLY the plain search query string."
         )
 
         new_query = None
-        for attempt in range(3):
-            try:
-                response = llm_grade.invoke(prompt)
-                new_query = response.content.strip().replace("`", "").replace('"', "")
-                break
-            except Exception as e:
-                wait = _get_retry_after(e, default=2 * (attempt + 1))
-                print(f"  rewrite attempt {attempt + 1}/3 failed: {e}. Waiting {wait}s...")
-                time.sleep(wait)
+        try:
+            response = llm_fast.invoke(prompt)
+            new_query = response.content.strip().replace("`", "").replace('"', "").split("\n")[0]
+        except Exception as e:
+            print(f"  rewrite attempt failed: {e}")
 
-        if new_query is None:
+        if not new_query:
             new_query = original_q
 
         print(f"New Search Query: '{new_query}'")
@@ -379,43 +375,51 @@ def build_app():
             "original_question": original_q,
             "loop_count": current_loops,
             "past_queries": past_queries + [new_query],
+            "latency_ms": int((time.time() - t0) * 1000),
         }
 
     def web_search(state: GraphState) -> dict:
         t0 = time.time()
-        print("--- NODE: WEB SEARCH ---")
         search_query = state.get("original_question") or state["question"]
-        print(f"Searching web for: '{search_query}'")
+        print(f"--- NODE: WEB SEARCH: '{search_query}' ---")
         
+        docs_snippets = []
         try:
-            from duckduckgo_search import DDGS
-            with DDGS() as ddgs:
-                results = list(ddgs.text(search_query, max_results=4))
-            if results:
-                docs = "\n\n".join(
-                    f"--- Web Source: {r.get('title', 'Web Search')} ({r.get('href', '')}) ---\n{r.get('body', '')}"
-                    for r in results if r.get('body')
-                )
-            else:
-                docs = "No web search snippets returned."
-        except Exception as e:
-            docs = f"Web search could not retrieve external pages: {e}"
+            try:
+                from ddgs import DDGS
+            except ImportError:
+                from duckduckgo_search import DDGS
             
-        web_results = f"\n\nWeb Search Results:\n{docs}"
-        
+            with DDGS(timeout=5) as ddgs:
+                results = list(ddgs.text(search_query, max_results=3))
+                for r in results:
+                    title = r.get("title", "Web Source")
+                    body = r.get("body", "")
+                    href = r.get("href", "")
+                    if body:
+                        docs_snippets.append(f"--- Web Source: {title} ({href}) ---\n{body}")
+        except Exception as e:
+            print(f"Web search note: {e}")
+            
+        if docs_snippets:
+            web_results = "\n\n".join(docs_snippets)
+        else:
+            web_results = "No direct web snippets returned."
+            
         current_docs = state.get("documents", [])
-        current_docs.append(web_results)
+        current_docs.append(f"Web Search Findings:\n{web_results}")
         return {"documents": current_docs, "latency_ms": int((time.time() - t0) * 1000)}
 
     def decide_to_generate(state: GraphState) -> str:
         print("--- ROUTER: EVALUATING NEXT STEP ---")
 
-        if state["generation"] == "yes":
+        if state.get("generation") == "yes":
             print("-> Document matches. Route to: GENERATE")
             return "generate"
 
         loops = state.get("loop_count", 0)
-        if loops >= settings["max_rewrite_loops"]:
+        max_loops = int(settings.get("max_rewrite_loops", 1))
+        if loops >= max_loops:
             print(f"-> Safety valve tripped after {loops} rewrite attempts. Route to: WEB SEARCH.")
             return "web_search"
 
