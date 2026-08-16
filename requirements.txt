@@ -17,4 +17,3 @@ sentence-transformers
 typing-extensions
 flashrank
 duckduckgo-search
-gradio
