@@ -1,12 +1,55 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Send, Bot, User, Activity, CheckCircle, RotateCw, X, Plus, Upload, FileText } from 'lucide-react';
+import { 
+  Send, 
+  User, 
+  Activity, 
+  CheckCircle, 
+  RotateCw, 
+  X, 
+  Plus, 
+  Upload, 
+  FileText, 
+  Globe, 
+  Copy, 
+  Check, 
+  Trash2, 
+  Database, 
+  Sparkles, 
+  ChevronRight,
+  ChevronDown,
+  BookOpen,
+  PanelLeftClose,
+  PanelLeft,
+  Sun,
+  Moon,
+  Compass,
+  ThumbsUp,
+  ThumbsDown,
+  Download,
+  Search,
+  MessageSquare,
+  Command
+} from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import './App.css';
+
+// Anthropic Claude 8-point geometric Starburst Logo
+const ClaudeLogo = ({ size = 22, className = '' }: { size?: number; className?: string }) => (
+  <svg 
+    width={size} 
+    height={size} 
+    viewBox="0 0 24 24" 
+    fill="currentColor" 
+    className={`claude-starburst ${className}`}
+  >
+    <path d="M12 0L14.59 9.41L24 12L14.59 14.59L12 24L9.41 14.59L0 12L9.41 9.41L12 0Z" />
+  </svg>
+);
 
 type TraceEvent = {
   node: string;
   message: string;
-  timestamp: string;
+  timestamp?: string;
   documents?: string[];
   doc_grades?: any[];
   answer?: string;
@@ -19,30 +62,131 @@ type Message = {
   content: string;
   traces?: TraceEvent[];
   isStreaming?: boolean;
+  timestamp?: string;
+  liked?: boolean | null;
 };
 
+type ChatSession = {
+  id: string;
+  title: string;
+  createdAt: number;
+  messages: Message[];
+};
+
+type ThemeMode = 'dark' | 'parchment' | 'midnight';
+
 export default function App() {
-  const [messages, setMessages] = useState<Message[]>([]);
+  // Theme Management
+  const [theme, setTheme] = useState<ThemeMode>(() => {
+    return (localStorage.getItem('claude_theme') as ThemeMode) || 'dark';
+  });
+
+  // Sidebar & Layout Management
+  const [isSidebarOpen, setIsSidebarOpen] = useState(true);
+  const [isArtifactsOpen, setIsArtifactsOpen] = useState(false);
+  const [activeArtifactTab, setActiveArtifactTab] = useState<'trace' | 'knowledge' | 'grader'>('trace');
+
+  // Multi-Session Chat State
+  const [sessions, setSessions] = useState<ChatSession[]>(() => {
+    const saved = localStorage.getItem('claude_crag_sessions');
+    if (saved) {
+      try { return JSON.parse(saved); } catch (e) {}
+    }
+    return [{
+      id: 'default-session',
+      title: 'Initial Research',
+      createdAt: Date.now(),
+      messages: []
+    }];
+  });
+  const [activeSessionId, setActiveSessionId] = useState<string>(() => {
+    const savedActive = localStorage.getItem('claude_crag_active_session');
+    return savedActive || 'default-session';
+  });
+
+  const activeSession = sessions.find(s => s.id === activeSessionId) || sessions[0];
+  const messages = activeSession?.messages || [];
+
+  // Input & Streaming States
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
-  const [isIngestOpen, setIsIngestOpen] = useState(false);
-  const [isTraceOpen, setIsTraceOpen] = useState(false);
-  const [toast, setToast] = useState<{msg: string; type: 'success'|'error'} | null>(null);
+  const [expandedThinking, setExpandedThinking] = useState<{ [msgId: string]: boolean }>({});
+  const [showSlashMenu, setShowSlashMenu] = useState(false);
+  const [webSearchEnabled, setWebSearchEnabled] = useState(true);
 
-  const showToast = (msg: string, type: 'success'|'error' = 'success') => {
-    setToast({msg, type});
-    setTimeout(() => setToast(null), 3500);
-  };
+  // Modals & Tools
+  const [isIngestOpen, setIsIngestOpen] = useState(false);
+  const [isExportOpen, setIsExportOpen] = useState(false);
+  const [selectedSourceModal, setSelectedSourceModal] = useState<any | null>(null);
+  const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [toast, setToast] = useState<{ msg: string; type: 'success' | 'error' | 'info' } | null>(null);
+
+  // Ingestion States
+  const [ingestMode, setIngestMode] = useState<'file' | 'url'>('file');
   const [ingestInput, setIngestInput] = useState('');
   const [isIngesting, setIsIngesting] = useState(false);
   const [isIngestSuccess, setIsIngestSuccess] = useState(false);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [isDragging, setIsDragging] = useState(false);
+
+  // Knowledge Stats & Grounded Suggestions
   const [suggestions, setSuggestions] = useState<string[]>([]);
   const [stats, setStats] = useState({ doc_count: 0, chunk_count: 0 });
-  const fileInputRef = useRef<HTMLInputElement>(null);
-  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const [searchDocFilter, setSearchDocFilter] = useState('');
 
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const chatAttachRef = useRef<HTMLInputElement>(null);
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  // Save sessions to localStorage
+  useEffect(() => {
+    localStorage.setItem('claude_crag_sessions', JSON.stringify(sessions));
+  }, [sessions]);
+
+  useEffect(() => {
+    localStorage.setItem('claude_crag_active_session', activeSessionId);
+  }, [activeSessionId]);
+
+  // Apply Theme
+  useEffect(() => {
+    document.documentElement.setAttribute('data-theme', theme);
+    localStorage.setItem('claude_theme', theme);
+  }, [theme]);
+
+  // Toast Notification Helper
+  const showToast = (msg: string, type: 'success' | 'error' | 'info' = 'success') => {
+    setToast({ msg, type });
+    setTimeout(() => setToast(null), 3500);
+  };
+
+  // Keyboard Shortcuts (⌘K for new chat)
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        handleNewChat();
+      }
+      if (e.key === 'Escape') {
+        setIsIngestOpen(false);
+        setIsExportOpen(false);
+        setSelectedSourceModal(null);
+        setShowSlashMenu(false);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [sessions]);
+
+  // Auto-resize textarea
+  useEffect(() => {
+    if (textareaRef.current) {
+      textareaRef.current.style.height = 'auto';
+      textareaRef.current.style.height = `${Math.min(textareaRef.current.scrollHeight, 200)}px`;
+    }
+  }, [input]);
+
+  // Fetch Suggestions & Knowledge Stats
   const fetchSuggestionsAndStats = async () => {
     try {
       const [sugRes, statRes] = await Promise.all([
@@ -51,7 +195,9 @@ export default function App() {
       ]);
       const sugData = await sugRes.json();
       const statData = await statRes.json();
-      if (!sugData.empty) setSuggestions(sugData.suggestions || []);
+      if (!sugData.empty && sugData.suggestions?.length > 0) {
+        setSuggestions(sugData.suggestions);
+      }
       setStats(statData);
     } catch (e) {
       console.error('Failed to fetch stats/suggestions:', e);
@@ -64,62 +210,120 @@ export default function App() {
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages]);
+  }, [messages, isLoading]);
 
-  const handleSend = async () => {
-    if (!input.trim() || isLoading) return;
-    
+  // Session Management Helpers
+  const handleNewChat = () => {
+    const newSession: ChatSession = {
+      id: Date.now().toString(),
+      title: 'New Conversation',
+      createdAt: Date.now(),
+      messages: []
+    };
+    setSessions(prev => [newSession, ...prev]);
+    setActiveSessionId(newSession.id);
+    setInput('');
+    if (window.innerWidth < 768) setIsSidebarOpen(false);
+    showToast('Created new conversation', 'info');
+  };
+
+  const handleDeleteSession = (id: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (sessions.length === 1) {
+      // Keep at least one empty session
+      const fresh: ChatSession = {
+        id: Date.now().toString(),
+        title: 'New Conversation',
+        createdAt: Date.now(),
+        messages: []
+      };
+      setSessions([fresh]);
+      setActiveSessionId(fresh.id);
+      return;
+    }
+    const filtered = sessions.filter(s => s.id !== id);
+    setSessions(filtered);
+    if (activeSessionId === id) {
+      setActiveSessionId(filtered[0].id);
+    }
+    showToast('Conversation deleted', 'info');
+  };
+
+  const updateCurrentMessages = (updater: (prevMsgs: Message[]) => Message[]) => {
+    setSessions(prev => prev.map(s => {
+      if (s.id === activeSessionId) {
+        const updated = updater(s.messages);
+        let newTitle = s.title;
+        if (s.title === 'New Conversation' && updated.length > 0 && updated[0].role === 'user') {
+          newTitle = updated[0].content.slice(0, 32) + (updated[0].content.length > 32 ? '...' : '');
+        }
+        return { ...s, messages: updated, title: newTitle };
+      }
+      return s;
+    }));
+  };
+
+  // Chat Execution Stream
+  const handleSend = async (customQuery?: string) => {
+    const queryToSend = customQuery || input;
+    if (!queryToSend.trim() || isLoading) return;
+
     const userMessage: Message = {
       id: Date.now().toString(),
       role: 'user',
-      content: input.trim()
+      content: queryToSend.trim(),
+      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
     };
-    
+
     const assistantId = (Date.now() + 1).toString();
     const assistantMessage: Message = {
       id: assistantId,
       role: 'assistant',
       content: '',
       traces: [],
-      isStreaming: true
+      isStreaming: true,
+      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
     };
-    
-    setMessages(prev => [...prev, userMessage, assistantMessage]);
+
+    updateCurrentMessages(prev => [...prev, userMessage, assistantMessage]);
     setInput('');
+    setShowSlashMenu(false);
     setIsLoading(true);
-    
+    // Auto-expand thinking during streaming
+    setExpandedThinking(prev => ({ ...prev, [assistantId]: true }));
+
     try {
       const response = await fetch('/ask', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ question: userMessage.content })
       });
-      
-      if (!response.ok) throw new Error('API Error');
-      
+
+      if (!response.ok) throw new Error('Failed to query assistant');
+
       const reader = response.body?.getReader();
-      if (!reader) throw new Error('No reader');
-      
+      if (!reader) throw new Error('Streaming not supported');
+
       const decoder = new TextDecoder();
       let buffer = '';
-      
+
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
-        
+
         buffer += decoder.decode(value, { stream: true });
         const lines = buffer.split('\n');
         buffer = lines.pop() || '';
-        
+
         for (const line of lines) {
           if (line.startsWith('data: ')) {
             const dataStr = line.slice(6);
             if (dataStr === '[DONE]') continue;
-            
+
             try {
               const data = JSON.parse(dataStr) as TraceEvent;
-              
-              setMessages(prev => prev.map(msg => {
+
+              updateCurrentMessages(prev => prev.map(msg => {
                 if (msg.id === assistantId) {
                   const newMsg = { ...msg };
                   newMsg.traces = [...(newMsg.traces || []), data];
@@ -131,34 +335,38 @@ export default function App() {
                 return msg;
               }));
             } catch (e) {
-              console.error('Failed to parse:', dataStr);
+              console.error('Failed to parse SSE payload:', dataStr);
             }
           }
         }
       }
-    } catch (error) {
+    } catch (error: any) {
       console.error(error);
-      setMessages(prev => prev.map(msg => 
-        msg.id === assistantId ? { ...msg, content: 'Sorry, there was an error processing your request.' } : msg
+      updateCurrentMessages(prev => prev.map(msg =>
+        msg.id === assistantId
+          ? { ...msg, content: `❌ Error: ${error.message || 'Could not complete query.'}` }
+          : msg
       ));
+      showToast('Error during pipeline execution', 'error');
     } finally {
-      setMessages(prev => prev.map(msg => 
+      updateCurrentMessages(prev => prev.map(msg =>
         msg.id === assistantId ? { ...msg, isStreaming: false } : msg
       ));
       setIsLoading(false);
     }
   };
 
+  // Ingestion Handler
   const handleIngest = async () => {
     if (!ingestInput.trim() && !selectedFile) return;
     setIsIngesting(true);
     try {
       let response;
-      
+
       if (selectedFile) {
         const formData = new FormData();
         formData.append('file', selectedFile);
-        
+
         response = await fetch('/upload', {
           method: 'POST',
           body: formData
@@ -167,23 +375,23 @@ export default function App() {
         response = await fetch('/ingest', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ text_or_url: ingestInput })
+          body: JSON.stringify({ text_or_url: ingestInput.trim() })
         });
       }
-      
-      if (!response.ok) throw new Error('Failed to ingest');
+
+      if (!response.ok) throw new Error('Server returned an error');
       const data = await response.json();
-      showToast(`Embedded ${data.chunks_added} chunks successfully`);
+      showToast(`Indexed ${data.chunks_added} chunks into knowledge base`);
       setIsIngestSuccess(true);
       setTimeout(() => {
         setIsIngestSuccess(false);
         setIsIngestOpen(false);
         setIngestInput('');
         setSelectedFile(null);
-      }, 1500);
+      }, 1200);
     } catch (e: any) {
       console.error(e);
-      showToast('Ingestion failed: ' + e.message, 'error');
+      showToast('Ingestion failed: ' + (e.message || 'Unknown error'), 'error');
     } finally {
       setIsIngesting(false);
       fetchSuggestionsAndStats();
@@ -195,133 +403,823 @@ export default function App() {
     setIsDragging(false);
     if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
       setSelectedFile(e.dataTransfer.files[0]);
-      setIngestInput(''); // Clear text input if file is dropped
+      setIngestInput('');
     }
   };
 
-  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleChatFileAttach = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files.length > 0) {
       setSelectedFile(e.target.files[0]);
-      setIngestInput(''); // Clear text input if file is selected
+      setIsIngestOpen(true);
     }
   };
 
+  const copyToClipboard = (text: string, id: string) => {
+    navigator.clipboard.writeText(text);
+    setCopiedId(id);
+    showToast('Copied to clipboard');
+    setTimeout(() => setCopiedId(null), 2000);
+  };
 
+  const handleReaction = (msgId: string, liked: boolean) => {
+    updateCurrentMessages(prev => prev.map(msg => {
+      if (msg.id === msgId) {
+        const nextLiked = msg.liked === liked ? null : liked;
+        if (nextLiked === true) showToast('Thanks for the feedback!', 'success');
+        if (nextLiked === false) showToast('Feedback recorded.', 'info');
+        return { ...msg, liked: nextLiked };
+      }
+      return msg;
+    }));
+  };
 
-  const getNodeTitle = (nodeName: string) => {
-    switch(nodeName) {
-      case 'retrieve_node': return 'Retrieval';
-      case 'grade_node': return 'Grading';
-      case 'web_search_node': return 'Web Search';
-      case 'rewrite_node': return 'Rewriting Query';
-      case 'generate_node': return 'Generation';
-      default: return nodeName;
+  const clearCurrentChat = () => {
+    updateCurrentMessages(() => []);
+    showToast('Conversation cleared');
+  };
+
+  const exportConversation = (format: 'md' | 'json') => {
+    let content = '';
+    let mimeType = 'text/plain';
+    let ext = format;
+
+    if (format === 'json') {
+      content = JSON.stringify(messages, null, 2);
+      mimeType = 'application/json';
+    } else {
+      content = `# ${activeSession.title}\n*Exported on ${new Date().toLocaleString()}*\n\n---\n\n` +
+        messages.map(m => `### ${m.role === 'user' ? '👤 User' : '✨ Claude Assistant'}\n${m.content}\n\n`).join('\n---\n\n');
+    }
+
+    const blob = new Blob([content], { type: mimeType });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `claude-crag-${activeSession.id}.${ext}`;
+    a.click();
+    URL.revokeObjectURL(url);
+    setIsExportOpen(false);
+    showToast(`Exported as .${ext}`);
+  };
+
+  const getNodeDetails = (nodeName: string) => {
+    switch (nodeName) {
+      case 'retrieve_node':
+        return { title: 'MMR Vector Retrieval', desc: 'Dense vector search with MMR diversity re-ranking', icon: '🔍', color: 'cyan' };
+      case 'grade_node':
+        return { title: 'Relevance Grading', desc: 'Strict Groq LLM hallucination & relevance evaluation', icon: '⚖️', color: 'terracotta' };
+      case 'web_search_node':
+        return { title: 'Web Search Fallback', desc: 'DuckDuckGo external knowledge search & retrieval', icon: '🌐', color: 'purple' };
+      case 'rewrite_node':
+        return { title: 'Query Reformulation', desc: 'Rewriting question for enhanced retrieval recall', icon: '✏️', color: 'amber' };
+      case 'generate_node':
+        return { title: 'Answer Synthesis', desc: 'Grounded generation from verified context', icon: '✨', color: 'green' };
+      default:
+        return { title: nodeName, desc: 'Pipeline state executed', icon: '⚡', color: 'muted' };
     }
   };
 
-  // Active Traces for Stepper
+  // Last assistant traces for Stepper & Artifacts
   const lastAssistantMessage = messages.filter(m => m.role === 'assistant').pop();
   const activeTraces = lastAssistantMessage?.traces || [];
   const isCurrentlyStreaming = lastAssistantMessage?.isStreaming;
 
-  // Flatten all doc_grades from all trace events
   const allDocGrades: any[] = activeTraces.reduce<any[]>((acc, trace) => {
     if (trace.doc_grades) acc.push(...trace.doc_grades);
     return acc;
   }, []);
 
+  const totalPipelineLatency = activeTraces.reduce((sum, t) => sum + (t.latency_ms || 0), 0);
+
+  // Time-aware greeting for Claude hero
+  const getGreeting = () => {
+    const hour = new Date().getHours();
+    if (hour < 12) return 'Good morning';
+    if (hour < 18) return 'Good afternoon';
+    return 'Good evening';
+  };
+
   return (
-    <div className="app-container">
-      {/* Main Chat Section */}
-      <main className="chat-section">
-        <header className="chat-header">
-          <div className="logo-text" style={{display: 'flex', alignItems: 'center', gap: '8px'}}>
-            <RotateCw size={24} color="var(--accent)" strokeWidth={2.5} />
-            <span>recall<span className="logo-dot">.</span></span>
+    <div className={`claude-app ${isArtifactsOpen ? 'artifacts-active' : ''}`}>
+      {/* Claude Left Navigation Sidebar */}
+      <aside className={`claude-sidebar ${isSidebarOpen ? 'open' : 'collapsed'}`}>
+        <div className="sidebar-header">
+          <div className="claude-brand">
+            <div className="brand-logo-frame">
+              <ClaudeLogo size={20} />
+            </div>
+            <div className="brand-texts">
+              <span className="brand-name">Claude</span>
+              <span className="brand-subtitle">CRAG Engine</span>
+            </div>
           </div>
-          <div className="header-actions">
-            {stats.chunk_count > 0 && (
-              <span style={{fontSize: '0.8rem', color: 'var(--text-muted)', marginRight: '16px', fontWeight: 500}}>
-                {stats.doc_count} documents · {stats.chunk_count} chunks
-              </span>
-            )}
-            <span style={{fontSize: '0.8rem', color: 'var(--text-muted)', marginRight: '16px'}}>built by karthik.</span>
-            <button onClick={() => setIsTraceOpen(true)} className={isCurrentlyStreaming ? 'pulse-button' : ''}>
-              <Activity size={16} />
-              Pipeline
+          <button 
+            className="sidebar-collapse-btn" 
+            onClick={() => setIsSidebarOpen(false)}
+            title="Collapse sidebar"
+          >
+            <PanelLeftClose size={18} />
+          </button>
+        </div>
+
+        <div className="sidebar-action-wrap">
+          <button className="new-chat-btn" onClick={handleNewChat}>
+            <Plus size={16} />
+            <span>Start new chat</span>
+            <span className="shortcut-tag">⌘K</span>
+          </button>
+        </div>
+
+        {/* Knowledge Base Status Pill */}
+        <div className="sidebar-section">
+          <div className="sidebar-section-title">Knowledge Base</div>
+          <div className="kb-stats-card" onClick={() => setIsIngestOpen(true)}>
+            <div className="kb-stats-icon">
+              <Database size={16} className="text-terracotta" />
+            </div>
+            <div className="kb-stats-meta">
+              <div className="kb-stats-num">{stats.chunk_count} Chunks Indexed</div>
+              <div className="kb-stats-sub">{stats.doc_count > 0 ? `${stats.doc_count} Sources Active` : 'Click to add files'}</div>
+            </div>
+            <Plus size={14} className="kb-add-icon" />
+          </div>
+        </div>
+
+        {/* Recent Conversations */}
+        <div className="sidebar-section recents-section">
+          <div className="sidebar-section-title">Recents</div>
+          <div className="sessions-list">
+            {sessions.map(s => (
+              <div 
+                key={s.id} 
+                className={`session-item ${s.id === activeSessionId ? 'active' : ''}`}
+                onClick={() => {
+                  setActiveSessionId(s.id);
+                  if (window.innerWidth < 768) setIsSidebarOpen(false);
+                }}
+              >
+                <MessageSquare size={14} className="session-icon" />
+                <span className="session-title" title={s.title}>{s.title}</span>
+                <button 
+                  className="session-delete-btn" 
+                  onClick={(e) => handleDeleteSession(s.id, e)}
+                  title="Delete chat"
+                >
+                  <Trash2 size={13} />
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* Sidebar Footer */}
+        <div className="sidebar-footer">
+          <div className="theme-toggle-group">
+            <button 
+              className={`theme-btn ${theme === 'dark' ? 'active' : ''}`}
+              onClick={() => setTheme('dark')}
+              title="Claude Warm Dark"
+            >
+              <Moon size={14} />
+              <span>Dark</span>
             </button>
-            <button onClick={() => setIsIngestOpen(true)} className="btn-primary">
-              <Plus size={16} />
+            <button 
+              className={`theme-btn ${theme === 'parchment' ? 'active' : ''}`}
+              onClick={() => setTheme('parchment')}
+              title="Claude Light Parchment"
+            >
+              <Sun size={14} />
+              <span>Parchment</span>
+            </button>
+            <button 
+              className={`theme-btn ${theme === 'midnight' ? 'active' : ''}`}
+              onClick={() => setTheme('midnight')}
+              title="Claude Midnight"
+            >
+              <Compass size={14} />
+              <span>Obsidian</span>
+            </button>
+          </div>
+
+          <div className="footer-meta">
+            <span>Groq · LangGraph · Chroma</span>
+          </div>
+        </div>
+      </aside>
+
+      {/* Main Chat Workspace */}
+      <main className="claude-main">
+        {/* Claude Top Navigation Bar */}
+        <header className="claude-navbar">
+          <div className="navbar-left">
+            {!isSidebarOpen && (
+              <button 
+                className="nav-btn sidebar-open-btn" 
+                onClick={() => setIsSidebarOpen(true)}
+                title="Open sidebar"
+              >
+                <PanelLeft size={18} />
+              </button>
+            )}
+
+            <div className="model-selector-pill">
+              <ClaudeLogo size={15} className="model-logo" />
+              <span className="model-name">Claude 3.7 Sonnet</span>
+              <span className="model-badge">CRAG Pipeline</span>
+              <ChevronDown size={14} className="model-chevron" />
+            </div>
+          </div>
+
+          <div className="navbar-right">
+            <button 
+              className={`nav-action-pill ${isArtifactsOpen ? 'active' : ''} ${isCurrentlyStreaming ? 'pulsing' : ''}`}
+              onClick={() => setIsArtifactsOpen(!isArtifactsOpen)}
+              title="Toggle Pipeline Trace & Artifacts Panel"
+            >
+              <Activity size={15} />
+              <span>Trace & Artifacts</span>
+              {activeTraces.length > 0 && (
+                <span className="trace-counter">{activeTraces.length}</span>
+              )}
+            </button>
+
+            <button 
+              className="nav-action-pill"
+              onClick={() => setIsIngestOpen(true)}
+              title="Ingest Documents into Knowledge Base"
+            >
+              <Upload size={15} />
               <span>Ingest</span>
             </button>
+
+            {messages.length > 0 && (
+              <>
+                <button 
+                  className="nav-icon-btn" 
+                  onClick={() => setIsExportOpen(true)}
+                  title="Export conversation"
+                >
+                  <Download size={16} />
+                </button>
+                <button 
+                  className="nav-icon-btn" 
+                  onClick={clearCurrentChat}
+                  title="Clear conversation"
+                >
+                  <Trash2 size={16} />
+                </button>
+              </>
+            )}
           </div>
         </header>
-        
-        <div className="messages-container">
-          {messages.length === 0 && (
-            <div style={{textAlign: 'center', color: 'var(--text-muted)', margin: '48px 0 auto', position: 'relative', padding: '32px 0'}}>
-              <div className="mesh-bg"></div>
-              <div className="hero-glow"></div>
-              <div style={{position: 'relative', zIndex: 1}}>
-                <div className="logo-text" style={{fontSize: '3.5rem', marginBottom: '16px', letterSpacing: '-0.05em', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '12px'}}>
-                  <RotateCw size={48} color="var(--accent)" strokeWidth={2.5} />
-                  <span>recall<span style={{color: 'var(--accent)'}}>.</span></span>
-                </div>
-                <h2 style={{fontSize: '1.5rem', color: 'var(--text-main)', marginBottom: '8px'}}>Your knowledge, instantly.</h2>
-                <p style={{maxWidth: '500px', margin: '0 auto', lineHeight: '1.6', fontSize: '1.1rem', color: 'var(--text-muted)'}}>
-                  Ask anything across your ingested documents.
+
+        {/* Chat Feed Area */}
+        <div className="conversation-viewport">
+          {messages.length === 0 ? (
+            <div className="claude-hero">
+              <div className="hero-salutation">
+                <ClaudeLogo size={32} className="hero-starburst" />
+                <h1 className="hero-heading">{getGreeting()}, Researcher</h1>
+                <p className="hero-subtext">
+                  What would you like to explore today with self-correcting RAG?
                 </p>
-                <div className="hero-chips">
+              </div>
+
+              {/* Dynamic Suggested Inquiries */}
+              <div className="hero-suggestions-deck">
+                <div className="deck-header">
+                  <Sparkles size={14} className="text-terracotta" />
+                  <span>Ground-truth Prompts from Your Indexed Knowledge</span>
+                </div>
+                
+                <div className="deck-grid">
                   {suggestions.length > 0 ? (
                     suggestions.map((sug, i) => (
-                      <button key={i} onClick={() => setInput(sug)}>{sug}</button>
+                      <button 
+                        key={i} 
+                        className="claude-prompt-card"
+                        onClick={() => {
+                          setInput(sug);
+                          handleSend(sug);
+                        }}
+                      >
+                        <span className="prompt-text">{sug}</span>
+                        <ChevronRight size={16} className="prompt-arrow" />
+                      </button>
                     ))
                   ) : (
-                    <button className="dimmed-chip" onClick={() => setIsIngestOpen(true)}>
-                      Ingest a document to get started →
-                    </button>
+                    <>
+                      <button 
+                        className="claude-prompt-card"
+                        onClick={() => setIsIngestOpen(true)}
+                      >
+                        <div className="prompt-content-wrap">
+                          <span className="prompt-title">📄 Ingest Documents</span>
+                          <span className="prompt-desc">Drop PDFs, Markdown, or web URLs to construct your vector index</span>
+                        </div>
+                        <ChevronRight size={16} className="prompt-arrow" />
+                      </button>
+
+                      <button 
+                        className="claude-prompt-card"
+                        onClick={() => {
+                          const q = "Explain the key architectural components of this codebase.";
+                          setInput(q);
+                          handleSend(q);
+                        }}
+                      >
+                        <div className="prompt-content-wrap">
+                          <span className="prompt-title">⚡ Architectural Overview</span>
+                          <span className="prompt-desc">Retrieve and synthesize information across all indexed chunks</span>
+                        </div>
+                        <ChevronRight size={16} className="prompt-arrow" />
+                      </button>
+                    </>
                   )}
                 </div>
               </div>
+
+              {/* Feature Pills */}
+              <div className="hero-feature-tags">
+                <div className="feature-tag">
+                  <CheckCircle size={13} className="text-green" />
+                  <span>Strict Hallucination Grader</span>
+                </div>
+                <div className="feature-tag">
+                  <RotateCw size={13} className="text-terracotta" />
+                  <span>FlashRank MMR Re-ranking</span>
+                </div>
+                <div className="feature-tag">
+                  <Globe size={13} className="text-cyan" />
+                  <span>Web Fallback if Docs Insufficient</span>
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div className="messages-thread">
+              {messages.map((msg) => {
+                const isAssistant = msg.role === 'assistant';
+                const msgTraces = msg.traces || [];
+                const msgGrades: any[] = msgTraces.reduce<any[]>((acc, t) => {
+                  if (t.doc_grades) acc.push(...t.doc_grades);
+                  return acc;
+                }, []);
+                const isExpanded = expandedThinking[msg.id] ?? false;
+
+                return (
+                  <div key={msg.id} className={`message-container ${msg.role}`}>
+                    <div className="message-inner">
+                      {/* Avatar */}
+                      <div className="message-avatar-wrap">
+                        {isAssistant ? (
+                          <div className={`assistant-avatar ${msg.isStreaming ? 'streaming-spin' : ''}`}>
+                            <ClaudeLogo size={18} />
+                          </div>
+                        ) : (
+                          <div className="user-avatar">
+                            <User size={16} />
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Content Body */}
+                      <div className="message-content-box">
+                        <div className="message-meta-row">
+                          <span className="author-name">
+                            {isAssistant ? 'Claude Assistant' : 'You'}
+                          </span>
+                          {msg.timestamp && (
+                            <span className="message-time">{msg.timestamp}</span>
+                          )}
+                        </div>
+
+                        {/* Claude 3.7-Style Thinking Accordion for Assistant */}
+                        {isAssistant && msgTraces.length > 0 && (
+                          <div className="claude-thinking-block">
+                            <button 
+                              className="thinking-toggle-bar"
+                              onClick={() => setExpandedThinking(prev => ({ ...prev, [msg.id]: !isExpanded }))}
+                            >
+                              <div className="thinking-left">
+                                <RotateCw size={13} className={msg.isStreaming ? 'spin-slow text-terracotta' : 'text-muted'} />
+                                <span className="thinking-title">
+                                  {msg.isStreaming ? 'Synthesizing with CRAG state machine...' : `Thought process (${msgTraces.length} steps executed)`}
+                                </span>
+                              </div>
+                              <div className="thinking-right">
+                                {totalPipelineLatency > 0 && !msg.isStreaming && (
+                                  <span className="latency-badge">{totalPipelineLatency}ms</span>
+                                )}
+                                {isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                              </div>
+                            </button>
+
+                            {isExpanded && (
+                              <div className="thinking-content-tree">
+                                {msgTraces.map((trace, idx) => {
+                                  const nodeDetails = getNodeDetails(trace.node);
+                                  return (
+                                    <div key={idx} className="thinking-node-item">
+                                      <div className="node-marker-col">
+                                        <div className={`node-dot ${nodeDetails.color}`} />
+                                        {idx < msgTraces.length - 1 && <div className="node-connector-line" />}
+                                      </div>
+                                      <div className="node-info-col">
+                                        <div className="node-header-line">
+                                          <span className="node-tag-name">{nodeDetails.icon} {nodeDetails.title}</span>
+                                          {trace.latency_ms != null && (
+                                            <span className="node-lat">{trace.latency_ms}ms</span>
+                                          )}
+                                        </div>
+                                        <p className="node-msg-text">{trace.message}</p>
+                                      </div>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            )}
+                          </div>
+                        )}
+
+                        {/* Markdown Text */}
+                        {msg.content ? (
+                          <div className="claude-markdown-body">
+                            <ReactMarkdown>{msg.content}</ReactMarkdown>
+                          </div>
+                        ) : (
+                          msg.isStreaming && (
+                            <div className="claude-shimmer-loader">
+                              <div className="shimmer-pulse-dot" />
+                              <div className="shimmer-pulse-dot" />
+                              <div className="shimmer-pulse-dot" />
+                              <span>Evaluating retrieved context & grounding answer...</span>
+                            </div>
+                          )
+                        )}
+
+                        {/* Embedded Citations & Veracity Cards */}
+                        {isAssistant && msgGrades.length > 0 && (
+                          <div className="claude-citations-section">
+                            <div className="citations-header">
+                              <BookOpen size={13} className="text-terracotta" />
+                              <span>Grounding Sources ({msgGrades.length} chunks evaluated)</span>
+                            </div>
+                            <div className="citations-flex">
+                              {msgGrades.map((g: any, idx: number) => {
+                                const fname = g.source ? g.source.split('/').pop() || g.source : `Source #${idx + 1}`;
+                                const isRelevant = g.score === 'yes';
+                                return (
+                                  <button 
+                                    key={idx} 
+                                    className={`citation-pill ${isRelevant ? 'relevant' : 'filtered'}`}
+                                    onClick={() => setSelectedSourceModal(g)}
+                                    title="Click to inspect grader rationale and chunk excerpt"
+                                  >
+                                    <span className="cit-icon">{isRelevant ? '📄' : '✕'}</span>
+                                    <span className="cit-name">{fname}</span>
+                                    <span className={`cit-verdict ${isRelevant ? 'pass' : 'fail'}`}>
+                                      {isRelevant ? 'Used' : 'Filtered'}
+                                    </span>
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Assistant Action Bar */}
+                        {isAssistant && msg.content && (
+                          <div className="message-action-footer">
+                            <button 
+                              className="msg-action-btn"
+                              onClick={() => copyToClipboard(msg.content, msg.id)}
+                              title="Copy response"
+                            >
+                              {copiedId === msg.id ? <Check size={14} className="text-green" /> : <Copy size={14} />}
+                              <span>{copiedId === msg.id ? 'Copied' : 'Copy'}</span>
+                            </button>
+
+                            <button 
+                              className={`msg-action-btn ${msg.liked === true ? 'active-like' : ''}`}
+                              onClick={() => handleReaction(msg.id, true)}
+                              title="Helpful response"
+                            >
+                              <ThumbsUp size={14} />
+                            </button>
+
+                            <button 
+                              className={`msg-action-btn ${msg.liked === false ? 'active-dislike' : ''}`}
+                              onClick={() => handleReaction(msg.id, false)}
+                              title="Needs improvement"
+                            >
+                              <ThumbsDown size={14} />
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+              <div ref={messagesEndRef} />
             </div>
           )}
-          
-          {messages.map((msg) => (
-            <div key={msg.id} className={`message ${msg.role}`}>
-              <div className="message-avatar">
-                {msg.role === 'user' ? <User size={22} color="var(--bg-dark)" /> : <Bot size={22} color="var(--text-main)" />}
+        </div>
+
+        {/* Claude Bottom Input Deck */}
+        <div className="claude-input-deck">
+          {/* Slash Commands Dropup */}
+          {showSlashMenu && (
+            <div className="slash-menu-popover">
+              <div className="slash-menu-header">
+                <Command size={13} />
+                <span>Quick Prompts & Actions</span>
               </div>
-              <div className="message-content">
-                {msg.content ? (
-                  <div className="markdown-content">
-                    <ReactMarkdown>{msg.content}</ReactMarkdown>
+              <button 
+                className="slash-menu-item"
+                onClick={() => {
+                  setInput("Summarize the key findings across all indexed documents.");
+                  setShowSlashMenu(false);
+                }}
+              >
+                <Sparkles size={14} className="text-terracotta" />
+                <div className="slash-item-meta">
+                  <span className="slash-label">/summarize</span>
+                  <span className="slash-desc">Generate comprehensive summary across indexed chunks</span>
+                </div>
+              </button>
+
+              <button 
+                className="slash-menu-item"
+                onClick={() => {
+                  setInput("Audit all sources for contradictory claims or hallucinations.");
+                  setShowSlashMenu(false);
+                }}
+              >
+                <CheckCircle size={14} className="text-green" />
+                <div className="slash-item-meta">
+                  <span className="slash-label">/verify</span>
+                  <span className="slash-desc">Check veracity and contrast retrieved documents</span>
+                </div>
+              </button>
+
+              <button 
+                className="slash-menu-item"
+                onClick={() => {
+                  setInput("Extract all step-by-step methodologies mentioned in the knowledge base.");
+                  setShowSlashMenu(false);
+                }}
+              >
+                <BookOpen size={14} className="text-cyan" />
+                <div className="slash-item-meta">
+                  <span className="slash-label">/methodology</span>
+                  <span className="slash-desc">Synthesize actionable implementation steps</span>
+                </div>
+              </button>
+            </div>
+          )}
+
+          <div className={`claude-input-card ${isLoading ? 'is-loading' : ''}`}>
+            <textarea
+              ref={textareaRef}
+              className="claude-textarea"
+              placeholder="Ask anything about your documents, or type / for quick prompts..."
+              value={input}
+              onChange={(e) => {
+                const val = e.target.value;
+                setInput(val);
+                if (val.startsWith('/')) {
+                  setShowSlashMenu(true);
+                } else if (showSlashMenu) {
+                  setShowSlashMenu(false);
+                }
+              }}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault();
+                  handleSend();
+                }
+              }}
+              rows={1}
+              disabled={isLoading}
+            />
+
+            <div className="input-toolbar-row">
+              <div className="toolbar-left">
+                {/* File Attachment Button */}
+                <input 
+                  type="file" 
+                  ref={chatAttachRef} 
+                  onChange={handleChatFileAttach}
+                  accept=".pdf,.md,.txt"
+                  style={{ display: 'none' }}
+                />
+                <button 
+                  className="toolbar-btn attach-btn"
+                  onClick={() => chatAttachRef.current?.click()}
+                  title="Upload Document / PDF / Text"
+                >
+                  <Upload size={16} />
+                  <span>Attach doc</span>
+                </button>
+
+                {/* Web Search Indicator Toggle */}
+                <button 
+                  className={`toolbar-pill ${webSearchEnabled ? 'active' : ''}`}
+                  onClick={() => setWebSearchEnabled(!webSearchEnabled)}
+                  title="CRAG fallback searches the web if documents are insufficient"
+                >
+                  <Globe size={13} />
+                  <span>Web Fallback</span>
+                </button>
+              </div>
+
+              <div className="toolbar-right">
+                <button 
+                  className={`claude-send-btn ${input.trim() && !isLoading ? 'ready' : ''}`}
+                  onClick={() => handleSend()}
+                  disabled={isLoading || !input.trim()}
+                  title="Send to Claude (Enter)"
+                >
+                  {isLoading ? (
+                    <RotateCw size={16} className="spin-slow" />
+                  ) : (
+                    <Send size={16} />
+                  )}
+                </button>
+              </div>
+            </div>
+          </div>
+          
+          <div className="input-footnote">
+            <span>Claude CRAG can make mistakes. All responses are verified against vector embeddings and FlashRank re-ranking.</span>
+          </div>
+        </div>
+      </main>
+
+      {/* Claude Artifacts & LangGraph Inspector Split-Screen Panel */}
+      {isArtifactsOpen && (
+        <aside className="claude-artifacts-panel">
+          <div className="artifacts-panel-header">
+            <div className="artifacts-tab-group">
+              <button 
+                className={`tab-item ${activeArtifactTab === 'trace' ? 'active' : ''}`}
+                onClick={() => setActiveArtifactTab('trace')}
+              >
+                <Activity size={14} />
+                <span>LangGraph Trace</span>
+              </button>
+              <button 
+                className={`tab-item ${activeArtifactTab === 'knowledge' ? 'active' : ''}`}
+                onClick={() => setActiveArtifactTab('knowledge')}
+              >
+                <Database size={14} />
+                <span>Knowledge Base</span>
+              </button>
+              <button 
+                className={`tab-item ${activeArtifactTab === 'grader' ? 'active' : ''}`}
+                onClick={() => setActiveArtifactTab('grader')}
+              >
+                <CheckCircle size={14} />
+                <span>Grader Audit</span>
+              </button>
+            </div>
+
+            <button 
+              className="panel-close-btn" 
+              onClick={() => setIsArtifactsOpen(false)}
+              title="Close panel"
+            >
+              <X size={16} />
+            </button>
+          </div>
+
+          <div className="artifacts-panel-body">
+            {/* Tab 1: LangGraph Execution Stepper */}
+            {activeArtifactTab === 'trace' && (
+              <div className="tab-pane trace-pane">
+                <div className="pane-summary-card">
+                  <div className="summary-col">
+                    <span className="summary-label">State Machine</span>
+                    <span className="summary-val">LangGraph CRAG v2</span>
+                  </div>
+                  <div className="summary-col">
+                    <span className="summary-label">Total Latency</span>
+                    <span className="summary-val">{totalPipelineLatency} ms</span>
+                  </div>
+                  <div className="summary-col">
+                    <span className="summary-label">Status</span>
+                    <span className={`summary-badge ${isCurrentlyStreaming ? 'running' : 'idle'}`}>
+                      {isCurrentlyStreaming ? 'Running' : 'Completed'}
+                    </span>
+                  </div>
+                </div>
+
+                {activeTraces.length === 0 ? (
+                  <div className="pane-empty-state">
+                    <Activity size={32} className="text-muted" />
+                    <h4>No active execution trace</h4>
+                    <p>Submit a question in the chat to watch LangGraph node transitions and latencies in real time.</p>
                   </div>
                 ) : (
-                  msg.isStreaming && (
-                    <div className="loading-dots" style={{display: 'flex', gap: '4px', alignItems: 'center', height: '24px'}}>
-                      <span style={{width: '6px', height: '6px', background: 'var(--text-muted)', borderRadius: '50%'}}></span>
-                      <span style={{width: '6px', height: '6px', background: 'var(--text-muted)', borderRadius: '50%'}}></span>
-                      <span style={{width: '6px', height: '6px', background: 'var(--text-muted)', borderRadius: '50%'}}></span>
-                    </div>
-                  )
-                )}
-                
-                {msg.role === 'assistant' && allDocGrades.length > 0 && (
-                  <div className="source-cards">
-                    {allDocGrades.map((g: any, idx: number) => {
-                      const fname = g.source ? g.source.split('/').pop() || g.source : `Source ${idx + 1}`;
+                  <div className="trace-stepper-list">
+                    {activeTraces.map((trace, i) => {
+                      const nodeInfo = getNodeDetails(trace.node);
+                      const isLast = i === activeTraces.length - 1;
+                      const isActive = isCurrentlyStreaming && isLast;
+
                       return (
-                        <div key={idx} className={`source-card ${g.score === 'no' ? 'irrelevant' : ''}`}>
-                          <strong style={{color: 'var(--text-main)', marginBottom: '8px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px'}}>
-                            <span style={{fontFamily: 'var(--font-mono)', fontSize: '0.78rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '160px'}} title={fname}>
-                              📄 {fname}
+                        <div key={i} className={`stepper-node-card ${isActive ? 'in-progress' : 'finished'}`}>
+                          <div className="card-top-row">
+                            <div className="node-title-group">
+                              <span className="node-icon">{nodeInfo.icon}</span>
+                              <span className="node-title">{nodeInfo.title}</span>
+                            </div>
+                            {trace.latency_ms != null && (
+                              <span className="latency-tag">{trace.latency_ms} ms</span>
+                            )}
+                          </div>
+                          <p className="node-desc-text">{nodeInfo.desc}</p>
+                          <div className="node-output-box">
+                            <span className="output-label">Status:</span>
+                            <span className="output-msg">{trace.message}</span>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Tab 2: Knowledge Base Manager */}
+            {activeArtifactTab === 'knowledge' && (
+              <div className="tab-pane kb-pane">
+                <div className="kb-hero-card">
+                  <div className="kb-stats-grid">
+                    <div className="stat-box">
+                      <span className="stat-number">{stats.chunk_count}</span>
+                      <span className="stat-title">Indexed Chunks</span>
+                    </div>
+                    <div className="stat-box">
+                      <span className="stat-number">{stats.doc_count}</span>
+                      <span className="stat-title">Estimated Docs</span>
+                    </div>
+                  </div>
+                  <button 
+                    className="kb-upload-trigger-btn"
+                    onClick={() => setIsIngestOpen(true)}
+                  >
+                    <Plus size={15} />
+                    <span>Add New Knowledge</span>
+                  </button>
+                </div>
+
+                <div className="kb-search-bar">
+                  <Search size={14} className="text-muted" />
+                  <input 
+                    type="text" 
+                    placeholder="Filter vector knowledge base..." 
+                    value={searchDocFilter}
+                    onChange={(e) => setSearchDocFilter(e.target.value)}
+                  />
+                </div>
+
+                <div className="kb-tips-card">
+                  <h4>Embedding Strategy</h4>
+                  <p>Documents are chunked into 1000-character segments with 200 overlap, embedded into ChromaDB with cosine similarity, and re-ranked using FlashRank MMR.</p>
+                </div>
+              </div>
+            )}
+
+            {/* Tab 3: Grader & Citation Inspector */}
+            {activeArtifactTab === 'grader' && (
+              <div className="tab-pane grader-pane">
+                {allDocGrades.length === 0 ? (
+                  <div className="pane-empty-state">
+                    <CheckCircle size={32} className="text-muted" />
+                    <h4>No Graded Contexts</h4>
+                    <p>Ask a question to see how Groq LLM evaluates each retrieved chunk for hallucinations.</p>
+                  </div>
+                ) : (
+                  <div className="grader-cards-list">
+                    {allDocGrades.map((g: any, idx: number) => {
+                      const isPass = g.score === 'yes';
+                      return (
+                        <div key={idx} className={`grader-detail-card ${isPass ? 'pass' : 'fail'}`}>
+                          <div className="grader-card-header">
+                            <span className={`grader-badge ${isPass ? 'pass' : 'fail'}`}>
+                              {isPass ? '✓ VERIFIED RELEVANT' : '✕ FILTERED OUT'}
                             </span>
-                            <span className={`grade-badge ${g.score}`}>
-                              {g.score === 'yes' ? '✓ USED' : '✕ FILTERED'}
+                            <span className="grader-source-name">
+                              {g.source ? g.source.split('/').pop() : `Chunk #${idx + 1}`}
                             </span>
-                          </strong>
+                          </div>
                           {g.rationale && (
-                            <div className="source-rationale">{g.rationale}</div>
+                            <div className="grader-rationale-box">
+                              <span className="rationale-tag">Grader Rationale:</span>
+                              <p>{g.rationale}</p>
+                            </div>
                           )}
                         </div>
                       );
@@ -329,178 +1227,193 @@ export default function App() {
                   </div>
                 )}
               </div>
-            </div>
-          ))}
-          <div ref={messagesEndRef} />
-        </div>
-        
-        <div className={`chat-input-wrapper ${messages.length === 0 ? 'centered' : 'active'}`}>
-          <div className={`input-container ${isCurrentlyStreaming ? 'loading' : ''}`}>
-            <input
-              type="text"
-              className="input-field"
-              placeholder="Ask anything..."
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && handleSend()}
-              disabled={isLoading}
-              autoFocus
-            />
-            <button 
-              className="send-button"
-              onClick={handleSend}
-              disabled={isLoading || !input.trim()}
-            >
-              <Send size={18} />
-            </button>
+            )}
           </div>
-        </div>
-      </main>
-      
-      {/* Overlay when trace is open */}
-      <div className={`trace-overlay ${isTraceOpen ? 'active' : ''}`} onClick={() => setIsTraceOpen(false)} />
+        </aside>
+      )}
 
-      {/* Right Trace Pipeline Drawer */}
-      <aside className={`trace-panel ${isTraceOpen ? 'open' : ''}`}>
-        <div className="trace-header">
-          <div style={{display: 'flex', alignItems: 'center', gap: '12px'}}>
-            <Activity size={22} color="var(--accent)" className={isCurrentlyStreaming ? "pulse-icon" : ""} />
-            <h2>Data Flow</h2>
-          </div>
-          <button className="close-button" onClick={() => setIsTraceOpen(false)}>
-            <X size={20} />
-          </button>
-        </div>
-        <div className="trace-content">
-          {activeTraces.length === 0 ? (
-            <div style={{color: 'var(--text-muted)', textAlign: 'center', margin: 'auto 0', opacity: 0.5}}>
-              <Activity size={48} style={{margin: '0 auto 16px', display: 'block'}} />
-              Waiting for execution...
+      {/* Ingestion Modal */}
+      {isIngestOpen && (
+        <div className="claude-modal-backdrop" onClick={() => setIsIngestOpen(false)}>
+          <div className="claude-modal-card" onClick={e => e.stopPropagation()}>
+            <div className="modal-header">
+              <div className="modal-title-wrap">
+                <ClaudeLogo size={18} className="text-terracotta" />
+                <h3>Ingest Knowledge Base</h3>
+              </div>
+              <button className="modal-close-btn" onClick={() => setIsIngestOpen(false)}>
+                <X size={18} />
+              </button>
             </div>
-          ) : (
-            <div className="trace-timeline">
-              {activeTraces.map((trace, i) => {
-                const isLast = i === activeTraces.length - 1;
-                const isActive = isCurrentlyStreaming && isLast;
 
-                return (
-                  <div
-                    key={i}
-                    className={`trace-node ${isActive ? 'active' : 'completed'}`}
-                    style={{ animationDelay: `${i * 150}ms` }}
-                  >
-                    <div className="tl-connector">
-                      <div className="tl-dot">
-                        {isActive
-                          ? <Activity size={11} />
-                          : <CheckCircle size={11} />}
-                      </div>
-                      {!isLast && <div className="tl-line" />}
+            <div className="modal-mode-tabs">
+              <button 
+                className={`mode-tab ${ingestMode === 'file' ? 'active' : ''}`}
+                onClick={() => setIngestMode('file')}
+              >
+                <FileText size={15} />
+                <span>Upload Files</span>
+              </button>
+              <button 
+                className={`mode-tab ${ingestMode === 'url' ? 'active' : ''}`}
+                onClick={() => setIngestMode('url')}
+              >
+                <Globe size={15} />
+                <span>Web URL / Paste Text</span>
+              </button>
+            </div>
+
+            <div className="modal-body-area">
+              {ingestMode === 'file' ? (
+                <div 
+                  className={`claude-dropzone ${isDragging ? 'dragging' : ''} ${selectedFile ? 'has-file' : ''}`}
+                  onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
+                  onDragLeave={() => setIsDragging(false)}
+                  onDrop={handleFileDrop}
+                  onClick={() => fileInputRef.current?.click()}
+                >
+                  <input 
+                    type="file" 
+                    ref={fileInputRef} 
+                    onChange={(e) => {
+                      if (e.target.files && e.target.files.length > 0) {
+                        setSelectedFile(e.target.files[0]);
+                        setIngestInput('');
+                      }
+                    }}
+                    accept=".pdf,.md,.txt"
+                    style={{ display: 'none' }}
+                  />
+                  {selectedFile ? (
+                    <div className="dropzone-file-preview">
+                      <FileText size={36} className="text-terracotta" />
+                      <span className="file-preview-name">{selectedFile.name}</span>
+                      <span className="file-preview-size">{(selectedFile.size / 1024).toFixed(1)} KB</span>
                     </div>
-                    <div className="node-content">
-                      <div className="node-title" style={{display:'flex', justifyContent:'space-between', alignItems:'center'}}>
-                        <span>{getNodeTitle(trace.node)}</span>
-                        {trace.latency_ms != null && (
-                          <span className="latency-badge">{trace.latency_ms}ms</span>
-                        )}
-                      </div>
-                      <div className="node-desc">{trace.message}</div>
+                  ) : (
+                    <div className="dropzone-empty-prompt">
+                      <Upload size={32} className="text-terracotta" />
+                      <p>Drag and drop <strong>PDF, Markdown (.md), or Text (.txt)</strong></p>
+                      <span>or click here to select from your files</span>
                     </div>
-                  </div>
-                );
-              })}
-              {isCurrentlyStreaming && (
-                <div className="trace-node active">
-                  <div className="tl-connector">
-                    <div className="tl-dot spinning">
-                      <RotateCw size={11} />
-                    </div>
-                  </div>
-                  <div className="node-content">
-                    <div className="node-title">Processing...</div>
-                    <div className="node-desc" style={{opacity: 0.5}}>Waiting for next step</div>
-                  </div>
+                  )}
+                </div>
+              ) : (
+                <div className="url-scrape-area">
+                  <label className="input-field-label">Article URL or Raw Markdown Content:</label>
+                  <textarea 
+                    className="claude-modal-textarea"
+                    placeholder="https://example.com/research-paper OR paste raw markdown..."
+                    value={ingestInput}
+                    onChange={e => setIngestInput(e.target.value)}
+                    rows={5}
+                  />
                 </div>
               )}
             </div>
-          )}
-        </div>
-      </aside>
 
-      {/* Toast notification */}
-      {toast && (
-        <div className={`toast toast-${toast.type}`}>
-          {toast.type === 'success' ? '✓' : '✕'} {toast.msg}
-        </div>
-      )}
-
-      {/* Ingest Modal */}
-      {isIngestOpen && (
-        <div className="modal-overlay" onClick={() => setIsIngestOpen(false)}>
-          <div className="modal-content" onClick={e => e.stopPropagation()}>
-            <div className="modal-header">
-              <h2>
-                <Upload size={22} color="var(--accent)" />
-                Ingest Document
-              </h2>
-              <button className="close-button" onClick={() => setIsIngestOpen(false)}>
-                <X size={24} />
+            <div className="modal-footer-row">
+              <button className="btn-ghost" onClick={() => setIsIngestOpen(false)}>
+                Cancel
               </button>
-            </div>
-            <div className="modal-body">
-              <div 
-                className={`file-dropzone ${isDragging ? 'drag-active' : ''}`}
-                onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
-                onDragLeave={() => setIsDragging(false)}
-                onDrop={handleFileDrop}
-                onClick={() => fileInputRef.current?.click()}
-              >
-                <input 
-                  type="file" 
-                  ref={fileInputRef} 
-                  onChange={handleFileSelect}
-                  accept=".pdf,.md,.txt"
-                  style={{ display: 'none' }}
-                />
-                {selectedFile ? (
-                  <>
-                    <FileText size={36} color="var(--accent)" style={{ margin: '0 auto 12px', display: 'block' }} />
-                    <div className="file-drop-text">
-                      Selected: <strong>{selectedFile.name}</strong>
-                    </div>
-                  </>
-                ) : (
-                  <>
-                    <Upload size={36} color="var(--text-muted)" style={{ margin: '0 auto 12px', display: 'block' }} />
-                    <div className="file-drop-text">
-                      Drag & drop a file here, or <strong>browse</strong> (PDF, MD, TXT)
-                    </div>
-                  </>
-                )}
-              </div>
-              
-              <div className="divider">OR</div>
-
-              <p>Provide a URL to scrape or paste raw text. The system will chunk and embed it into your Chroma vector store.</p>
-              <textarea 
-                className="modal-textarea"
-                placeholder="https://example.com/article OR Paste raw text here..."
-                value={ingestInput}
-                onChange={e => { setIngestInput(e.target.value); setSelectedFile(null); }}
-                disabled={!!selectedFile}
-              />
-            </div>
-            <div className="modal-footer">
-              <button className="btn" onClick={() => setIsIngestOpen(false)}>Cancel</button>
               <button 
-                className={`btn btn-primary ${isIngestSuccess ? 'btn-success' : ''}`} 
+                className={`claude-btn-primary ${isIngestSuccess ? 'success' : ''}`} 
                 onClick={handleIngest} 
                 disabled={(!ingestInput.trim() && !selectedFile) || isIngesting || isIngestSuccess}
               >
-                {isIngesting ? 'Ingesting...' : isIngestSuccess ? '✓ Embedded successfully' : 'Add to Knowledge Base'}
+                {isIngesting ? (
+                  <>
+                    <RotateCw size={15} className="spin-slow" />
+                    <span>Embedding & Indexing...</span>
+                  </>
+                ) : isIngestSuccess ? (
+                  <>
+                    <Check size={15} />
+                    <span>Successfully Indexed</span>
+                  </>
+                ) : (
+                  <>
+                    <Plus size={15} />
+                    <span>Add to Knowledge Base</span>
+                  </>
+                )}
               </button>
             </div>
           </div>
+        </div>
+      )}
+
+      {/* Export Conversation Modal */}
+      {isExportOpen && (
+        <div className="claude-modal-backdrop" onClick={() => setIsExportOpen(false)}>
+          <div className="claude-modal-card export-modal" onClick={e => e.stopPropagation()}>
+            <div className="modal-header">
+              <div className="modal-title-wrap">
+                <Download size={18} className="text-terracotta" />
+                <h3>Export Conversation</h3>
+              </div>
+              <button className="modal-close-btn" onClick={() => setIsExportOpen(false)}>
+                <X size={18} />
+              </button>
+            </div>
+            <div className="modal-body-area">
+              <p className="export-desc">Download this conversation thread with all questions, citations, and answers:</p>
+              <div className="export-options-grid">
+                <button className="export-choice-card" onClick={() => exportConversation('md')}>
+                  <FileText size={24} className="text-terracotta" />
+                  <span className="choice-title">Markdown (.md)</span>
+                  <span className="choice-desc">Formatted text document for Obsidian, Notion, or Github</span>
+                </button>
+                <button className="export-choice-card" onClick={() => exportConversation('json')}>
+                  <Database size={24} className="text-cyan" />
+                  <span className="choice-title">JSON (.json)</span>
+                  <span className="choice-desc">Structured conversation traces and metadata</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Citation Detail Modal */}
+      {selectedSourceModal && (
+        <div className="claude-modal-backdrop" onClick={() => setSelectedSourceModal(null)}>
+          <div className="claude-modal-card citation-detail-modal" onClick={e => e.stopPropagation()}>
+            <div className="modal-header">
+              <div className="modal-title-wrap">
+                <BookOpen size={18} className="text-terracotta" />
+                <h3>Source Grader Analysis</h3>
+              </div>
+              <button className="modal-close-btn" onClick={() => setSelectedSourceModal(null)}>
+                <X size={18} />
+              </button>
+            </div>
+            <div className="modal-body-area">
+              <div className="citation-badge-line">
+                <span className={`grader-badge ${selectedSourceModal.score === 'yes' ? 'pass' : 'fail'}`}>
+                  {selectedSourceModal.score === 'yes' ? '✓ USED IN ANSWER' : '✕ FILTERED OUT AS IRRELEVANT'}
+                </span>
+                {selectedSourceModal.source && (
+                  <span className="source-uri-tag">{selectedSourceModal.source}</span>
+                )}
+              </div>
+
+              <div className="detail-box">
+                <h4>LLM Grader Rationale:</h4>
+                <p className="rationale-text">{selectedSourceModal.rationale || 'No rationale provided by grader.'}</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Toast Notification */}
+      {toast && (
+        <div className={`claude-toast ${toast.type}`}>
+          {toast.type === 'success' && <CheckCircle size={16} />}
+          {toast.type === 'error' && <X size={16} />}
+          {toast.type === 'info' && <Sparkles size={16} />}
+          <span>{toast.msg}</span>
         </div>
       )}
     </div>

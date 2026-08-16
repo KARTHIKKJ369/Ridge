@@ -3,9 +3,10 @@ title: Recall CRAG
 emoji: 🔁
 colorFrom: red
 colorTo: gray
-sdk: docker
+sdk: gradio
+sdk_version: 5.20.0
+app_file: app.py
 pinned: false
-app_port: 7860
 ---
 
 # Recall

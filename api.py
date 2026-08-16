@@ -136,9 +136,34 @@ def status():
 @app.get("/api/suggestions")
 def get_suggestions():
     if os.path.exists("suggestions.json"):
-        with open("suggestions.json", "r") as f:
-            data = json.load(f)
-            return {"suggestions": data.get("suggestions", [])}
+        try:
+            with open("suggestions.json", "r") as f:
+                data = json.load(f)
+                sugs = data.get("suggestions", [])
+                if sugs:
+                    return {"suggestions": sugs}
+        except Exception:
+            pass
+
+    # If no suggestions cached, inspect vectorstore
+    try:
+        from main import get_vectorstore, generate_suggestions
+        vectorstore = get_vectorstore()
+        coll = vectorstore._collection
+        count = coll.count()
+        if count > 0:
+            docs = coll.get(limit=4)
+            documents = docs.get("documents", [])
+            if documents:
+                sample_text = " ".join(documents)[:1500]
+                generate_suggestions(sample_text)
+                if os.path.exists("suggestions.json"):
+                    with open("suggestions.json", "r") as f:
+                        data = json.load(f)
+                        return {"suggestions": data.get("suggestions", [])}
+    except Exception as e:
+        logger.warning(f"Could not auto-generate suggestions from Chroma: {e}")
+
     return {"suggestions": [], "empty": True}
 
 @app.get("/api/stats")
