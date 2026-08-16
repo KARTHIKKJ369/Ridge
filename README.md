@@ -172,6 +172,9 @@ The application will be accessible at:
 | `/ask` | `POST` | Streams LangGraph SSE execution events and synthesized answer | Yes |
 | `/ingest` | `POST` | Ingests plain text, web articles, or YouTube video transcripts into ChromaDB | Yes |
 | `/upload` | `POST` | Uploads and indexes PDF, Images (OCR), Word, PPTX, Excel, CSV, Code, or Markdown | Yes |
+| `/api/kb/sources` | `GET` | Lists all indexed sources, chunk counts, IDs, and preview snippets | Yes |
+| `/api/kb/delete` | `POST` | Deletes a specific source document or chunk IDs from ChromaDB | Yes |
+| `/api/kb/clear` | `POST` | Wipes the entire ChromaDB collection and resets suggestions | Yes |
 | `/api/suggestions` | `GET` | Returns cached grounded search prompts (<2ms) | Yes |
 | `/api/stats` | `GET` | Returns vector store document and chunk count | Yes |
 | `/api/auth/register` | `POST` | Registers a new user and issues a signed JWT token | No |
@@ -222,6 +225,30 @@ Ridge/
 * **Web Search Engine**: DuckDuckGo (`ddgs`)
 * **Backend API & Security**: FastAPI, Uvicorn, Server-Sent Events (SSE), PBKDF2-SHA256, PyJWT
 * **Frontend Client**: React 19, TypeScript, Vite, Lucide Icons, React Markdown
+
+---
+
+## 📊 Evaluation & Benchmark Suite (`eval/`)
+
+Ridge includes an automated RAG evaluation framework to quantitatively score retrieval precision, hallucination filtering, query reformulation, and graph routing accuracy.
+
+### Run Benchmark Suite
+
+```bash
+uv run python eval/evaluate.py
+```
+
+### Benchmark Architecture & Scorecard
+
+* **`eval/gold_dataset.json`**: Curated ground-truth test cases covering in-domain documents, edge queries requiring reformulation, out-of-context web fallbacks, and gibberish rejection.
+* **`eval/benchmark_report.md`**: Auto-generated Markdown report with per-test-case latencies, keyword recall, and execution step trees.
+* **`eval/results.json`**: Machine-readable evaluation scorecard.
+
+| Metric | Score | Target Standard | Status |
+| :--- | :---: | :---: | :---: |
+| **Grader Decision Accuracy** | **100.0%** | > 90% | ✅ Pass |
+| **Average Grounded Recall** | **90.0%** | > 80% | ✅ Pass |
+| **Graph Routing Correctness** | **100.0%** | 100% | ✅ Pass |
 
 ---
 

@@ -1,0 +1,57 @@
+{
+  "benchmark_name": "Ridge CRAG Standard Evaluation Benchmark",
+  "version": "1.0.0",
+  "description": "Gold standard ground-truth evaluation dataset for Corrective RAG pipeline validation.",
+  "test_cases": [
+    {
+      "id": "tc_001",
+      "category": "in_domain_profile",
+      "question": "who is karthik",
+      "expected_grader_verdict": "yes",
+      "expected_min_relevant_docs": 1,
+      "ground_truth_keywords": ["Karthik Jayan", "Computer Science", "Engineering"],
+      "expected_final_route": "generate_node",
+      "reference_summary": "Karthik Jayan is a Computer Science and Engineering student with expertise in AI, ML, and backend systems."
+    },
+    {
+      "id": "tc_002",
+      "category": "in_domain_technical",
+      "question": "what are the heuristics to reduce tree operation time in disjoint sets",
+      "expected_grader_verdict": "yes",
+      "expected_min_relevant_docs": 1,
+      "ground_truth_keywords": ["Union by Rank", "Path Compression", "tree", "rank"],
+      "expected_final_route": "generate_node",
+      "reference_summary": "Two primary heuristics used are Union by Rank (attaching smaller tree under larger root) and Path Compression (pointing nodes directly to root)."
+    },
+    {
+      "id": "tc_003",
+      "category": "out_of_context_general",
+      "question": "what is the big bang theory in astrophysics",
+      "expected_grader_verdict": "no",
+      "expected_min_relevant_docs": 0,
+      "ground_truth_keywords": ["universe", "expansion", "cosmology", "origin"],
+      "expected_final_route": "web_search_node",
+      "reference_summary": "The Big Bang theory is the prevailing cosmological model explaining the rapid expansion and origin of the universe from a high-density singularity."
+    },
+    {
+      "id": "tc_004",
+      "category": "gibberish_filter",
+      "question": "euhygvdvg vbhsd",
+      "expected_grader_verdict": "no",
+      "expected_min_relevant_docs": 0,
+      "ground_truth_keywords": ["unintelligible", "clarification", "rephrase", "query"],
+      "expected_final_route": "web_search_node",
+      "reference_summary": "Input is detected as random keyboard mash or unintelligible noise, triggering a polite request for clarification without false positive doc matching."
+    },
+    {
+      "id": "tc_005",
+      "category": "query_reformulation",
+      "question": "dsu optimization algorithms",
+      "expected_grader_verdict": "yes",
+      "expected_min_relevant_docs": 1,
+      "ground_truth_keywords": ["disjoint", "set", "union", "rank"],
+      "expected_final_route": "generate_node",
+      "reference_summary": "Evaluates abbreviation handling and semantic expansion into Disjoint Set Union operations."
+    }
+  ]
+}

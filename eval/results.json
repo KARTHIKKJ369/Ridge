@@ -1,0 +1,168 @@
+{
+  "summary": {
+    "total_cases": 5,
+    "grader_accuracy": 100.0,
+    "avg_keyword_recall": 90.0,
+    "avg_latency_ms": 22565.6,
+    "routing_accuracy": 100.0
+  },
+  "test_cases": [
+    {
+      "id": "tc_001",
+      "category": "in_domain_profile",
+      "question": "who is karthik",
+      "steps": [
+        "retrieve_node",
+        "grade_node",
+        "generate_node"
+      ],
+      "total_latency_ms": 1551,
+      "grader_verdict": "yes",
+      "expected_grader_verdict": "yes",
+      "grader_correct": true,
+      "keyword_recall": 100.0,
+      "keyword_hits": [
+        "Karthik Jayan",
+        "Computer Science",
+        "Engineering"
+      ],
+      "keywords_expected": [
+        "Karthik Jayan",
+        "Computer Science",
+        "Engineering"
+      ],
+      "routing_correct": true,
+      "final_route": "generate_node",
+      "answer_preview": "**Karthik Jayan: A Brief Overview** =====================================  Based on the provided context, Karthik Jayan is a final-year B.Tech Computer Science & Engineering student at Mar Athanasius ..."
+    },
+    {
+      "id": "tc_002",
+      "category": "in_domain_technical",
+      "question": "what are the heuristics to reduce tree operation time in disjoint sets",
+      "steps": [
+        "retrieve_node",
+        "grade_node",
+        "generate_node"
+      ],
+      "total_latency_ms": 1087,
+      "grader_verdict": "yes",
+      "expected_grader_verdict": "yes",
+      "grader_correct": true,
+      "keyword_recall": 100.0,
+      "keyword_hits": [
+        "Union by Rank",
+        "Path Compression",
+        "tree",
+        "rank"
+      ],
+      "keywords_expected": [
+        "Union by Rank",
+        "Path Compression",
+        "tree",
+        "rank"
+      ],
+      "routing_correct": true,
+      "final_route": "generate_node",
+      "answer_preview": "**Disjoint Set Heuristics for Efficient Tree Operations** ===========================================================  ### Introduction  Disjoint sets, also known as union-find data structures, are us..."
+    },
+    {
+      "id": "tc_003",
+      "category": "out_of_context_general",
+      "question": "what is the big bang theory in astrophysics",
+      "steps": [
+        "retrieve_node",
+        "grade_node",
+        "rewrite_node",
+        "retrieve_node",
+        "grade_node",
+        "web_search_node",
+        "generate_node"
+      ],
+      "total_latency_ms": 43846,
+      "grader_verdict": "no",
+      "expected_grader_verdict": "no",
+      "grader_correct": true,
+      "keyword_recall": 75.0,
+      "keyword_hits": [
+        "universe",
+        "expansion",
+        "origin"
+      ],
+      "keywords_expected": [
+        "universe",
+        "expansion",
+        "cosmology",
+        "origin"
+      ],
+      "routing_correct": true,
+      "final_route": "web_search_node",
+      "answer_preview": "**The Big Bang Theory in Astrophysics** =====================================  ### Overview  The Big Bang Theory is the leading explanation for the origin and evolution of the universe, proposing that..."
+    },
+    {
+      "id": "tc_004",
+      "category": "gibberish_filter",
+      "question": "euhygvdvg vbhsd",
+      "steps": [
+        "retrieve_node",
+        "grade_node",
+        "rewrite_node",
+        "retrieve_node",
+        "grade_node",
+        "web_search_node",
+        "generate_node"
+      ],
+      "total_latency_ms": 35978,
+      "grader_verdict": "no",
+      "expected_grader_verdict": "no",
+      "grader_correct": true,
+      "keyword_recall": 100.0,
+      "keyword_hits": [
+        "unintelligible",
+        "clarification",
+        "rephrase",
+        "query"
+      ],
+      "keywords_expected": [
+        "unintelligible",
+        "clarification",
+        "rephrase",
+        "query"
+      ],
+      "routing_correct": true,
+      "final_route": "web_search_node",
+      "answer_preview": "### Unintelligible Input The input provided, \"euhygvdvg vbhsd\", appears to be random keystrokes or nonsensical gibberish. Unfortunately, this does not form a coherent question that can be understood o..."
+    },
+    {
+      "id": "tc_005",
+      "category": "query_reformulation",
+      "question": "dsu optimization algorithms",
+      "steps": [
+        "retrieve_node",
+        "grade_node",
+        "rewrite_node",
+        "retrieve_node",
+        "grade_node",
+        "generate_node"
+      ],
+      "total_latency_ms": 30366,
+      "grader_verdict": "yes",
+      "expected_grader_verdict": "yes",
+      "grader_correct": true,
+      "keyword_recall": 75.0,
+      "keyword_hits": [
+        "disjoint",
+        "set",
+        "union"
+      ],
+      "keywords_expected": [
+        "disjoint",
+        "set",
+        "union",
+        "rank"
+      ],
+      "routing_correct": true,
+      "final_route": "generate_node",
+      "answer_preview": "**Disjoint Set Union (DSU) Optimization Algorithms** =====================================================  **Introduction** ---------------  Disjoint Set Union (DSU) is a fundamental data structure u..."
+    }
+  ]
+}

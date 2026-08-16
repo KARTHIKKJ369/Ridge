@@ -198,7 +198,7 @@ async def upload_file(file: UploadFile = File(...), user: UserProfile = Depends(
             temp_path = temp_file.name
             
         try:
-            result = ingest_document(temp_path)
+            result = ingest_document(temp_path, original_filename=file.filename)
             return result
         finally:
             # Cleanup temp file after ingestion
@@ -257,8 +257,101 @@ def get_stats(user: UserProfile = Depends(get_current_user)):
     from main import get_vectorstore
     vectorstore = get_vectorstore()
     chunk_count = vectorstore._collection.count()
-    # Rough estimate of docs based on chunks if doc_count metadata isn't unique easily
-    return {"doc_count": max(1, chunk_count // 10) if chunk_count > 0 else 0, "chunk_count": chunk_count}
+    data = vectorstore._collection.get(include=["metadatas"])
+    metas = data.get("metadatas", [])
+    unique_sources = set(m.get("source") for m in metas if m and m.get("source"))
+    doc_count = len(unique_sources) if unique_sources else (1 if chunk_count > 0 else 0)
+    return {"doc_count": doc_count, "chunk_count": chunk_count}
+
+
+@app.get("/api/kb/sources")
+def get_kb_sources(user: UserProfile = Depends(get_current_user)):
+    from main import get_vectorstore
+    from pathlib import Path
+    vectorstore = get_vectorstore()
+    coll = vectorstore._collection
+    data = coll.get(include=["metadatas", "documents"])
+    ids = data.get("ids", [])
+    metas = data.get("metadatas", [])
+    docs = data.get("documents", [])
+
+    sources_map = {}
+    for i, id_ in enumerate(ids):
+        meta = metas[i] if i < len(metas) and metas[i] else {}
+        raw_src = meta.get("source", "Unknown Source")
+        name = Path(raw_src).name if ("/" in raw_src or "\\" in raw_src) else raw_src
+        if not name:
+            name = raw_src
+
+        if raw_src not in sources_map:
+            sources_map[raw_src] = {
+                "source": raw_src,
+                "name": name,
+                "type": meta.get("type", "document"),
+                "h1": meta.get("h1", name),
+                "chunk_count": 0,
+                "sample": docs[i][:180] if i < len(docs) else "",
+                "ids": []
+            }
+        sources_map[raw_src]["chunk_count"] += 1
+        sources_map[raw_src]["ids"].append(id_)
+
+    sources_list = list(sources_map.values())
+    return {
+        "total_chunks": len(ids),
+        "total_sources": len(sources_list),
+        "sources": sources_list
+    }
+
+
+class DeleteKBRequest(BaseModel):
+    source: str | None = None
+    ids: list[str] | None = None
+
+
+@app.post("/api/kb/delete")
+def delete_kb_source(req: DeleteKBRequest, user: UserProfile = Depends(get_current_user)):
+    from main import get_vectorstore
+    vectorstore = get_vectorstore()
+    coll = vectorstore._collection
+
+    if req.ids:
+        coll.delete(ids=req.ids)
+    elif req.source:
+        # Delete by source or find matching IDs
+        data = coll.get(include=["metadatas"])
+        matching_ids = [data["ids"][i] for i, m in enumerate(data["metadatas"]) if m and m.get("source") == req.source]
+        if matching_ids:
+            coll.delete(ids=matching_ids)
+        else:
+            try:
+                coll.delete(where={"source": req.source})
+            except Exception:
+                pass
+    else:
+        raise HTTPException(status_code=400, detail="Must provide 'source' or 'ids'")
+
+    remaining_chunks = coll.count()
+    return {"status": "deleted", "remaining_chunks": remaining_chunks}
+
+
+@app.post("/api/kb/clear")
+def clear_kb(user: UserProfile = Depends(get_current_user)):
+    from main import get_vectorstore
+    vectorstore = get_vectorstore()
+    coll = vectorstore._collection
+    all_data = coll.get()
+    ids = all_data.get("ids", [])
+    if ids:
+        coll.delete(ids=ids)
+
+    if os.path.exists("suggestions.json"):
+        try:
+            os.remove("suggestions.json")
+        except Exception:
+            pass
+
+    return {"status": "cleared", "remaining_chunks": 0}
 
 # Mount the compiled React frontend
 frontend_dist = os.path.join(os.path.dirname(__file__), "frontend", "dist")

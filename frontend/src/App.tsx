@@ -32,7 +32,10 @@ import {
   ArrowUp,
   LogOut,
   LogIn,
-  Square
+  Square,
+  Video,
+  Image,
+  Code
 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import { AuthModal } from './components/AuthModal';
@@ -219,6 +222,21 @@ export default function App() {
       return { doc_count: 0, chunk_count: 0 };
     }
   });
+
+  // Knowledge Base State
+  interface KBSource {
+    source: string;
+    name: string;
+    type: string;
+    h1: string;
+    chunk_count: number;
+    sample: string;
+    ids: string[];
+  }
+  const [kbSources, setKbSources] = useState<KBSource[]>([]);
+  const [isLoadingKBSources, setIsLoadingKBSources] = useState(false);
+  const [deletingSource, setDeletingSource] = useState<string | null>(null);
+  const [isClearingKB, setIsClearingKB] = useState(false);
   const [searchDocFilter, setSearchDocFilter] = useState('');
 
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -424,9 +442,95 @@ export default function App() {
     }
   };
 
+  // Fetch Knowledge Base Sources
+  const fetchKBSources = async () => {
+    setIsLoadingKBSources(true);
+    try {
+      const res = await fetchWithAuth('/api/kb/sources');
+      if (res.ok) {
+        const data = await res.json();
+        setKbSources(data.sources || []);
+        setStats({
+          doc_count: data.total_sources || 0,
+          chunk_count: data.total_chunks || 0
+        });
+      }
+    } catch (e) {
+      console.error('Failed to fetch KB sources:', e);
+    } finally {
+      setIsLoadingKBSources(false);
+    }
+  };
+
+  const handleDeleteKBSource = async (source: string, name: string) => {
+    if (!window.confirm(`Are you sure you want to delete '${name}' and all its indexed chunks from the knowledge base?`)) {
+      return;
+    }
+    setDeletingSource(source);
+    try {
+      const res = await fetchWithAuth('/api/kb/delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ source })
+      });
+      if (res.ok) {
+        showToast(`Deleted '${name}' from knowledge base`, 'success');
+        await fetchKBSources();
+        fetchSuggestionsAndStats(true);
+      } else {
+        showToast('Failed to delete source', 'error');
+      }
+    } catch (e) {
+      showToast('Error deleting source', 'error');
+    } finally {
+      setDeletingSource(null);
+    }
+  };
+
+  const handleClearAllKB = async () => {
+    if (!window.confirm('Are you sure you want to CLEAR the entire knowledge base? All indexed documents and chunks will be permanently removed.')) {
+      return;
+    }
+    setIsClearingKB(true);
+    try {
+      const res = await fetchWithAuth('/api/kb/clear', { method: 'POST' });
+      if (res.ok) {
+        showToast('Knowledge base completely cleared', 'success');
+        setKbSources([]);
+        setStats({ doc_count: 0, chunk_count: 0 });
+        fetchSuggestionsAndStats(true);
+      } else {
+        showToast('Failed to clear knowledge base', 'error');
+      }
+    } catch (e) {
+      showToast('Error clearing knowledge base', 'error');
+    } finally {
+      setIsClearingKB(false);
+    }
+  };
+
+  const getSourceIcon = (source: string, type: string) => {
+    const s = source.toLowerCase();
+    if (type === 'youtube' || s.includes('youtube.com') || s.includes('youtu.be')) return <Video size={16} />;
+    if (s.endsWith('.pdf')) return <FileText size={16} />;
+    if (s.endsWith('.docx') || s.endsWith('.doc')) return <FileText size={16} />;
+    if (s.endsWith('.pptx') || s.endsWith('.ppt')) return <FileText size={16} />;
+    if (s.endsWith('.xlsx') || s.endsWith('.xls') || s.endsWith('.csv') || s.endsWith('.tsv')) return <Database size={16} />;
+    if (s.endsWith('.png') || s.endsWith('.jpg') || s.endsWith('.jpeg') || s.endsWith('.webp')) return <Image size={16} />;
+    if (s.endsWith('.py') || s.endsWith('.ts') || s.endsWith('.js') || s.endsWith('.tsx') || s.endsWith('.cpp') || s.endsWith('.json')) return <Code size={16} />;
+    if (s.startsWith('http')) return <Globe size={16} />;
+    return <FileText size={16} />;
+  };
+
   useEffect(() => {
     fetchSuggestionsAndStats();
   }, []);
+
+  useEffect(() => {
+    if (isArtifactsOpen && activeArtifactTab === 'knowledge') {
+      fetchKBSources();
+    }
+  }, [isArtifactsOpen, activeArtifactTab]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -1579,32 +1683,117 @@ export default function App() {
                     </div>
                     <div className="stat-box">
                       <span className="stat-number">{stats.doc_count}</span>
-                      <span className="stat-title">Estimated Topo Sources</span>
+                      <span className="stat-title">Indexed Sources</span>
                     </div>
                   </div>
-                  <button 
-                    className="kb-upload-trigger-btn"
-                    onClick={() => setIsIngestOpen(true)}
-                  >
-                    <Plus size={15} />
-                    <span>Anchor New Route</span>
-                  </button>
+                  <div className="kb-actions-row">
+                    <button 
+                      className="kb-upload-trigger-btn"
+                      onClick={() => setIsIngestOpen(true)}
+                    >
+                      <Plus size={15} />
+                      <span>Anchor Source</span>
+                    </button>
+                    {stats.chunk_count > 0 && (
+                      <button 
+                        className="kb-clear-all-btn"
+                        onClick={handleClearAllKB}
+                        disabled={isClearingKB}
+                        title="Clear entire knowledge base"
+                      >
+                        {isClearingKB ? <RotateCw size={13} className="spin-slow" /> : <Trash2 size={13} />}
+                        <span>Wipe KB</span>
+                      </button>
+                    )}
+                  </div>
                 </div>
 
                 <div className="kb-search-bar">
                   <Search size={14} className="text-muted" />
                   <input 
                     type="text" 
-                    placeholder="Filter knowledge crag..." 
+                    placeholder="Filter indexed sources & chunks..." 
                     value={searchDocFilter}
                     onChange={(e) => setSearchDocFilter(e.target.value)}
                   />
+                  {searchDocFilter && (
+                    <button className="kb-search-clear" onClick={() => setSearchDocFilter('')}>
+                      <X size={12} />
+                    </button>
+                  )}
                 </div>
 
-                <div className="kb-tips-card">
-                  <h4>Retrieval and Embedding Engine</h4>
-                  <p>Documents are chunked into 1000-char segments with 200 overlap, embedded into ChromaDB with cosine similarity, and re-ranked using FlashRank MMR.</p>
-                </div>
+                {/* Sources & Chunks List */}
+                {isLoadingKBSources ? (
+                  <div className="kb-loading-state">
+                    <RotateCw size={20} className="spin-slow text-muted" />
+                    <span>Loading knowledge base sources...</span>
+                  </div>
+                ) : kbSources.length === 0 ? (
+                  <div className="pane-empty-state">
+                    <Database size={32} className="text-muted" />
+                    <h4>Knowledge Base Empty</h4>
+                    <p>No documents or chunks are currently stored in ChromaDB. Anchor a file, URL, or YouTube video to get started.</p>
+                    <button 
+                      className="recall-btn-primary"
+                      style={{ marginTop: '12px', padding: '6px 14px', fontSize: '0.8rem' }}
+                      onClick={() => setIsIngestOpen(true)}
+                    >
+                      <Plus size={14} />
+                      <span>Anchor First Document</span>
+                    </button>
+                  </div>
+                ) : (
+                  <div className="kb-sources-list">
+                    {kbSources
+                      .filter(s => {
+                        if (!searchDocFilter.trim()) return true;
+                        const query = searchDocFilter.toLowerCase();
+                        return (
+                          s.name.toLowerCase().includes(query) ||
+                          s.source.toLowerCase().includes(query) ||
+                          s.sample.toLowerCase().includes(query) ||
+                          (s.h1 && s.h1.toLowerCase().includes(query))
+                        );
+                      })
+                      .map((src, i) => (
+                        <div key={i} className="kb-source-card">
+                          <div className="source-card-header">
+                            <div className="source-icon-wrap">
+                              {getSourceIcon(src.source, src.type)}
+                            </div>
+                            <div className="source-title-group">
+                              <span className="source-card-name" title={src.source}>
+                                {src.name}
+                              </span>
+                              <span className="source-chunk-badge">
+                                {src.chunk_count} {src.chunk_count === 1 ? 'chunk' : 'chunks'}
+                              </span>
+                            </div>
+                            <button 
+                              className="source-delete-btn"
+                              onClick={() => handleDeleteKBSource(src.source, src.name)}
+                              disabled={deletingSource === src.source}
+                              title={`Delete ${src.name}`}
+                              aria-label={`Delete ${src.name}`}
+                            >
+                              {deletingSource === src.source ? (
+                                <RotateCw size={14} className="spin-slow" />
+                              ) : (
+                                <Trash2 size={14} />
+                              )}
+                            </button>
+                          </div>
+
+                          {src.sample && (
+                            <p className="source-preview-snippet">
+                              "{src.sample.replace(/\n+/g, ' ')}..."
+                            </p>
+                          )}
+                        </div>
+                      ))}
+                  </div>
+                )}
               </div>
             )}
 

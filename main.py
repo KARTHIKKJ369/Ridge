@@ -96,7 +96,7 @@ def get_vectorstore():
         embedding_function=embeddings,
     )
 
-def ingest_document(text_or_url: str) -> dict:
+def ingest_document(text_or_url: str, original_filename: str | None = None) -> dict:
     import urllib.parse
     import os
     from rag_ingest import load_and_split_source, _sub_chunk
@@ -121,8 +121,14 @@ def ingest_document(text_or_url: str) -> dict:
         doc_splits = load_and_split_source(text_or_url)
     else:
         print("Detected raw text, processing...")
-        doc = Document(page_content=text_or_url, metadata={"source": "user_input"})
+        doc = Document(page_content=text_or_url, metadata={"source": original_filename or "user_input"})
         doc_splits = _sub_chunk([doc], 1500, 200)
+
+    # Attach original filename if provided (e.g. for uploads)
+    if original_filename:
+        for d in doc_splits:
+            d.metadata["source"] = original_filename
+            d.metadata["h1"] = original_filename
         
     print(f"Created {len(doc_splits)} chunks. Storing in Chroma...")
     vectorstore = get_vectorstore()
@@ -201,11 +207,13 @@ def build_app():
         model_name="llama-3.1-8b-instant",
         temperature=0.1,
         max_tokens=256,
+        max_retries=1,
     )
     llm_generate = ChatGroq(
         api_key=settings["groq_api_key"],
         model_name=settings["groq_model"],
         temperature=0,
+        max_retries=0,  # Fail instantly on rate-limit to trigger immediate 8B fallback
     )
     # Fast 8B model for grading - 20,000 TPM limit (prevents 429 rate limits & delivers sub-200ms latency)
     structured_grader = llm_fast.with_structured_output(BatchGrades)
