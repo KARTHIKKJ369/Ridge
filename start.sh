@@ -59,7 +59,7 @@ echo $BACKEND_PID > "$PID_FILE"
 
 # Wait for backend to be healthy
 echo -n "      Waiting for backend to initialize..."
-MAX_WAIT=20
+MAX_WAIT=60
 WAITED=0
 BACKEND_UP=false
 
