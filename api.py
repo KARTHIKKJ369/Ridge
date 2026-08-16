@@ -14,7 +14,11 @@ from main import build_app, get_settings, ingest_document
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-app = FastAPI()
+app = FastAPI(
+    title="Ridge API",
+    description="High-performance Corrective RAG (CRAG) platform with LangGraph state machine, ChromaDB, FlashRank, and Groq LLMs.",
+    version="1.0.0",
+)
 
 app.add_middleware(
     CORSMiddleware,
@@ -35,6 +39,7 @@ class IngestRequest(BaseModel):
 async def generate_chat_events(question: str) -> AsyncGenerator[str, None]:
     initial_state = {
         "question": question,
+        "original_question": question,
         "documents": [],
         "documents_metadata": [],
         "generation": "",
@@ -134,18 +139,24 @@ def status():
     return {"status": "ok"}
 
 @app.get("/api/suggestions")
-def get_suggestions():
-    if os.path.exists("suggestions.json"):
+def get_suggestions(force: bool = False):
+    """
+    Returns suggested queries from the persistent suggestions.json cache.
+    Does NOT make LLM or Chroma DB calls on refresh.
+    Only re-generates when force=True or during document ingestion.
+    """
+    # 1. Check persistent cache file first
+    if not force and os.path.exists("suggestions.json"):
         try:
             with open("suggestions.json", "r") as f:
                 data = json.load(f)
                 sugs = data.get("suggestions", [])
                 if sugs:
-                    return {"suggestions": sugs}
-        except Exception:
-            pass
+                    return {"suggestions": sugs, "cached": True}
+        except Exception as e:
+            logger.warning(f"Error reading suggestions.json: {e}")
 
-    # If no suggestions cached, inspect vectorstore
+    # 2. Only if no cache file exists or force=True, generate from Chroma sample
     try:
         from main import get_vectorstore, generate_suggestions
         vectorstore = get_vectorstore()
@@ -160,9 +171,9 @@ def get_suggestions():
                 if os.path.exists("suggestions.json"):
                     with open("suggestions.json", "r") as f:
                         data = json.load(f)
-                        return {"suggestions": data.get("suggestions", [])}
+                        return {"suggestions": data.get("suggestions", []), "cached": False}
     except Exception as e:
-        logger.warning(f"Could not auto-generate suggestions from Chroma: {e}")
+        logger.warning(f"Could not generate suggestions: {e}")
 
     return {"suggestions": [], "empty": True}
 

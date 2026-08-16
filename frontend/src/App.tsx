@@ -1,6 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { 
-  Send, 
   User, 
   Activity, 
   CheckCircle, 
@@ -15,34 +14,65 @@ import {
   Trash2, 
   Database, 
   Sparkles, 
-  ChevronRight,
-  ChevronDown,
-  BookOpen,
-  PanelLeftClose,
-  PanelLeft,
-  Sun,
-  Moon,
-  Compass,
-  ThumbsUp,
-  ThumbsDown,
-  Download,
-  Search,
-  MessageSquare,
-  Command
+  ChevronRight, 
+  ChevronDown, 
+  BookOpen, 
+  PanelLeft, 
+  PanelLeftClose, 
+  ThumbsUp, 
+  ThumbsDown, 
+  Download, 
+  Search, 
+  MessageSquare, 
+  Command, 
+  Zap, 
+  ShieldCheck, 
+  Edit3,
+  Paperclip,
+  ArrowUp
 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import './App.css';
 
-// Anthropic Claude 8-point geometric Starburst Logo
-const ClaudeLogo = ({ size = 22, className = '' }: { size?: number; className?: string }) => (
+// Symmetrical Mountain Summit & Neural Ridge Emblem
+const RidgeLogo = ({ size = 22, className = '' }: { size?: number; className?: string }) => (
   <svg 
     width={size} 
     height={size} 
-    viewBox="0 0 24 24" 
-    fill="currentColor" 
-    className={`claude-starburst ${className}`}
+    viewBox="0 0 32 32" 
+    fill="none" 
+    xmlns="http://www.w3.org/2000/svg"
+    className={`recall-emblem ${className}`}
   >
-    <path d="M12 0L14.59 9.41L24 12L14.59 14.59L12 24L9.41 14.59L0 12L9.41 9.41L12 0Z" />
+    <defs>
+      <linearGradient id="crag-logo-bg" x1="2" y1="2" x2="30" y2="30" gradientUnits="userSpaceOnUse">
+        <stop offset="0%" stopColor="#1E293B" />
+        <stop offset="100%" stopColor="#0F172A" />
+      </linearGradient>
+      <linearGradient id="summit-left-slope" x1="6" y1="24" x2="16" y2="8" gradientUnits="userSpaceOnUse">
+        <stop offset="0%" stopColor="#0284C7" />
+        <stop offset="100%" stopColor="#38BDF8" />
+      </linearGradient>
+      <linearGradient id="summit-right-slope" x1="16" y1="8" x2="26" y2="24" gradientUnits="userSpaceOnUse">
+        <stop offset="0%" stopColor="#F97316" />
+        <stop offset="100%" stopColor="#EA580C" />
+      </linearGradient>
+    </defs>
+    {/* Outer Rounded Squircle Frame */}
+    <rect x="2" y="2" width="28" height="28" rx="8" fill="url(#crag-logo-bg)" stroke="#334155" strokeWidth="1" />
+    
+    {/* Symmetrical Mountain Peak: Left (Summit Blue) & Right (Terracotta Rust) */}
+    <polygon points="16,8 6,24 16,24" fill="url(#summit-left-slope)" />
+    <polygon points="16,8 16,24 26,24" fill="url(#summit-right-slope)" />
+    
+    {/* Center Summit Ridge Line */}
+    <line x1="16" y1="8" x2="16" y2="24" stroke="#FFFFFF" strokeWidth="1" strokeLinecap="round" />
+    
+    {/* Snowcap Top Triangle */}
+    <polygon points="16,8 12.5,14 16,12.5 19.5,14" fill="#FFFFFF" />
+    
+    {/* High Altitude Beacon */}
+    <circle cx="16" cy="6" r="1.5" fill="#38BDF8" stroke="#FFFFFF" strokeWidth="0.75" />
   </svg>
 );
 
@@ -73,34 +103,40 @@ type ChatSession = {
   messages: Message[];
 };
 
-type ThemeMode = 'dark' | 'parchment' | 'midnight';
+type ThemeMode = 'void' | 'stone' | 'rust';
+
+const DEFAULT_SUGGESTIONS = [
+  "Summarize the key findings and core concepts across the indexed documents.",
+  "What are the main methodologies and step-by-step implementations described?",
+  "Audit the knowledge base for contradictory claims or edge cases."
+];
 
 export default function App() {
-  // Theme Management
+  // Theme Management: Defaults to 'stone' (Stone & Summit)
   const [theme, setTheme] = useState<ThemeMode>(() => {
-    return (localStorage.getItem('claude_theme') as ThemeMode) || 'dark';
+    return (localStorage.getItem('recall_theme') as ThemeMode) || 'stone';
   });
 
-  // Sidebar & Layout Management
-  const [isSidebarOpen, setIsSidebarOpen] = useState(true);
+  // Sidebar & Layout: Defaults to collapsed on refresh so the Hero is front and center
+  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [isArtifactsOpen, setIsArtifactsOpen] = useState(false);
   const [activeArtifactTab, setActiveArtifactTab] = useState<'trace' | 'knowledge' | 'grader'>('trace');
 
   // Multi-Session Chat State
   const [sessions, setSessions] = useState<ChatSession[]>(() => {
-    const saved = localStorage.getItem('claude_crag_sessions');
+    const saved = localStorage.getItem('recall_crag_sessions');
     if (saved) {
       try { return JSON.parse(saved); } catch (e) {}
     }
     return [{
       id: 'default-session',
-      title: 'Initial Research',
+      title: 'Initial Ascent',
       createdAt: Date.now(),
       messages: []
     }];
   });
   const [activeSessionId, setActiveSessionId] = useState<string>(() => {
-    const savedActive = localStorage.getItem('claude_crag_active_session');
+    const savedActive = localStorage.getItem('recall_crag_active_session');
     return savedActive || 'default-session';
   });
 
@@ -129,9 +165,25 @@ export default function App() {
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [isDragging, setIsDragging] = useState(false);
 
-  // Knowledge Stats & Grounded Suggestions
-  const [suggestions, setSuggestions] = useState<string[]>([]);
-  const [stats, setStats] = useState({ doc_count: 0, chunk_count: 0 });
+  // Knowledge Stats & Grounded Suggestions (Instant 0ms hydration)
+  const [suggestions, setSuggestions] = useState<string[]>(() => {
+    try {
+      const saved = localStorage.getItem('ridge_cached_suggestions');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      }
+    } catch {}
+    return DEFAULT_SUGGESTIONS;
+  });
+  const [stats, setStats] = useState(() => {
+    try {
+      const saved = localStorage.getItem('ridge_cached_stats');
+      return saved ? JSON.parse(saved) : { doc_count: 0, chunk_count: 0 };
+    } catch {
+      return { doc_count: 0, chunk_count: 0 };
+    }
+  });
   const [searchDocFilter, setSearchDocFilter] = useState('');
 
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -139,19 +191,46 @@ export default function App() {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
+  // Helper for relative timestamps on recent sessions
+  const getRelativeTime = (timestamp: number) => {
+    const diff = Math.floor((Date.now() - timestamp) / 1000);
+    if (diff < 60) return 'Just now';
+    if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
+    if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
+    return `${Math.floor(diff / 86400)}d ago`;
+  };
+
+  // Close sidebar on mobile resize
+  useEffect(() => {
+    const handleResize = () => {
+      if (window.innerWidth < 768 && isSidebarOpen) {
+        setIsSidebarOpen(false);
+      }
+    };
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, [isSidebarOpen]);
+
+  // Dynamic document title
+  useEffect(() => {
+    document.title = activeSession?.title 
+      ? `${activeSession.title} · Ridge`
+      : 'Ridge · Corrective RAG Intelligence';
+  }, [activeSession?.title]);
+
   // Save sessions to localStorage
   useEffect(() => {
-    localStorage.setItem('claude_crag_sessions', JSON.stringify(sessions));
+    localStorage.setItem('recall_crag_sessions', JSON.stringify(sessions));
   }, [sessions]);
 
   useEffect(() => {
-    localStorage.setItem('claude_crag_active_session', activeSessionId);
+    localStorage.setItem('recall_crag_active_session', activeSessionId);
   }, [activeSessionId]);
 
-  // Apply Theme
+  // Apply Theme Mode
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme);
-    localStorage.setItem('claude_theme', theme);
+    localStorage.setItem('recall_theme', theme);
   }, [theme]);
 
   // Toast Notification Helper
@@ -160,7 +239,7 @@ export default function App() {
     setTimeout(() => setToast(null), 3500);
   };
 
-  // Keyboard Shortcuts (⌘K for new chat)
+  // Keyboard Shortcuts (Command+K for new ascent)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
@@ -172,6 +251,10 @@ export default function App() {
         setIsExportOpen(false);
         setSelectedSourceModal(null);
         setShowSlashMenu(false);
+        if (window.innerWidth < 768) {
+          setIsSidebarOpen(false);
+          setIsArtifactsOpen(false);
+        }
       }
     };
     window.addEventListener('keydown', handleKeyDown);
@@ -182,23 +265,25 @@ export default function App() {
   useEffect(() => {
     if (textareaRef.current) {
       textareaRef.current.style.height = 'auto';
-      textareaRef.current.style.height = `${Math.min(textareaRef.current.scrollHeight, 200)}px`;
+      textareaRef.current.style.height = `${Math.min(textareaRef.current.scrollHeight, 180)}px`;
     }
   }, [input]);
 
-  // Fetch Suggestions & Knowledge Stats
-  const fetchSuggestionsAndStats = async () => {
+  // Fetch Suggestions & Knowledge Stats (Only hits API/cache; updates local storage)
+  const fetchSuggestionsAndStats = async (forceRefresh = false) => {
     try {
       const [sugRes, statRes] = await Promise.all([
-        fetch('/api/suggestions'),
+        fetch(`/api/suggestions${forceRefresh ? '?force=true' : ''}`),
         fetch('/api/stats')
       ]);
       const sugData = await sugRes.json();
       const statData = await statRes.json();
       if (!sugData.empty && sugData.suggestions?.length > 0) {
         setSuggestions(sugData.suggestions);
+        localStorage.setItem('ridge_cached_suggestions', JSON.stringify(sugData.suggestions));
       }
       setStats(statData);
+      localStorage.setItem('ridge_cached_stats', JSON.stringify(statData));
     } catch (e) {
       console.error('Failed to fetch stats/suggestions:', e);
     }
@@ -216,7 +301,7 @@ export default function App() {
   const handleNewChat = () => {
     const newSession: ChatSession = {
       id: Date.now().toString(),
-      title: 'New Conversation',
+      title: 'New Research Ascent',
       createdAt: Date.now(),
       messages: []
     };
@@ -224,16 +309,15 @@ export default function App() {
     setActiveSessionId(newSession.id);
     setInput('');
     if (window.innerWidth < 768) setIsSidebarOpen(false);
-    showToast('Created new conversation', 'info');
+    showToast('Started new research ascent', 'info');
   };
 
   const handleDeleteSession = (id: string, e: React.MouseEvent) => {
     e.stopPropagation();
     if (sessions.length === 1) {
-      // Keep at least one empty session
       const fresh: ChatSession = {
         id: Date.now().toString(),
-        title: 'New Conversation',
+        title: 'New Research Ascent',
         createdAt: Date.now(),
         messages: []
       };
@@ -246,7 +330,7 @@ export default function App() {
     if (activeSessionId === id) {
       setActiveSessionId(filtered[0].id);
     }
-    showToast('Conversation deleted', 'info');
+    showToast('Ascent deleted', 'info');
   };
 
   const updateCurrentMessages = (updater: (prevMsgs: Message[]) => Message[]) => {
@@ -254,7 +338,7 @@ export default function App() {
       if (s.id === activeSessionId) {
         const updated = updater(s.messages);
         let newTitle = s.title;
-        if (s.title === 'New Conversation' && updated.length > 0 && updated[0].role === 'user') {
+        if ((s.title === 'New Research Ascent' || s.title === 'Initial Ascent') && updated.length > 0 && updated[0].role === 'user') {
           newTitle = updated[0].content.slice(0, 32) + (updated[0].content.length > 32 ? '...' : '');
         }
         return { ...s, messages: updated, title: newTitle };
@@ -289,7 +373,6 @@ export default function App() {
     setInput('');
     setShowSlashMenu(false);
     setIsLoading(true);
-    // Auto-expand thinking during streaming
     setExpandedThinking(prev => ({ ...prev, [assistantId]: true }));
 
     try {
@@ -344,10 +427,10 @@ export default function App() {
       console.error(error);
       updateCurrentMessages(prev => prev.map(msg =>
         msg.id === assistantId
-          ? { ...msg, content: `❌ Error: ${error.message || 'Could not complete query.'}` }
+          ? { ...msg, content: `Error: ${error.message || 'Could not complete ascent.'}` }
           : msg
       ));
-      showToast('Error during pipeline execution', 'error');
+      showToast('Error during pipeline ascent', 'error');
     } finally {
       updateCurrentMessages(prev => prev.map(msg =>
         msg.id === assistantId ? { ...msg, isStreaming: false } : msg
@@ -381,7 +464,7 @@ export default function App() {
 
       if (!response.ok) throw new Error('Server returned an error');
       const data = await response.json();
-      showToast(`Indexed ${data.chunks_added} chunks into knowledge base`);
+      showToast(`Anchored ${data.chunks_added} chunks into knowledge crag`);
       setIsIngestSuccess(true);
       setTimeout(() => {
         setIsIngestSuccess(false);
@@ -394,7 +477,7 @@ export default function App() {
       showToast('Ingestion failed: ' + (e.message || 'Unknown error'), 'error');
     } finally {
       setIsIngesting(false);
-      fetchSuggestionsAndStats();
+      fetchSuggestionsAndStats(true);
     }
   };
 
@@ -425,8 +508,8 @@ export default function App() {
     updateCurrentMessages(prev => prev.map(msg => {
       if (msg.id === msgId) {
         const nextLiked = msg.liked === liked ? null : liked;
-        if (nextLiked === true) showToast('Thanks for the feedback!', 'success');
-        if (nextLiked === false) showToast('Feedback recorded.', 'info');
+        if (nextLiked === true) showToast('Ascent marked helpful', 'success');
+        if (nextLiked === false) showToast('Crux feedback noted', 'info');
         return { ...msg, liked: nextLiked };
       }
       return msg;
@@ -447,35 +530,66 @@ export default function App() {
       content = JSON.stringify(messages, null, 2);
       mimeType = 'application/json';
     } else {
-      content = `# ${activeSession.title}\n*Exported on ${new Date().toLocaleString()}*\n\n---\n\n` +
-        messages.map(m => `### ${m.role === 'user' ? '👤 User' : '✨ Claude Assistant'}\n${m.content}\n\n`).join('\n---\n\n');
+      content = `# Ridge: ${activeSession.title}\nExported on ${new Date().toLocaleString()}\n\n---\n\n` +
+        messages.map(m => `### ${m.role === 'user' ? 'User' : 'Ridge'}\n${m.content}\n\n`).join('\n---\n\n');
     }
 
     const blob = new Blob([content], { type: mimeType });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `claude-crag-${activeSession.id}.${ext}`;
+    a.download = `ridge-${activeSession.id}.${ext}`;
     a.click();
     URL.revokeObjectURL(url);
     setIsExportOpen(false);
     showToast(`Exported as .${ext}`);
   };
 
-  const getNodeDetails = (nodeName: string) => {
+  // Node details mapped with rock climbing difficulty color hierarchy
+  const getNodeDetails = (nodeName: string): { title: string; desc: string; icon: React.ReactNode; color: string } => {
     switch (nodeName) {
       case 'retrieve_node':
-        return { title: 'MMR Vector Retrieval', desc: 'Dense vector search with MMR diversity re-ranking', icon: '🔍', color: 'cyan' };
+        return { 
+          title: 'MMR Vector Retrieval', 
+          desc: 'Chroma vector search with MMR diversity', 
+          icon: <Search size={13} />, 
+          color: 'teal' 
+        };
       case 'grade_node':
-        return { title: 'Relevance Grading', desc: 'Strict Groq LLM hallucination & relevance evaluation', icon: '⚖️', color: 'terracotta' };
+        return { 
+          title: 'Relevance Grading', 
+          desc: 'Strict Groq LLM hallucination and veracity evaluation', 
+          icon: <ShieldCheck size={13} />, 
+          color: 'rust' 
+        };
       case 'web_search_node':
-        return { title: 'Web Search Fallback', desc: 'DuckDuckGo external knowledge search & retrieval', icon: '🌐', color: 'purple' };
+        return { 
+          title: 'Web Search Fallback', 
+          desc: 'DuckDuckGo knowledge search and retrieval', 
+          icon: <Globe size={13} />, 
+          color: 'amber' 
+        };
       case 'rewrite_node':
-        return { title: 'Query Reformulation', desc: 'Rewriting question for enhanced retrieval recall', icon: '✏️', color: 'amber' };
+        return { 
+          title: 'Query Reformulation', 
+          desc: 'Adaptive query rewriting for high-precision recall', 
+          icon: <Edit3 size={13} />, 
+          color: 'moss' 
+        };
       case 'generate_node':
-        return { title: 'Answer Synthesis', desc: 'Grounded generation from verified context', icon: '✨', color: 'green' };
+        return { 
+          title: 'Answer Synthesis', 
+          desc: 'Grounded generation from verified context', 
+          icon: <Sparkles size={13} />, 
+          color: 'summit' 
+        };
       default:
-        return { title: nodeName, desc: 'Pipeline state executed', icon: '⚡', color: 'muted' };
+        return { 
+          title: nodeName, 
+          desc: 'Pipeline state executed', 
+          icon: <Zap size={13} />, 
+          color: 'muted' 
+        };
     }
   };
 
@@ -491,7 +605,7 @@ export default function App() {
 
   const totalPipelineLatency = activeTraces.reduce((sum, t) => sum + (t.latency_ms || 0), 0);
 
-  // Time-aware greeting for Claude hero
+  // Time-aware greeting for Recall hero
   const getGreeting = () => {
     const hour = new Date().getHours();
     if (hour < 12) return 'Good morning';
@@ -500,54 +614,77 @@ export default function App() {
   };
 
   return (
-    <div className={`claude-app ${isArtifactsOpen ? 'artifacts-active' : ''}`}>
-      {/* Claude Left Navigation Sidebar */}
-      <aside className={`claude-sidebar ${isSidebarOpen ? 'open' : 'collapsed'}`}>
+    <div className={`recall-app ${isArtifactsOpen ? 'artifacts-active' : ''}`}>
+      {/* Mobile Sidebar Overlay Backdrop */}
+      <div 
+        className={`sidebar-mobile-backdrop ${isSidebarOpen ? 'visible' : ''}`}
+        onClick={() => setIsSidebarOpen(false)}
+      />
+
+      {/* Left Navigation Sidebar */}
+      <aside className={`recall-sidebar ${isSidebarOpen ? 'open' : 'collapsed'}`}>
         <div className="sidebar-header">
-          <div className="claude-brand">
+          <div className="recall-brand">
             <div className="brand-logo-frame">
-              <ClaudeLogo size={20} />
+              <RidgeLogo size={26} />
             </div>
             <div className="brand-texts">
-              <span className="brand-name">Claude</span>
-              <span className="brand-subtitle">CRAG Engine</span>
+              <div className="brand-row">
+                <span className="brand-name">Ridge<span className="brand-dot">.</span></span>
+              </div>
+              <span className="brand-subtitle">CRAG Intelligence</span>
             </div>
           </div>
           <button 
             className="sidebar-collapse-btn" 
             onClick={() => setIsSidebarOpen(false)}
             title="Collapse sidebar"
+            aria-label="Collapse sidebar"
           >
             <PanelLeftClose size={18} />
           </button>
         </div>
 
         <div className="sidebar-action-wrap">
-          <button className="new-chat-btn" onClick={handleNewChat}>
-            <Plus size={16} />
-            <span>Start new chat</span>
-            <span className="shortcut-tag">⌘K</span>
+          <button className="new-chat-btn" onClick={handleNewChat} aria-label="Start new ascent">
+            <div className="new-chat-label-group">
+              <Plus size={16} />
+              <span>New Ascent</span>
+            </div>
+            <kbd className="shortcut-kbd-chip">⌘K</kbd>
           </button>
         </div>
 
-        {/* Knowledge Base Status Pill */}
+        {/* Knowledge Crag Status Card */}
         <div className="sidebar-section">
-          <div className="sidebar-section-title">Knowledge Base</div>
-          <div className="kb-stats-card" onClick={() => setIsIngestOpen(true)}>
+          <div className="sidebar-section-title">Knowledge crag</div>
+          <div 
+            className="kb-stats-card" 
+            onClick={() => {
+              setIsIngestOpen(true);
+              if (window.innerWidth < 768) setIsSidebarOpen(false);
+            }}
+            title="Manage and upload knowledge topo sources"
+            role="button"
+            tabIndex={0}
+          >
             <div className="kb-stats-icon">
-              <Database size={16} className="text-terracotta" />
+              <Database size={16} className="text-teal" />
             </div>
             <div className="kb-stats-meta">
-              <div className="kb-stats-num">{stats.chunk_count} Chunks Indexed</div>
-              <div className="kb-stats-sub">{stats.doc_count > 0 ? `${stats.doc_count} Sources Active` : 'Click to add files'}</div>
+              <div className="kb-stats-num">{stats.chunk_count} Anchored chunks</div>
+              <div className="kb-stats-sub">
+                <span className="live-status-dot" />
+                <span>{stats.doc_count > 0 ? `${stats.doc_count} Topo sources active` : 'No sources attached'}</span>
+              </div>
             </div>
             <Plus size={14} className="kb-add-icon" />
           </div>
         </div>
 
-        {/* Recent Conversations */}
+        {/* Recent Ascents */}
         <div className="sidebar-section recents-section">
-          <div className="sidebar-section-title">Recents</div>
+          <div className="sidebar-section-title">Recent inquiries</div>
           <div className="sessions-list">
             {sessions.map(s => (
               <div 
@@ -557,13 +694,18 @@ export default function App() {
                   setActiveSessionId(s.id);
                   if (window.innerWidth < 768) setIsSidebarOpen(false);
                 }}
+                title={s.title}
               >
                 <MessageSquare size={14} className="session-icon" />
-                <span className="session-title" title={s.title}>{s.title}</span>
+                <div className="session-text-stack">
+                  <span className="session-title">{s.title}</span>
+                  <span className="session-timestamp">{getRelativeTime(s.createdAt)}</span>
+                </div>
                 <button 
                   className="session-delete-btn" 
                   onClick={(e) => handleDeleteSession(s.id, e)}
-                  title="Delete chat"
+                  title="Delete ascent"
+                  aria-label="Delete ascent"
                 >
                   <Trash2 size={13} />
                 </button>
@@ -572,165 +714,190 @@ export default function App() {
           </div>
         </div>
 
-        {/* Sidebar Footer */}
+        {/* Sidebar Footer with 3 Handcrafted Climbing Palettes & Color Dots */}
         <div className="sidebar-footer">
+          <div className="theme-header-row">
+            <span className="theme-label-caption">Theme</span>
+          </div>
           <div className="theme-toggle-group">
             <button 
-              className={`theme-btn ${theme === 'dark' ? 'active' : ''}`}
-              onClick={() => setTheme('dark')}
-              title="Claude Warm Dark"
+              className={`theme-btn ${theme === 'void' ? 'active' : ''}`}
+              onClick={() => setTheme('void')}
+              title="Chalk & Void: Dark Basalt & Alpine Teal"
+              aria-label="Select Chalk & Void theme"
             >
-              <Moon size={14} />
-              <span>Dark</span>
+              <span className="theme-color-dot void-dot" />
+              <span>Void</span>
             </button>
             <button 
-              className={`theme-btn ${theme === 'parchment' ? 'active' : ''}`}
-              onClick={() => setTheme('parchment')}
-              title="Claude Light Parchment"
+              className={`theme-btn ${theme === 'stone' ? 'active' : ''}`}
+              onClick={() => setTheme('stone')}
+              title="Stone & Summit: Warm Sandstone & Summit Blue"
+              aria-label="Select Stone & Summit theme"
             >
-              <Sun size={14} />
-              <span>Parchment</span>
+              <span className="theme-color-dot stone-dot" />
+              <span>Summit</span>
             </button>
             <button 
-              className={`theme-btn ${theme === 'midnight' ? 'active' : ''}`}
-              onClick={() => setTheme('midnight')}
-              title="Claude Midnight"
+              className={`theme-btn ${theme === 'rust' ? 'active' : ''}`}
+              onClick={() => setTheme('rust')}
+              title="Rust & Ridge: Desert Crag & Terracotta Rust"
+              aria-label="Select Rust & Ridge theme"
             >
-              <Compass size={14} />
-              <span>Obsidian</span>
+              <span className="theme-color-dot rust-dot" />
+              <span>Ridge</span>
             </button>
           </div>
 
           <div className="footer-meta">
-            <span>Groq · LangGraph · Chroma</span>
+            <span>ChromaDB · FlashRank · LangGraph · Groq</span>
           </div>
         </div>
       </aside>
 
       {/* Main Chat Workspace */}
-      <main className="claude-main">
-        {/* Claude Top Navigation Bar */}
-        <header className="claude-navbar">
+      <main className="recall-main">
+        {/* Top Navigation Bar with Simplified Hierarchy */}
+        <header className="recall-navbar">
           <div className="navbar-left">
             {!isSidebarOpen && (
               <button 
                 className="nav-btn sidebar-open-btn" 
                 onClick={() => setIsSidebarOpen(true)}
-                title="Open sidebar"
+                title="Expand sidebar"
+                aria-label="Expand sidebar"
               >
                 <PanelLeft size={18} />
               </button>
             )}
 
-            <div className="model-selector-pill">
-              <ClaudeLogo size={15} className="model-logo" />
-              <span className="model-name">Claude 3.7 Sonnet</span>
-              <span className="model-badge">CRAG Pipeline</span>
-              <ChevronDown size={14} className="model-chevron" />
+            <div className="navbar-brand-anchor">
+              <span className="navbar-title">Ridge</span>
+              <div className="engine-status-tag">
+                <span className="engine-live-dot" />
+                <span className="engine-name">Groq LLM</span>
+              </div>
             </div>
           </div>
 
           <div className="navbar-right">
-            <button 
-              className={`nav-action-pill ${isArtifactsOpen ? 'active' : ''} ${isCurrentlyStreaming ? 'pulsing' : ''}`}
-              onClick={() => setIsArtifactsOpen(!isArtifactsOpen)}
-              title="Toggle Pipeline Trace & Artifacts Panel"
-            >
-              <Activity size={15} />
-              <span>Trace & Artifacts</span>
-              {activeTraces.length > 0 && (
-                <span className="trace-counter">{activeTraces.length}</span>
+            {/* Observability Cluster */}
+            <div className="nav-group-observability">
+              <button 
+                className={`nav-action-pill trace-pill ${isArtifactsOpen ? 'active' : ''} ${isCurrentlyStreaming ? 'pulsing' : ''}`}
+                onClick={() => setIsArtifactsOpen(!isArtifactsOpen)}
+                title="Inspect real-time LangGraph execution trace and state machine"
+                aria-label="Toggle pipeline trace"
+              >
+                <Activity size={15} />
+                <span className="btn-label-desktop">
+                  {activeTraces.length > 0 ? `Trace (${activeTraces.length} steps)` : 'Pipeline Trace'}
+                </span>
+                <span className="btn-label-mobile">
+                  {activeTraces.length > 0 ? `Trace (${activeTraces.length})` : 'Trace'}
+                </span>
+              </button>
+            </div>
+
+            <div className="navbar-divider" />
+
+            {/* Session Action Cluster */}
+            <div className="nav-group-actions">
+              <button 
+                className="nav-action-pill ingest-pill"
+                onClick={() => setIsIngestOpen(true)}
+                title="Ingest documents and articles into Knowledge Crag"
+                aria-label="Ingest documents"
+              >
+                <Upload size={15} />
+                <span>Ingest</span>
+              </button>
+
+              {messages.length > 0 && (
+                <>
+                  <button 
+                    className="nav-icon-btn" 
+                    onClick={() => setIsExportOpen(true)}
+                    title="Export ascent logs (Markdown or JSON)"
+                    aria-label="Export ascent"
+                  >
+                    <Download size={16} />
+                  </button>
+                  <button 
+                    className="nav-icon-btn" 
+                    onClick={clearCurrentChat}
+                    title="Clear current ascent messages"
+                    aria-label="Clear ascent"
+                  >
+                    <Trash2 size={16} />
+                  </button>
+                </>
               )}
-            </button>
-
-            <button 
-              className="nav-action-pill"
-              onClick={() => setIsIngestOpen(true)}
-              title="Ingest Documents into Knowledge Base"
-            >
-              <Upload size={15} />
-              <span>Ingest</span>
-            </button>
-
-            {messages.length > 0 && (
-              <>
-                <button 
-                  className="nav-icon-btn" 
-                  onClick={() => setIsExportOpen(true)}
-                  title="Export conversation"
-                >
-                  <Download size={16} />
-                </button>
-                <button 
-                  className="nav-icon-btn" 
-                  onClick={clearCurrentChat}
-                  title="Clear conversation"
-                >
-                  <Trash2 size={16} />
-                </button>
-              </>
-            )}
+            </div>
           </div>
         </header>
 
         {/* Chat Feed Area */}
         <div className="conversation-viewport">
           {messages.length === 0 ? (
-            <div className="claude-hero">
+            <div className="recall-hero">
               <div className="hero-salutation">
-                <ClaudeLogo size={32} className="hero-starburst" />
-                <h1 className="hero-heading">{getGreeting()}, Researcher</h1>
+                <div className="hero-logo-frame">
+                  <RidgeLogo size={52} />
+                </div>
+                <h1 className="hero-heading">{getGreeting()}, Climber</h1>
                 <p className="hero-subtext">
-                  What would you like to explore today with self-correcting RAG?
+                  Navigate complex knowledge bases with self-correcting RAG intelligence.
                 </p>
               </div>
 
-              {/* Dynamic Suggested Inquiries */}
+              {/* Dynamic Suggested Inquiries (Asymmetric Bento Grid) */}
               <div className="hero-suggestions-deck">
-                <div className="deck-header">
-                  <Sparkles size={14} className="text-terracotta" />
-                  <span>Ground-truth Prompts from Your Indexed Knowledge</span>
-                </div>
-                
                 <div className="deck-grid">
                   {suggestions.length > 0 ? (
                     suggestions.map((sug, i) => (
                       <button 
                         key={i} 
-                        className="claude-prompt-card"
+                        className={`recall-prompt-card ${i === 0 ? 'featured' : ''}`}
                         onClick={() => {
                           setInput(sug);
                           handleSend(sug);
                         }}
                       >
-                        <span className="prompt-text">{sug}</span>
+                        <div className="prompt-content-wrap">
+                          <span className="prompt-text">{sug}</span>
+                        </div>
                         <ChevronRight size={16} className="prompt-arrow" />
                       </button>
                     ))
                   ) : (
                     <>
                       <button 
-                        className="claude-prompt-card"
-                        onClick={() => setIsIngestOpen(true)}
-                      >
-                        <div className="prompt-content-wrap">
-                          <span className="prompt-title">📄 Ingest Documents</span>
-                          <span className="prompt-desc">Drop PDFs, Markdown, or web URLs to construct your vector index</span>
-                        </div>
-                        <ChevronRight size={16} className="prompt-arrow" />
-                      </button>
-
-                      <button 
-                        className="claude-prompt-card"
+                        className="recall-prompt-card featured"
                         onClick={() => {
-                          const q = "Explain the key architectural components of this codebase.";
+                          const q = "Summarize the primary topo knowledge anchored in the crag.";
                           setInput(q);
                           handleSend(q);
                         }}
                       >
                         <div className="prompt-content-wrap">
-                          <span className="prompt-title">⚡ Architectural Overview</span>
-                          <span className="prompt-desc">Retrieve and synthesize information across all indexed chunks</span>
+                          <span className="prompt-title">Summarize Topo Sources</span>
+                          <span className="prompt-desc">Synthesize key concepts across all indexed vectors</span>
+                        </div>
+                        <ChevronRight size={16} className="prompt-arrow" />
+                      </button>
+
+                      <button 
+                        className="recall-prompt-card"
+                        onClick={() => {
+                          const q = "Explain the architectural components and state machine graph.";
+                          setInput(q);
+                          handleSend(q);
+                        }}
+                      >
+                        <div className="prompt-content-wrap">
+                          <span className="prompt-title">Architectural Route Synthesis</span>
+                          <span className="prompt-desc">Cross-evaluate LangGraph node transitions</span>
                         </div>
                         <ChevronRight size={16} className="prompt-arrow" />
                       </button>
@@ -739,19 +906,19 @@ export default function App() {
                 </div>
               </div>
 
-              {/* Feature Pills */}
+              {/* Feature Tags Strip */}
               <div className="hero-feature-tags">
                 <div className="feature-tag">
-                  <CheckCircle size={13} className="text-green" />
-                  <span>Strict Hallucination Grader</span>
+                  <ShieldCheck size={13} className="text-moss" />
+                  <span>Strict Hallucination Filter</span>
                 </div>
                 <div className="feature-tag">
-                  <RotateCw size={13} className="text-terracotta" />
+                  <Zap size={13} className="text-teal" />
                   <span>FlashRank MMR Re-ranking</span>
                 </div>
                 <div className="feature-tag">
-                  <Globe size={13} className="text-cyan" />
-                  <span>Web Fallback if Docs Insufficient</span>
+                  <Globe size={13} className="text-rust" />
+                  <span>Dynamic Web Fallback</span>
                 </div>
               </div>
             </div>
@@ -773,7 +940,7 @@ export default function App() {
                       <div className="message-avatar-wrap">
                         {isAssistant ? (
                           <div className={`assistant-avatar ${msg.isStreaming ? 'streaming-spin' : ''}`}>
-                            <ClaudeLogo size={18} />
+                            <RidgeLogo size={22} />
                           </div>
                         ) : (
                           <div className="user-avatar">
@@ -786,24 +953,25 @@ export default function App() {
                       <div className="message-content-box">
                         <div className="message-meta-row">
                           <span className="author-name">
-                            {isAssistant ? 'Claude Assistant' : 'You'}
+                            {isAssistant ? 'Ridge' : 'You'}
                           </span>
                           {msg.timestamp && (
                             <span className="message-time">{msg.timestamp}</span>
                           )}
                         </div>
 
-                        {/* Claude 3.7-Style Thinking Accordion for Assistant */}
+                        {/* State Machine Thinking Accordion */}
                         {isAssistant && msgTraces.length > 0 && (
-                          <div className="claude-thinking-block">
+                          <div className="recall-thinking-block">
                             <button 
                               className="thinking-toggle-bar"
                               onClick={() => setExpandedThinking(prev => ({ ...prev, [msg.id]: !isExpanded }))}
+                              aria-expanded={isExpanded}
                             >
                               <div className="thinking-left">
-                                <RotateCw size={13} className={msg.isStreaming ? 'spin-slow text-terracotta' : 'text-muted'} />
+                                <RotateCw size={13} className={msg.isStreaming ? 'spin-slow text-teal' : 'text-muted'} />
                                 <span className="thinking-title">
-                                  {msg.isStreaming ? 'Synthesizing with CRAG state machine...' : `Thought process (${msgTraces.length} steps executed)`}
+                                  {msg.isStreaming ? 'Synthesizing with CRAG state machine...' : `Pipeline Ascent (${msgTraces.length} steps executed)`}
                                 </span>
                               </div>
                               <div className="thinking-right">
@@ -826,7 +994,10 @@ export default function App() {
                                       </div>
                                       <div className="node-info-col">
                                         <div className="node-header-line">
-                                          <span className="node-tag-name">{nodeDetails.icon} {nodeDetails.title}</span>
+                                          <span className="node-tag-name">
+                                            <span className="node-icon-inline">{nodeDetails.icon}</span>
+                                            {nodeDetails.title}
+                                          </span>
                                           {trace.latency_ms != null && (
                                             <span className="node-lat">{trace.latency_ms}ms</span>
                                           )}
@@ -843,42 +1014,44 @@ export default function App() {
 
                         {/* Markdown Text */}
                         {msg.content ? (
-                          <div className="claude-markdown-body">
+                          <div className="recall-markdown-body">
                             <ReactMarkdown>{msg.content}</ReactMarkdown>
                           </div>
                         ) : (
                           msg.isStreaming && (
-                            <div className="claude-shimmer-loader">
+                            <div className="recall-shimmer-loader">
                               <div className="shimmer-pulse-dot" />
                               <div className="shimmer-pulse-dot" />
                               <div className="shimmer-pulse-dot" />
-                              <span>Evaluating retrieved context & grounding answer...</span>
+                              <span>Evaluating context and generating verified answer...</span>
                             </div>
                           )
                         )}
 
                         {/* Embedded Citations & Veracity Cards */}
                         {isAssistant && msgGrades.length > 0 && (
-                          <div className="claude-citations-section">
+                          <div className="recall-citations-section">
                             <div className="citations-header">
-                              <BookOpen size={13} className="text-terracotta" />
-                              <span>Grounding Sources ({msgGrades.length} chunks evaluated)</span>
+                              <BookOpen size={13} className="text-teal" />
+                              <span>Anchored Topo and Grader Verdicts ({msgGrades.length} chunks evaluated)</span>
                             </div>
                             <div className="citations-flex">
                               {msgGrades.map((g: any, idx: number) => {
-                                const fname = g.source ? g.source.split('/').pop() || g.source : `Source #${idx + 1}`;
+                                const fname = g.source ? g.source.split('/').pop() || g.source : `Chunk #${idx + 1}`;
                                 const isRelevant = g.score === 'yes';
                                 return (
                                   <button 
                                     key={idx} 
                                     className={`citation-pill ${isRelevant ? 'relevant' : 'filtered'}`}
                                     onClick={() => setSelectedSourceModal(g)}
-                                    title="Click to inspect grader rationale and chunk excerpt"
+                                    title="Inspect grader rationale and chunk excerpt"
                                   >
-                                    <span className="cit-icon">{isRelevant ? '📄' : '✕'}</span>
+                                    <span className="cit-icon">
+                                      {isRelevant ? <Check size={12} className="text-moss" /> : <X size={12} className="text-rust" />}
+                                    </span>
                                     <span className="cit-name">{fname}</span>
                                     <span className={`cit-verdict ${isRelevant ? 'pass' : 'fail'}`}>
-                                      {isRelevant ? 'Used' : 'Filtered'}
+                                      {isRelevant ? 'Verified' : 'Filtered Crux'}
                                     </span>
                                   </button>
                                 );
@@ -887,33 +1060,38 @@ export default function App() {
                           </div>
                         )}
 
-                        {/* Assistant Action Bar */}
+                        {/* Assistant Message Action Bar in Grouped Pill Container */}
                         {isAssistant && msg.content && (
                           <div className="message-action-footer">
-                            <button 
-                              className="msg-action-btn"
-                              onClick={() => copyToClipboard(msg.content, msg.id)}
-                              title="Copy response"
-                            >
-                              {copiedId === msg.id ? <Check size={14} className="text-green" /> : <Copy size={14} />}
-                              <span>{copiedId === msg.id ? 'Copied' : 'Copy'}</span>
-                            </button>
+                            <div className="action-pill-container">
+                              <button 
+                                className="msg-action-btn"
+                                onClick={() => copyToClipboard(msg.content, msg.id)}
+                                title="Copy response"
+                                aria-label="Copy response"
+                              >
+                                {copiedId === msg.id ? <Check size={14} className="text-moss" /> : <Copy size={14} />}
+                                <span>{copiedId === msg.id ? 'Copied' : 'Copy'}</span>
+                              </button>
 
-                            <button 
-                              className={`msg-action-btn ${msg.liked === true ? 'active-like' : ''}`}
-                              onClick={() => handleReaction(msg.id, true)}
-                              title="Helpful response"
-                            >
-                              <ThumbsUp size={14} />
-                            </button>
+                              <button 
+                                className={`msg-action-btn ${msg.liked === true ? 'active-like' : ''}`}
+                                onClick={() => handleReaction(msg.id, true)}
+                                title="Helpful ascent"
+                                aria-label="Helpful response"
+                              >
+                                <ThumbsUp size={14} />
+                              </button>
 
-                            <button 
-                              className={`msg-action-btn ${msg.liked === false ? 'active-dislike' : ''}`}
-                              onClick={() => handleReaction(msg.id, false)}
-                              title="Needs improvement"
-                            >
-                              <ThumbsDown size={14} />
-                            </button>
+                              <button 
+                                className={`msg-action-btn ${msg.liked === false ? 'active-dislike' : ''}`}
+                                onClick={() => handleReaction(msg.id, false)}
+                                title="Crux encountered"
+                                aria-label="Crux encountered"
+                              >
+                                <ThumbsDown size={14} />
+                              </button>
+                            </div>
                           </div>
                         )}
                       </div>
@@ -926,14 +1104,14 @@ export default function App() {
           )}
         </div>
 
-        {/* Claude Bottom Input Deck */}
-        <div className="claude-input-deck">
+        {/* Bottom Input Deck Anchored with Top Border */}
+        <div className="recall-input-deck">
           {/* Slash Commands Dropup */}
           {showSlashMenu && (
             <div className="slash-menu-popover">
               <div className="slash-menu-header">
                 <Command size={13} />
-                <span>Quick Prompts & Actions</span>
+                <span>Quick Inquiries and Actions</span>
               </div>
               <button 
                 className="slash-menu-item"
@@ -942,7 +1120,7 @@ export default function App() {
                   setShowSlashMenu(false);
                 }}
               >
-                <Sparkles size={14} className="text-terracotta" />
+                <Sparkles size={14} className="text-teal" />
                 <div className="slash-item-meta">
                   <span className="slash-label">/summarize</span>
                   <span className="slash-desc">Generate comprehensive summary across indexed chunks</span>
@@ -956,7 +1134,7 @@ export default function App() {
                   setShowSlashMenu(false);
                 }}
               >
-                <CheckCircle size={14} className="text-green" />
+                <ShieldCheck size={14} className="text-moss" />
                 <div className="slash-item-meta">
                   <span className="slash-label">/verify</span>
                   <span className="slash-desc">Check veracity and contrast retrieved documents</span>
@@ -970,7 +1148,7 @@ export default function App() {
                   setShowSlashMenu(false);
                 }}
               >
-                <BookOpen size={14} className="text-cyan" />
+                <BookOpen size={14} className="text-rust" />
                 <div className="slash-item-meta">
                   <span className="slash-label">/methodology</span>
                   <span className="slash-desc">Synthesize actionable implementation steps</span>
@@ -979,11 +1157,11 @@ export default function App() {
             </div>
           )}
 
-          <div className={`claude-input-card ${isLoading ? 'is-loading' : ''}`}>
+          <div className={`recall-input-card ${isLoading ? 'is-loading' : ''}`}>
             <textarea
               ref={textareaRef}
-              className="claude-textarea"
-              placeholder="Ask anything about your documents, or type / for quick prompts..."
+              className="recall-textarea"
+              placeholder="Ask anything about your documents, or type / for prompts..."
               value={input}
               onChange={(e) => {
                 const val = e.target.value;
@@ -1017,49 +1195,72 @@ export default function App() {
                 <button 
                   className="toolbar-btn attach-btn"
                   onClick={() => chatAttachRef.current?.click()}
-                  title="Upload Document / PDF / Text"
+                  title="Attach file (PDF, TXT, MD) to index into Crag"
+                  aria-label="Attach file"
                 >
-                  <Upload size={16} />
-                  <span>Attach doc</span>
+                  <Paperclip size={14} />
+                  <span>Attach</span>
                 </button>
 
-                {/* Web Search Indicator Toggle */}
+                {/* Web Search Fallback Mode Toggle */}
                 <button 
-                  className={`toolbar-pill ${webSearchEnabled ? 'active' : ''}`}
+                  className={`toolbar-btn fallback-toggle-chip ${webSearchEnabled ? 'active' : ''}`}
                   onClick={() => setWebSearchEnabled(!webSearchEnabled)}
-                  title="CRAG fallback searches the web if documents are insufficient"
+                  title={webSearchEnabled ? "Web fallback enabled when knowledge base recall is low" : "Web fallback disabled"}
+                  aria-label="Toggle web fallback"
                 >
-                  <Globe size={13} />
-                  <span>Web Fallback</span>
+                  <Globe size={13} className="fallback-globe-icon" />
+                  <span>Web fallback</span>
+                  <span className={`fallback-indicator-dot ${webSearchEnabled ? 'active' : ''}`} />
+                </button>
+
+                {/* Quick Prompts Helper */}
+                <button
+                  className="toolbar-btn prompts-trigger-btn"
+                  onClick={() => setShowSlashMenu(!showSlashMenu)}
+                  title="Browse structured prompts"
+                  aria-label="Browse prompts"
+                >
+                  <Sparkles size={13} />
+                  <span>Prompts</span>
+                  <kbd className="prompt-slash-kbd">/</kbd>
                 </button>
               </div>
 
               <div className="toolbar-right">
+                <span className="keyboard-enter-hint">Enter ↵</span>
                 <button 
-                  className={`claude-send-btn ${input.trim() && !isLoading ? 'ready' : ''}`}
+                  className={`recall-send-btn ${input.trim() && !isLoading ? 'ready' : ''}`}
                   onClick={() => handleSend()}
                   disabled={isLoading || !input.trim()}
-                  title="Send to Claude (Enter)"
+                  title="Send message (Enter)"
+                  aria-label="Send message"
                 >
                   {isLoading ? (
                     <RotateCw size={16} className="spin-slow" />
                   ) : (
-                    <Send size={16} />
+                    <ArrowUp size={17} strokeWidth={2.4} />
                   )}
                 </button>
               </div>
             </div>
           </div>
-          
-          <div className="input-footnote">
-            <span>Claude CRAG can make mistakes. All responses are verified against vector embeddings and FlashRank re-ranking.</span>
+
+          <div className="input-deck-disclaimer">
+            Ridge can make mistakes. Verify important information against indexed sources.
           </div>
         </div>
       </main>
 
-      {/* Claude Artifacts & LangGraph Inspector Split-Screen Panel */}
+      {/* Mobile Artifacts Drawer Backdrop */}
+      <div 
+        className={`artifacts-mobile-backdrop ${isArtifactsOpen ? 'visible' : ''}`}
+        onClick={() => setIsArtifactsOpen(false)}
+      />
+
+      {/* Pipeline Trace & Artifacts Split Panel */}
       {isArtifactsOpen && (
-        <aside className="claude-artifacts-panel">
+        <aside className="recall-artifacts-panel">
           <div className="artifacts-panel-header">
             <div className="artifacts-tab-group">
               <button 
@@ -1067,21 +1268,21 @@ export default function App() {
                 onClick={() => setActiveArtifactTab('trace')}
               >
                 <Activity size={14} />
-                <span>LangGraph Trace</span>
+                <span>Ascent Trace</span>
               </button>
               <button 
                 className={`tab-item ${activeArtifactTab === 'knowledge' ? 'active' : ''}`}
                 onClick={() => setActiveArtifactTab('knowledge')}
               >
                 <Database size={14} />
-                <span>Knowledge Base</span>
+                <span>Knowledge Crag</span>
               </button>
               <button 
                 className={`tab-item ${activeArtifactTab === 'grader' ? 'active' : ''}`}
                 onClick={() => setActiveArtifactTab('grader')}
               >
                 <CheckCircle size={14} />
-                <span>Grader Audit</span>
+                <span>Grader Topo</span>
               </button>
             </div>
 
@@ -1089,8 +1290,9 @@ export default function App() {
               className="panel-close-btn" 
               onClick={() => setIsArtifactsOpen(false)}
               title="Close panel"
+              aria-label="Close panel"
             >
-              <X size={16} />
+              <X size={18} />
             </button>
           </div>
 
@@ -1101,7 +1303,7 @@ export default function App() {
                 <div className="pane-summary-card">
                   <div className="summary-col">
                     <span className="summary-label">State Machine</span>
-                    <span className="summary-val">LangGraph CRAG v2</span>
+                    <span className="summary-val">LangGraph CRAG</span>
                   </div>
                   <div className="summary-col">
                     <span className="summary-label">Total Latency</span>
@@ -1110,7 +1312,7 @@ export default function App() {
                   <div className="summary-col">
                     <span className="summary-label">Status</span>
                     <span className={`summary-badge ${isCurrentlyStreaming ? 'running' : 'idle'}`}>
-                      {isCurrentlyStreaming ? 'Running' : 'Completed'}
+                      {isCurrentlyStreaming ? 'Ascending' : 'Anchored'}
                     </span>
                   </div>
                 </div>
@@ -1118,8 +1320,8 @@ export default function App() {
                 {activeTraces.length === 0 ? (
                   <div className="pane-empty-state">
                     <Activity size={32} className="text-muted" />
-                    <h4>No active execution trace</h4>
-                    <p>Submit a question in the chat to watch LangGraph node transitions and latencies in real time.</p>
+                    <h4>No active ascent trace</h4>
+                    <p>Submit an inquiry in the chat to watch LangGraph node transitions and latencies in real time.</p>
                   </div>
                 ) : (
                   <div className="trace-stepper-list">
@@ -1159,11 +1361,11 @@ export default function App() {
                   <div className="kb-stats-grid">
                     <div className="stat-box">
                       <span className="stat-number">{stats.chunk_count}</span>
-                      <span className="stat-title">Indexed Chunks</span>
+                      <span className="stat-title">Anchored Chunks</span>
                     </div>
                     <div className="stat-box">
                       <span className="stat-number">{stats.doc_count}</span>
-                      <span className="stat-title">Estimated Docs</span>
+                      <span className="stat-title">Estimated Topo Sources</span>
                     </div>
                   </div>
                   <button 
@@ -1171,7 +1373,7 @@ export default function App() {
                     onClick={() => setIsIngestOpen(true)}
                   >
                     <Plus size={15} />
-                    <span>Add New Knowledge</span>
+                    <span>Anchor New Route</span>
                   </button>
                 </div>
 
@@ -1179,15 +1381,15 @@ export default function App() {
                   <Search size={14} className="text-muted" />
                   <input 
                     type="text" 
-                    placeholder="Filter vector knowledge base..." 
+                    placeholder="Filter knowledge crag..." 
                     value={searchDocFilter}
                     onChange={(e) => setSearchDocFilter(e.target.value)}
                   />
                 </div>
 
                 <div className="kb-tips-card">
-                  <h4>Embedding Strategy</h4>
-                  <p>Documents are chunked into 1000-character segments with 200 overlap, embedded into ChromaDB with cosine similarity, and re-ranked using FlashRank MMR.</p>
+                  <h4>Retrieval and Embedding Engine</h4>
+                  <p>Documents are chunked into 1000-char segments with 200 overlap, embedded into ChromaDB with cosine similarity, and re-ranked using FlashRank MMR.</p>
                 </div>
               </div>
             )}
@@ -1209,7 +1411,10 @@ export default function App() {
                         <div key={idx} className={`grader-detail-card ${isPass ? 'pass' : 'fail'}`}>
                           <div className="grader-card-header">
                             <span className={`grader-badge ${isPass ? 'pass' : 'fail'}`}>
-                              {isPass ? '✓ VERIFIED RELEVANT' : '✕ FILTERED OUT'}
+                              <span className="badge-icon-inline">
+                                {isPass ? <Check size={11} /> : <X size={11} />}
+                              </span>
+                              {isPass ? 'VERIFIED RELEVANT' : 'FILTERED OUT (CRUX)'}
                             </span>
                             <span className="grader-source-name">
                               {g.source ? g.source.split('/').pop() : `Chunk #${idx + 1}`}
@@ -1234,12 +1439,12 @@ export default function App() {
 
       {/* Ingestion Modal */}
       {isIngestOpen && (
-        <div className="claude-modal-backdrop" onClick={() => setIsIngestOpen(false)}>
-          <div className="claude-modal-card" onClick={e => e.stopPropagation()}>
+        <div className="recall-modal-backdrop" onClick={() => setIsIngestOpen(false)}>
+          <div className="recall-modal-card" onClick={e => e.stopPropagation()}>
             <div className="modal-header">
               <div className="modal-title-wrap">
-                <ClaudeLogo size={18} className="text-terracotta" />
-                <h3>Ingest Knowledge Base</h3>
+                <RidgeLogo size={22} />
+                <h3>Anchor Knowledge Sources</h3>
               </div>
               <button className="modal-close-btn" onClick={() => setIsIngestOpen(false)}>
                 <X size={18} />
@@ -1252,21 +1457,21 @@ export default function App() {
                 onClick={() => setIngestMode('file')}
               >
                 <FileText size={15} />
-                <span>Upload Files</span>
+                <span>Upload Topo Files</span>
               </button>
               <button 
                 className={`mode-tab ${ingestMode === 'url' ? 'active' : ''}`}
                 onClick={() => setIngestMode('url')}
               >
                 <Globe size={15} />
-                <span>Web URL / Paste Text</span>
+                <span>Web URL / Text</span>
               </button>
             </div>
 
             <div className="modal-body-area">
               {ingestMode === 'file' ? (
                 <div 
-                  className={`claude-dropzone ${isDragging ? 'dragging' : ''} ${selectedFile ? 'has-file' : ''}`}
+                  className={`recall-dropzone ${isDragging ? 'dragging' : ''} ${selectedFile ? 'has-file' : ''}`}
                   onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
                   onDragLeave={() => setIsDragging(false)}
                   onDrop={handleFileDrop}
@@ -1286,23 +1491,23 @@ export default function App() {
                   />
                   {selectedFile ? (
                     <div className="dropzone-file-preview">
-                      <FileText size={36} className="text-terracotta" />
+                      <FileText size={36} className="text-teal" />
                       <span className="file-preview-name">{selectedFile.name}</span>
                       <span className="file-preview-size">{(selectedFile.size / 1024).toFixed(1)} KB</span>
                     </div>
                   ) : (
                     <div className="dropzone-empty-prompt">
-                      <Upload size={32} className="text-terracotta" />
+                      <Upload size={32} className="text-teal" />
                       <p>Drag and drop <strong>PDF, Markdown (.md), or Text (.txt)</strong></p>
-                      <span>or click here to select from your files</span>
+                      <span>or tap here to select files</span>
                     </div>
                   )}
                 </div>
               ) : (
                 <div className="url-scrape-area">
-                  <label className="input-field-label">Article URL or Raw Markdown Content:</label>
+                  <label className="input-field-label">Article URL or Raw Markdown Topo:</label>
                   <textarea 
-                    className="claude-modal-textarea"
+                    className="recall-modal-textarea"
                     placeholder="https://example.com/research-paper OR paste raw markdown..."
                     value={ingestInput}
                     onChange={e => setIngestInput(e.target.value)}
@@ -1317,24 +1522,24 @@ export default function App() {
                 Cancel
               </button>
               <button 
-                className={`claude-btn-primary ${isIngestSuccess ? 'success' : ''}`} 
+                className={`recall-btn-primary ${isIngestSuccess ? 'success' : ''}`} 
                 onClick={handleIngest} 
                 disabled={(!ingestInput.trim() && !selectedFile) || isIngesting || isIngestSuccess}
               >
                 {isIngesting ? (
                   <>
                     <RotateCw size={15} className="spin-slow" />
-                    <span>Embedding & Indexing...</span>
+                    <span>Anchoring Chunks...</span>
                   </>
                 ) : isIngestSuccess ? (
                   <>
                     <Check size={15} />
-                    <span>Successfully Indexed</span>
+                    <span>Successfully Anchored</span>
                   </>
                 ) : (
                   <>
                     <Plus size={15} />
-                    <span>Add to Knowledge Base</span>
+                    <span>Anchor to Crag</span>
                   </>
                 )}
               </button>
@@ -1345,28 +1550,28 @@ export default function App() {
 
       {/* Export Conversation Modal */}
       {isExportOpen && (
-        <div className="claude-modal-backdrop" onClick={() => setIsExportOpen(false)}>
-          <div className="claude-modal-card export-modal" onClick={e => e.stopPropagation()}>
+        <div className="recall-modal-backdrop" onClick={() => setIsExportOpen(false)}>
+          <div className="recall-modal-card export-modal" onClick={e => e.stopPropagation()}>
             <div className="modal-header">
               <div className="modal-title-wrap">
-                <Download size={18} className="text-terracotta" />
-                <h3>Export Conversation</h3>
+                <Download size={18} className="text-teal" />
+                <h3>Export Ascent Logs</h3>
               </div>
               <button className="modal-close-btn" onClick={() => setIsExportOpen(false)}>
                 <X size={18} />
               </button>
             </div>
             <div className="modal-body-area">
-              <p className="export-desc">Download this conversation thread with all questions, citations, and answers:</p>
+              <p className="export-desc">Download this ascent thread with questions, traces, and answers:</p>
               <div className="export-options-grid">
                 <button className="export-choice-card" onClick={() => exportConversation('md')}>
-                  <FileText size={24} className="text-terracotta" />
-                  <span className="choice-title">Markdown (.md)</span>
-                  <span className="choice-desc">Formatted text document for Obsidian, Notion, or Github</span>
+                  <FileText size={24} className="text-teal" />
+                  <span className="choice-title">Markdown Topo (.md)</span>
+                  <span className="choice-desc">Formatted document for Obsidian, Notion, or Github</span>
                 </button>
                 <button className="export-choice-card" onClick={() => exportConversation('json')}>
-                  <Database size={24} className="text-cyan" />
-                  <span className="choice-title">JSON (.json)</span>
+                  <Database size={24} className="text-rust" />
+                  <span className="choice-title">JSON Ascent (.json)</span>
                   <span className="choice-desc">Structured conversation traces and metadata</span>
                 </button>
               </div>
@@ -1377,11 +1582,11 @@ export default function App() {
 
       {/* Citation Detail Modal */}
       {selectedSourceModal && (
-        <div className="claude-modal-backdrop" onClick={() => setSelectedSourceModal(null)}>
-          <div className="claude-modal-card citation-detail-modal" onClick={e => e.stopPropagation()}>
+        <div className="recall-modal-backdrop" onClick={() => setSelectedSourceModal(null)}>
+          <div className="recall-modal-card citation-detail-modal" onClick={e => e.stopPropagation()}>
             <div className="modal-header">
               <div className="modal-title-wrap">
-                <BookOpen size={18} className="text-terracotta" />
+                <BookOpen size={18} className="text-teal" />
                 <h3>Source Grader Analysis</h3>
               </div>
               <button className="modal-close-btn" onClick={() => setSelectedSourceModal(null)}>
@@ -1391,7 +1596,10 @@ export default function App() {
             <div className="modal-body-area">
               <div className="citation-badge-line">
                 <span className={`grader-badge ${selectedSourceModal.score === 'yes' ? 'pass' : 'fail'}`}>
-                  {selectedSourceModal.score === 'yes' ? '✓ USED IN ANSWER' : '✕ FILTERED OUT AS IRRELEVANT'}
+                  <span className="badge-icon-inline">
+                    {selectedSourceModal.score === 'yes' ? <Check size={11} /> : <X size={11} />}
+                  </span>
+                  {selectedSourceModal.score === 'yes' ? 'USED IN ANSWER' : 'FILTERED OUT AS CRUX'}
                 </span>
                 {selectedSourceModal.source && (
                   <span className="source-uri-tag">{selectedSourceModal.source}</span>
@@ -1409,7 +1617,7 @@ export default function App() {
 
       {/* Toast Notification */}
       {toast && (
-        <div className={`claude-toast ${toast.type}`}>
+        <div className={`recall-toast ${toast.type}`}>
           {toast.type === 'success' && <CheckCircle size={16} />}
           {toast.type === 'error' && <X size={16} />}
           {toast.type === 'info' && <Sparkles size={16} />}

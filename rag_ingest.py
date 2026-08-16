@@ -1,3 +1,11 @@
+"""
+Ridge: Ingestion and Knowledge Topo Parser
+=========================================
+Handles multi-format document loading, markdown/hierarchical section splitting,
+and persistent vector embedding into ChromaDB.
+Supported sources: PDF, Markdown, Plain Text, and Web URLs.
+"""
+
 import os
 from pathlib import Path
 from urllib.parse import urlparse

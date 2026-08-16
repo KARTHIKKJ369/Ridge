@@ -1,49 +1,68 @@
 :root {
+  /* ==========================================================================
+     Recall CRAG: Rock Climbing & 2026 Alpine Intelligence Design System
+     Default Theme: Stone & Summit (Light Sandstone Topo)
+     ========================================================================== */
+
+  --color-1: #1E293B; /* Summit Slate */
+  --color-2: #334155; /* Ridge Slate */
+  --color-3: #64748B; /* Sandstone Gray */
+  --color-4: #CBD5E1; /* Limestone Border */
+  --color-5: #0284C7; /* Summit Blue Accent */
+
+  /* Rock Climbing Grading / Veracity Scale (Green -> Yellow -> Orange -> Red) */
+  --crag-grade-easy: #16A34A;    /* Moss Green (Verified 100% / Easy Route) */
+  --crag-grade-medium: #D97706;  /* Amber Sand (Partial / Moderate) */
+  --crag-grade-hard: #EA580C;    /* Terracotta Rust (Web Fallback / Hard) */
+  --crag-grade-crux: #DC2626;    /* Crimson Red (Filtered Out / Crux) */
+
   --font-serif: 'Newsreader', Georgia, Cambria, 'Times New Roman', Times, serif;
   --font-sans: 'Plus Jakarta Sans', 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
   --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
 
-  /* Default Claude Warm Dark Theme Tokens */
-  --claude-bg: #1e1e1e;
-  --claude-bg-sidebar: #18181a;
-  --claude-surface: #26262a;
-  --claude-surface-elevated: #2f2f35;
-  --claude-surface-hover: #36363d;
-  --claude-surface-subtle: rgba(255, 255, 255, 0.04);
-  --claude-border: rgba(255, 255, 255, 0.1);
-  --claude-border-strong: rgba(255, 255, 255, 0.18);
-  --claude-border-focus: #d97757;
+  /* Default Theme: Stone & Summit (Warm Off-White Topo) */
+  --recall-bg: #F7F5F0;
+  --recall-bg-sidebar: #EEEAE0;
+  --recall-surface: #FFFFFF;
+  --recall-surface-elevated: #FBF9F4;
+  --recall-surface-hover: #E8E3D7;
+  --recall-surface-subtle: rgba(2, 132, 199, 0.06);
+  --recall-border: rgba(30, 41, 59, 0.12);
+  --recall-border-strong: rgba(2, 132, 199, 0.28);
+  --recall-border-focus: #0284C7;
 
-  --claude-text-primary: #fbf9f5;
-  --claude-text-secondary: #b4b0a8;
-  --claude-text-muted: #787570;
+  --recall-text-primary: #1E293B;
+  --recall-text-secondary: #475569;
+  --recall-text-muted: #64748B;
 
-  --claude-accent: #d97757;
-  --claude-accent-hover: #e08365;
-  --claude-accent-subtle: rgba(217, 119, 87, 0.15);
-  --claude-accent-glow: rgba(217, 119, 87, 0.25);
-  --claude-accent-gradient: linear-gradient(135deg, #d97757 0%, #c15f3e 100%);
+  --recall-accent: #0284C7;
+  --recall-accent-secondary: #0369A1;
+  --recall-accent-hover: #0EA5E9;
+  --recall-accent-subtle: rgba(2, 132, 199, 0.12);
+  --recall-accent-glow: rgba(2, 132, 199, 0.25);
+  --recall-accent-gradient: linear-gradient(135deg, #0284C7 0%, #0369A1 70%, #EA580C 100%);
+  --recall-brand-glow: 0 0 24px rgba(2, 132, 199, 0.2);
 
-  --claude-success: #10b981;
-  --claude-success-subtle: rgba(16, 185, 129, 0.12);
-  --claude-warning: #f59e0b;
-  --claude-warning-subtle: rgba(245, 158, 11, 0.12);
-  --claude-error: #ef4444;
-  --claude-error-subtle: rgba(239, 68, 68, 0.12);
-  --claude-info: #60a5fa;
-  --claude-info-subtle: rgba(96, 165, 250, 0.12);
+  --recall-success: var(--crag-grade-easy);
+  --recall-success-subtle: rgba(22, 163, 74, 0.12);
+  --recall-warning: var(--crag-grade-medium);
+  --recall-warning-subtle: rgba(217, 119, 6, 0.12);
+  --recall-error: var(--crag-grade-crux);
+  --recall-error-subtle: rgba(220, 38, 38, 0.12);
+  --recall-info: #0284C7;
+  --recall-info-subtle: rgba(2, 132, 199, 0.12);
 
-  --radius-xs: 4px;
+  --radius-xs: 6px;
   --radius-sm: 8px;
   --radius-md: 12px;
   --radius-lg: 18px;
   --radius-xl: 24px;
   --radius-full: 9999px;
 
-  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.2);
-  --shadow-md: 0 4px 16px -2px rgba(0, 0, 0, 0.35);
-  --shadow-lg: 0 12px 32px -4px rgba(0, 0, 0, 0.5);
-  --shadow-warm: 0 0 30px rgba(217, 119, 87, 0.12);
+  --shadow-sm: 0 1px 3px rgba(30, 41, 59, 0.06);
+  --shadow-md: 0 4px 16px -2px rgba(30, 41, 59, 0.08);
+  --shadow-lg: 0 12px 32px -4px rgba(30, 41, 59, 0.12);
+  --shadow-warm: 0 0 30px rgba(2, 132, 199, 0.08);
 
   --transition-fast: 0.15s cubic-bezier(0.4, 0, 0.2, 1);
   --transition-smooth: 0.25s cubic-bezier(0.4, 0, 0.2, 1);
@@ -55,60 +74,115 @@
   -moz-osx-font-smoothing: grayscale;
 }
 
-/* Claude Light Parchment Theme */
-[data-theme="parchment"] {
-  --claude-bg: #faf9f5;
-  --claude-bg-sidebar: #f2eee6;
-  --claude-surface: #ffffff;
-  --claude-surface-elevated: #fbfaf7;
-  --claude-surface-hover: #eae5da;
-  --claude-surface-subtle: rgba(0, 0, 0, 0.03);
-  --claude-border: rgba(0, 0, 0, 0.08);
-  --claude-border-strong: rgba(0, 0, 0, 0.16);
-  --claude-border-focus: #c15f3e;
+/* Explicit Stone & Summit Selector */
+[data-theme="stone"] {
+  --recall-bg: #F7F5F0;
+  --recall-bg-sidebar: #EEEAE0;
+  --recall-surface: #FFFFFF;
+  --recall-surface-elevated: #FBF9F4;
+  --recall-surface-hover: #E8E3D7;
+  --recall-surface-subtle: rgba(2, 132, 199, 0.06);
+  --recall-border: rgba(30, 41, 59, 0.12);
+  --recall-border-strong: rgba(2, 132, 199, 0.28);
+  --recall-border-focus: #0284C7;
 
-  --claude-text-primary: #2b2824;
-  --claude-text-secondary: #635f58;
-  --claude-text-muted: #969188;
+  --recall-text-primary: #1E293B;
+  --recall-text-secondary: #475569;
+  --recall-text-muted: #64748B;
 
-  --claude-accent: #c15f3e;
-  --claude-accent-hover: #b05334;
-  --claude-accent-subtle: rgba(193, 95, 62, 0.1);
-  --claude-accent-glow: rgba(193, 95, 62, 0.2);
-  --claude-accent-gradient: linear-gradient(135deg, #c15f3e 0%, #a84b2d 100%);
+  --recall-accent: #0284C7;
+  --recall-accent-secondary: #0369A1;
+  --recall-accent-hover: #0EA5E9;
+  --recall-accent-subtle: rgba(2, 132, 199, 0.12);
+  --recall-accent-glow: rgba(2, 132, 199, 0.25);
+  --recall-accent-gradient: linear-gradient(135deg, #0284C7 0%, #0369A1 70%, #EA580C 100%);
+  --recall-brand-glow: 0 0 24px rgba(2, 132, 199, 0.2);
 
-  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.06);
-  --shadow-md: 0 4px 16px -2px rgba(43, 40, 36, 0.08);
-  --shadow-lg: 0 12px 32px -4px rgba(43, 40, 36, 0.12);
-  --shadow-warm: 0 0 30px rgba(193, 95, 62, 0.08);
+  --shadow-sm: 0 1px 3px rgba(30, 41, 59, 0.06);
+  --shadow-md: 0 4px 16px -2px rgba(30, 41, 59, 0.08);
+  --shadow-lg: 0 12px 32px -4px rgba(30, 41, 59, 0.12);
+  --shadow-warm: 0 0 30px rgba(2, 132, 199, 0.08);
 }
 
-/* Claude Midnight Theme */
-[data-theme="midnight"] {
-  --claude-bg: #0e0e11;
-  --claude-bg-sidebar: #09090b;
-  --claude-surface: #17171c;
-  --claude-surface-elevated: #202027;
-  --claude-surface-hover: #2a2a33;
-  --claude-surface-subtle: rgba(255, 255, 255, 0.03);
-  --claude-border: rgba(255, 255, 255, 0.07);
-  --claude-border-strong: rgba(255, 255, 255, 0.14);
-  --claude-border-focus: #e07a5f;
+/* Theme: Chalk & Void (Dark Basalt Granite) */
+[data-theme="void"] {
+  --color-1: #111418;
+  --color-2: #1A1F26;
+  --color-3: #242B35;
+  --color-4: #475569;
+  --color-5: #22D3EE;
 
-  --claude-text-primary: #f4f4f5;
-  --claude-text-secondary: #a1a1aa;
-  --claude-text-muted: #52525b;
+  --recall-bg: #111418;
+  --recall-bg-sidebar: #0C0E11;
+  --recall-surface: #1A1F26;
+  --recall-surface-elevated: #242B35;
+  --recall-surface-hover: #2E3744;
+  --recall-surface-subtle: rgba(34, 211, 238, 0.05);
+  --recall-border: rgba(255, 255, 255, 0.08);
+  --recall-border-strong: rgba(34, 211, 238, 0.3);
+  --recall-border-focus: #22D3EE;
 
-  --claude-accent: #e07a5f;
-  --claude-accent-hover: #e88c74;
-  --claude-accent-subtle: rgba(224, 122, 95, 0.14);
-  --claude-accent-glow: rgba(224, 122, 95, 0.25);
-  --claude-accent-gradient: linear-gradient(135deg, #e07a5f 0%, #cc6a51 100%);
+  --recall-text-primary: #F5F7FA;
+  --recall-text-secondary: #94A3B8;
+  --recall-text-muted: #64748B;
+
+  --recall-accent: #22D3EE;
+  --recall-accent-secondary: #06B6D4;
+  --recall-accent-hover: #67E8F9;
+  --recall-accent-subtle: rgba(34, 211, 238, 0.12);
+  --recall-accent-glow: rgba(34, 211, 238, 0.35);
+  --recall-accent-gradient: linear-gradient(135deg, #06B6D4 0%, #0284C7 60%, #F97316 100%);
+  --recall-brand-glow: 0 0 28px rgba(34, 211, 238, 0.35);
+
+  --recall-success: #22C55E;
+  --recall-success-subtle: rgba(34, 197, 94, 0.14);
+  --recall-warning: #F59E0B;
+  --recall-warning-subtle: rgba(245, 158, 11, 0.14);
+  --recall-error: #EF4444;
+  --recall-error-subtle: rgba(239, 68, 68, 0.14);
+  --recall-info: #22D3EE;
+  --recall-info-subtle: rgba(34, 211, 238, 0.14);
 
   --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.4);
-  --shadow-md: 0 4px 16px -2px rgba(0, 0, 0, 0.6);
-  --shadow-lg: 0 12px 32px -4px rgba(0, 0, 0, 0.8);
-  --shadow-warm: 0 0 30px rgba(224, 122, 95, 0.15);
+  --shadow-md: 0 4px 18px -2px rgba(0, 0, 0, 0.6);
+  --shadow-lg: 0 12px 36px -4px rgba(0, 0, 0, 0.8);
+  --shadow-warm: 0 0 32px rgba(34, 211, 238, 0.2);
+}
+
+/* Theme: Rust & Ridge (Desert Crag Terracotta Earth) */
+[data-theme="rust"] {
+  --color-1: #14100E;
+  --color-2: #201915;
+  --color-3: #2C231E;
+  --color-4: #4D3B31;
+  --color-5: #F97316;
+
+  --recall-bg: #14100E;
+  --recall-bg-sidebar: #0D0B09;
+  --recall-surface: #201915;
+  --recall-surface-elevated: #2C231E;
+  --recall-surface-hover: #3D322B;
+  --recall-surface-subtle: rgba(249, 115, 22, 0.06);
+  --recall-border: rgba(249, 115, 22, 0.18);
+  --recall-border-strong: rgba(249, 115, 22, 0.35);
+  --recall-border-focus: #F97316;
+
+  --recall-text-primary: #FAF5F0;
+  --recall-text-secondary: #D7C4B7;
+  --recall-text-muted: #8C7566;
+
+  --recall-accent: #F97316;
+  --recall-accent-secondary: #EA580C;
+  --recall-accent-hover: #FB923C;
+  --recall-accent-subtle: rgba(249, 115, 22, 0.15);
+  --recall-accent-glow: rgba(249, 115, 22, 0.35);
+  --recall-accent-gradient: linear-gradient(135deg, #F97316 0%, #EA580C 60%, #84CC16 100%);
+  --recall-brand-glow: 0 0 28px rgba(249, 115, 22, 0.35);
+
+  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.5);
+  --shadow-md: 0 4px 18px -2px rgba(0, 0, 0, 0.7);
+  --shadow-lg: 0 12px 36px -4px rgba(0, 0, 0, 0.9);
+  --shadow-warm: 0 0 30px rgba(249, 115, 22, 0.2);
 }
 
 *, *::before, *::after {
@@ -120,12 +194,14 @@
 html, body {
   width: 100%;
   height: 100%;
-  background-color: var(--claude-bg);
-  color: var(--claude-text-primary);
+  background-color: var(--recall-bg);
+  color: var(--recall-text-primary);
   font-family: var(--font-sans);
   font-size: 15px;
   line-height: 1.6;
   overflow: hidden;
+  touch-action: manipulation;
+  -webkit-text-size-adjust: 100%;
   transition: background-color var(--transition-smooth), color var(--transition-smooth);
 }
 
@@ -137,7 +213,7 @@ html, body {
   overflow: hidden;
 }
 
-/* Claude Scrollbars */
+/* Custom Scrollbars */
 ::-webkit-scrollbar {
   width: 6px;
   height: 6px;
@@ -148,12 +224,12 @@ html, body {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: var(--claude-border-strong);
+  background: var(--recall-border);
   border-radius: var(--radius-full);
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: var(--claude-text-muted);
+  background: var(--recall-text-muted);
 }
 
 button {
@@ -174,7 +250,7 @@ input, textarea {
 }
 
 a {
-  color: var(--claude-accent);
+  color: var(--recall-accent);
   text-decoration: none;
 }
 
@@ -182,7 +258,7 @@ a:hover {
   text-decoration: underline;
 }
 
-/* Keyframes */
+/* Animations */
 @keyframes spin-slow {
   from { transform: rotate(0deg); }
   to { transform: rotate(360deg); }
@@ -190,12 +266,7 @@ a:hover {
 
 @keyframes pulse-warm {
   0%, 100% { opacity: 1; transform: scale(1); }
-  50% { opacity: 0.8; transform: scale(1.02); }
-}
-
-@keyframes shimmer {
-  0% { transform: translateX(-100%); }
-  100% { transform: translateX(100%); }
+  50% { opacity: 0.85; transform: scale(1.03); }
 }
 
 @keyframes fadeIn {
@@ -205,5 +276,10 @@ a:hover {
 
 @keyframes slideInRight {
   from { opacity: 0; transform: translateX(20px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+@keyframes slideInLeft {
+  from { opacity: 0; transform: translateX(-100%); }
   to { opacity: 1; transform: translateX(0); }
 }

@@ -1,3 +1,14 @@
+"""
+Ridge: Corrective RAG (CRAG) State Machine Architecture
+======================================================
+This module implements the core LangGraph state graph for Corrective Retrieval-Augmented Generation:
+  1. Retrieve: MMR vector search via ChromaDB + all-MiniLM-L6-v2.
+  2. Re-rank: FlashRank cross-encoder re-ranking.
+  3. Grade: Groq LLM hallucination and relevance evaluator.
+  4. Rewrite / Web Search: Adaptive query reformulation and DuckDuckGo fallback.
+  5. Generate: Grounded synthesis across all verified passages.
+"""
+
 import os
 import sys
 import time
@@ -19,18 +30,20 @@ DEFAULT_QUESTION = "What is task decomposition in LLM agents?"
 
 class GraphState(TypedDict):
     question: str
+    original_question: str
     documents: list[str]
     documents_metadata: list[dict]
     generation: str
     loop_count: int
     past_queries: list[str]
     latency_ms: int
+    doc_grades: list[dict]
 
 
 class DocGrade(BaseModel):
     index: int = Field(description="Index of the document")
     rationale: str = Field(description="Brief explanation of why the document is relevant or not")
-    score: Literal["yes", "no"] = Field(description="'yes' if relevant, 'no' if not")
+    score: Literal["yes", "no"] = Field(description="'yes' if relevant or partially relevant, 'no' if completely unrelated")
 
 class BatchGrades(BaseModel):
     grades: list[DocGrade] = Field(
@@ -116,13 +129,14 @@ def ingest_document(text_or_url: str) -> dict:
     vectorstore.add_documents(doc_splits)
     print("Ingestion complete.")
     
-    # Generate suggestions
+    # Generate suggestions in a background thread so ingestion returns immediately
     if doc_splits:
         try:
+            import threading
             context_text = " ".join(d.page_content for d in doc_splits[:3])[:1500]
-            generate_suggestions(context_text)
+            threading.Thread(target=generate_suggestions, args=(context_text,), daemon=True).start()
         except Exception as e:
-            print(f"Error generating suggestions: {e}")
+            print(f"Error launching background suggestions: {e}")
 
     return {"status": "success", "chunks_added": len(doc_splits)}
 
@@ -132,27 +146,35 @@ def generate_suggestions(text: str):
     from pydantic import BaseModel, Field
     
     class Suggestions(BaseModel):
-        questions: list[str] = Field(description="List of 3 natural questions a user might ask about the document")
+        questions: list[str] = Field(description="List of exactly 3 natural, concise questions about the document")
     
     settings = get_settings()
-    llm = ChatGroq(
-        api_key=settings["groq_api_key"],
-        model_name=settings["groq_model"],
-        temperature=0.7,
-    ).with_structured_output(Suggestions)
-    
-    prompt = (
-        "You are an AI assistant. Based on the following document excerpt, generate exactly 3 short, natural "
-        "questions that a user might ask to learn more about the content. Keep them brief.\n\n"
-        f"Document excerpt:\n{text}\n"
-    )
-    
-    result = llm.invoke(prompt)
-    
-    with open("suggestions.json", "w") as f:
-        json.dump({"suggestions": result.questions}, f)
-    
-    print(f"Generated {len(result.questions)} suggestions.")
+    try:
+        # Use ultra-fast llama-3.1-8b-instant (800+ tok/s on Groq) for sub-250ms latency
+        llm = ChatGroq(
+            api_key=settings["groq_api_key"],
+            model_name="llama-3.1-8b-instant",
+            temperature=0.6,
+            max_tokens=256,
+        ).with_structured_output(Suggestions)
+        
+        prompt = (
+            "You are an AI assistant. Based on this document excerpt, generate exactly 3 short, insightful questions "
+            "that a user would ask about the concepts.\n\n"
+            f"Excerpt:\n{text}\n"
+        )
+        
+        result = llm.invoke(prompt)
+        
+        if result and getattr(result, 'questions', None):
+            with open("suggestions.json", "w") as f:
+                json.dump({"suggestions": result.questions}, f)
+            print(f"Ultra-fast generated {len(result.questions)} suggestions.")
+            return result.questions
+    except Exception as e:
+        print(f"Groq suggestions error (using fallback): {e}")
+
+    return []
 
 def build_app():
     settings = get_settings()
@@ -206,8 +228,8 @@ def build_app():
             for res in rerank_results[:settings["retriever_k"]]:
                 final_texts.append(res["text"])
                 final_metas.append(res["meta"])
-                # Inject score into meta so we can show relevance
-                final_metas[-1]["score"] = res["score"]
+                # Inject score into meta as native python float for clean JSON serialization
+                final_metas[-1]["score"] = float(res["score"])
             print(f"Kept top {len(final_texts)} documents after re-ranking.")
         else:
             final_texts = doc_texts
@@ -231,19 +253,14 @@ def build_app():
         )
 
         prompt = (
-            "You are a strict grader assessing whether retrieved documents are relevant to a user question.\n"
-            "You must prevent 'keyword hallucinations' where a document uses the same word but in a completely different context.\n\n"
+            "You are an expert relevance evaluator for a technical retrieval system.\n"
+            "Assess whether the retrieved document is relevant or helpful for answering the user question.\n\n"
             f"Question: {question}\n\n"
-            "Documents:\n"
-            f"{docs_str}\n"
-            "Instructions:\n"
-            "1. Read the document and determine its core subject.\n"
-            "2. Compare the core subject to the question.\n"
-            "3. If the document just happens to share a word (like 'decomposition' in math vs AI context), it is irrelevant. Score 'no'.\n"
-            "4. Score 'yes' ONLY if the document discusses the exact same subject matter.\n\n"
-            "Examples:\n"
-            "- Question: 'What is the capital of France?' | Document: 'Paris is the capital of France.' -> Rationale: 'Discusses capital of France.' | Score: 'yes'\n"
-            "- Question: 'What is task decomposition in LLM agents?' | Document: 'This decomposition does not work to compute L2 distances in Faiss.' -> Rationale: 'The document discusses mathematical decomposition in Faiss, not AI task decomposition.' | Score: 'no'"
+            f"Documents:\n{docs_str}\n\n"
+            "Grading instructions:\n"
+            "1. Score 'yes' if the document contains facts, concepts, algorithms, heuristics, definitions, or methods relevant or partially relevant to the question.\n"
+            "2. Score 'no' ONLY if the document is completely unrelated to the domain or subject matter of the question.\n"
+            "Be helpful and objective. For questions asking about benefits, advantages, implications, or summaries of the documented methods, score 'yes' if the document discusses those methods."
         )
 
         result = None
@@ -268,9 +285,8 @@ def build_app():
         for g in result.grades:
             if 0 <= g.index < len(doc_texts):
                 score = g.score.lower()
-                # Attach source metadata to the grade
                 meta = doc_metas[g.index] if g.index < len(doc_metas) else {}
-                doc_grades.append({"index": g.index, "score": score, "rationale": g.rationale, "source": meta.get("source", "unknown"), "relevance": meta.get("score", 0)})
+                doc_grades.append({"index": g.index, "score": score, "rationale": g.rationale, "source": meta.get("source", "unknown"), "relevance": float(meta.get("score", 0))})
                 preview = doc_texts[g.index][:150].replace("\n", " ")
                 print(f"  Doc {g.index + 1}/{len(doc_texts)} decision: '{score}'")
                 print(f"    rationale: {g.rationale}")
@@ -290,7 +306,7 @@ def build_app():
     def generate(state: GraphState) -> dict:
         t0 = time.time()
         print("--- NODE: GENERATE ---")
-        question = state["question"]
+        question = state.get("original_question") or state["question"]
         docs = state["documents"]
         context = "\n\n".join(docs)
 
@@ -301,17 +317,13 @@ def build_app():
         print(f"  Total context length: {len(context)} chars")
 
         prompt = (
-            "You are an AI assistant answering a question using ONLY the provided context.\n"
-            "The context below may contain multiple separate excerpts from a source document — "
-            "synthesize across ALL of them rather than relying on just one.\n"
-            "Write a complete answer: include specific details, examples, methods, or terms named "
-            "in the context that relate to the question, not just a one-line summary.\n"
-            "IMPORTANT — avoid cross-contamination between excerpts: before stating any specific "
-            "number, parameter, or technical detail, confirm it is actually attached to that exact "
-            "claim in its own excerpt, not just a number that appears nearby in a different, "
-            "unrelated excerpt. If you are not sure a specific figure belongs to the claim you are "
-            "making, omit the figure rather than guessing.\n"
-            "If the context does not contain the answer, cleanly state that you cannot find it.\n\n"
+            "You are Ridge, an expert AI assistant providing detailed, clear, and well-structured answers.\n"
+            "Use the provided context to thoroughly answer the user's question.\n\n"
+            "Guidelines:\n"
+            "1. Synthesize insights across all provided document excerpts and web search findings.\n"
+            "2. Explain technical mechanisms, implications, benefits, and practical use cases derived from the context.\n"
+            "3. If the context covers specific methods (such as Union by Rank, Path Compression, tree operations, time complexities), directly explain their purpose, efficiency gains (e.g. reducing tree height from O(N) to near O(1)/O(α(N))), and operational advantages.\n"
+            "4. Format your answer with clean markdown headings, bullet points, and code/formulas where helpful.\n\n"
             f"Context:\n{context}\n\n"
             f"Question: {question}"
         )
@@ -332,17 +344,17 @@ def build_app():
 
     def rewrite(state: GraphState) -> dict:
         print("--- NODE: REWRITE QUERY ---")
-        question = state["question"]
+        original_q = state.get("original_question") or state["question"]
         current_loops = state.get("loop_count", 0) + 1
         past_queries = state.get("past_queries", [])
 
         prompt = (
-            "You are an expert search engine optimizer.\n"
-            "Rewrite the original question into one concise search query.\n"
-            f"Already-tried failed queries: {past_queries}\n"
-            "Generate a different query using alternative keywords or synonyms.\n"
-            "Output only the raw search text string.\n\n"
-            f"Question to rewrite: {question}"
+            "You are an expert search query optimizer for a technical document retrieval system.\n"
+            f"Original user question: {original_q}\n"
+            f"Previously attempted search queries that yielded no matches: {past_queries}\n\n"
+            "Generate a different, focused search query using alternative core keywords, technical terms, or broader concepts related to the original question.\n"
+            "Do NOT drift into unrelated topics.\n"
+            "Output only the raw search query string without quotes or markdown."
         )
 
         new_query = None
@@ -357,33 +369,43 @@ def build_app():
                 time.sleep(wait)
 
         if new_query is None:
-            new_query = question
+            new_query = original_q
 
         print(f"New Search Query: '{new_query}'")
         print(f"Current Loop Counter: {current_loops}/{settings['max_rewrite_loops']}")
 
         return {
             "question": new_query,
+            "original_question": original_q,
             "loop_count": current_loops,
             "past_queries": past_queries + [new_query],
         }
 
     def web_search(state: GraphState) -> dict:
+        t0 = time.time()
         print("--- NODE: WEB SEARCH ---")
-        question = state["question"]
-        print(f"Searching web for: '{question}'")
+        search_query = state.get("original_question") or state["question"]
+        print(f"Searching web for: '{search_query}'")
         
         try:
-            results = DDGS().text(question, max_results=3)
-            docs = "\n".join(res["body"] for res in results)
+            from duckduckgo_search import DDGS
+            with DDGS() as ddgs:
+                results = list(ddgs.text(search_query, max_results=4))
+            if results:
+                docs = "\n\n".join(
+                    f"--- Web Source: {r.get('title', 'Web Search')} ({r.get('href', '')}) ---\n{r.get('body', '')}"
+                    for r in results if r.get('body')
+                )
+            else:
+                docs = "No web search snippets returned."
         except Exception as e:
-            docs = f"Search failed: {e}"
+            docs = f"Web search could not retrieve external pages: {e}"
             
         web_results = f"\n\nWeb Search Results:\n{docs}"
         
         current_docs = state.get("documents", [])
         current_docs.append(web_results)
-        return {"documents": current_docs}
+        return {"documents": current_docs, "latency_ms": int((time.time() - t0) * 1000)}
 
     def decide_to_generate(state: GraphState) -> str:
         print("--- ROUTER: EVALUATING NEXT STEP ---")

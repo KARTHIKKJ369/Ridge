@@ -1,7 +1,7 @@
 [project]
 name = "corrective-rag-langgraph"
 version = "0.1.0"
-description = "Add your description here"
+description = "Ridge: Corrective RAG (CRAG) intelligence platform powered by LangGraph, ChromaDB, FlashRank, and Groq"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [

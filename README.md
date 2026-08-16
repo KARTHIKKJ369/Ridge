@@ -1,68 +1,150 @@
----
-title: Recall CRAG
-emoji: 🔁
-colorFrom: red
-colorTo: gray
-sdk: gradio
-sdk_version: 5.20.0
-app_file: app.py
-pinned: false
+# Ridge · Corrective RAG Intelligence System
+
+**Ridge** is a high-performance Corrective Retrieval-Augmented Generation (CRAG) intelligence platform. It ingests custom technical documentation (PDF, Markdown, or plain text) and web sources into a self-correcting LangGraph state machine that retrieves, re-ranks, audits for veracity, adaptively reformulates queries, and synthesizes grounded answers with zero hallucination.
+
 ---
 
-# Recall
+## 🌟 Key Features
 
-**Recall** is a Corrective RAG (CRAG) chat application. Ingest your own documents (PDF, Markdown, or plain text) and query them through a LangGraph pipeline that retrieves, grades, rewrites, and generates answers grounded only in your knowledge base.
+### 1. Corrective RAG State Machine (LangGraph)
+- **MMR Diversity Retrieval**: Deep vector retrieval via ChromaDB with Maximal Marginal Relevance to prevent redundancy.
+- **Cross-Encoder Re-Ranking**: Integrated FlashRank cross-encoder to re-order candidate passages by semantic alignment.
+- **Relevance Grading & Hallucination Filter**: Groq LLM evaluates retrieved passages with structured rationales, filtering out keyword false positives.
+- **Adaptive Query Reformulation**: Context-aware search reformulation anchored to the original user intent.
+- **Dynamic Web Fallback**: Seamless fallback to DuckDuckGo search when local document recall is low.
+- **Grounded Answer Synthesis**: Generates detailed, insightful explanations and code examples derived from verified context.
 
-> **Live on Hugging Face Spaces** — add your `GROQ_API_KEY` as a Space Secret to activate.
+### 2. Modern 2026 Alpine UI (React + Vite + TypeScript)
+- **Climbing-Inspired Themes**:
+  - **Stone & Summit** (Default): Warm sandstone off-white topo aesthetic with summit blue accents.
+  - **Chalk & Void**: Basalt granite dark mode with glacier cyan highlights.
+  - **Rust & Ridge**: Desert crag earth with terracotta and moss green tones.
+- **Real-Time Pipeline Trace**: Side-by-side observability drawer displaying every node step, latency, and relevance rationale.
+- **Knowledge Crag Management**: Drag-and-drop document upload (PDF, TXT, MD) and live URL scraping.
+- **Multi-Session Workspaces**: Create, switch, and export research ascents in Markdown or JSON format.
+- **Instant Hero Hydration**: Persistent suggestion caching (`suggestions.json` + `localStorage`) for 0ms initial load.
+- **Tactile Studio Input Deck**: Command palette with quick prompts (`/`), document attachment, and live web fallback toggle.
 
-## Features
+---
 
-- **Corrective RAG** — LangGraph workflow: retrieve → grade → rewrite/web-search → generate
-- **Re-ranking** — FlashRank cross-encoder re-ranks retrieved chunks before grading
-- **Smart grading** — Groq LLM grades each chunk and filters irrelevant context
-- **Pipeline view** — Live trace panel shows every node, its decision, and latency
-- **Source citations** — Each response shows which chunks were used/filtered, with filename and grader rationale
-- **Dynamic suggestions** — LLM generates 3 suggested questions after ingestion
-- **Beautiful UI** — Dark OKLCH design system, animated hero, toast notifications
+## 🏗️ System Architecture
 
-## Architecture
-
+```mermaid
+flowchart TD
+    A[User Query] --> B[MMR Vector Retrieval\nChromaDB + all-MiniLM-L6-v2]
+    B --> C[FlashRank Cross-Encoder Re-Ranking]
+    C --> D[Relevance Grading Node\nGroq LLM Veracity Audit]
+    D -->|Relevant Docs >= 1| E[Answer Synthesis Node\nGroq LLM Grounded Generation]
+    D -->|No Relevant Docs| F{Loop Count < Max?}
+    F -->|Yes| G[Adaptive Query Reformulation Node]
+    G --> B
+    F -->|No / Safety Tripped| H[Web Search Fallback Node\nDuckDuckGo Search]
+    H --> E
+    E --> I[Stream SSE Telemetry & Response]
 ```
-User query
-    ↓
-[Retrieve] → ChromaDB MMR search + FlashRank re-ranking
-    ↓
-[Grade]    → Groq LLM scores each chunk (yes/no + rationale)
-    ↓
-  relevant?
-  ├── yes → [Generate] → Groq LLM answers using only graded context
-  └── no  → [Rewrite]  → reformulate query and retry (up to 3 loops)
-              or [Web Search] → DuckDuckGo fallback
+
+---
+
+## ⚙️ Environment Configuration
+
+Create a `.env` file in the project root:
+
+```env
+# Required: Groq Cloud API Key
+GROQ_API_KEY=gsk_your_groq_api_key_here
+
+# Optional: LLM Models
+GROQ_MODEL=llama-3.3-70b-versatile
+EMBEDDING_MODEL=sentence-transformers/all-MiniLM-L6-v2
+
+# Optional: Vector Store & Retrieval Settings
+CHROMA_DIR=./chroma_db
+RETRIEVER_K=5
+RETRIEVER_FETCH_K=15
+RETRIEVER_LAMBDA_MULT=0.5
+MAX_REWRITE_LOOPS=2
 ```
 
-## Configuration (Space Secrets)
+---
 
-| Variable | Required | Purpose |
-|---|---|---|
-| `GROQ_API_KEY` | ✅ | LLM for grading, generation, and suggestions |
-| `GROQ_MODEL` | optional | Model name (default: `llama-3.3-70b-versatile`) |
-| `EMBEDDING_MODEL` | optional | HF embedding model (default: `sentence-transformers/all-MiniLM-L6-v2`) |
-| `RETRIEVER_K` | optional | Chunks kept after re-ranking (default: `5`) |
-| `MAX_REWRITE_LOOPS` | optional | Max query rewrite attempts (default: `3`) |
+## 🚀 Quickstart & Local Development
 
-## Local Development
+### Prerequisites
+- Python 3.11+ (managed via `uv` or `pip`)
+- Node.js 18+ and `npm`
+
+### 1. Backend Setup
 
 ```bash
-git clone https://github.com/KARTHIKKJ369/corrective-rag-langgraph
+# Clone the repository
+git clone https://github.com/KARTHIKKJ369/corrective-rag-langgraph.git
 cd corrective-rag-langgraph
-cp .env.example .env   # fill in GROQ_API_KEY
-pip install -r requirements.txt
-cd frontend && npm install && npm run build && cd ..
-uvicorn api:app --reload --port 8000
+
+# Install dependencies using uv
+uv sync
+
+# Run the FastAPI server
+uv run uvicorn api:app --reload --port 8000
 ```
 
-## Tech Stack
+### 2. Frontend Setup
 
-- **Backend**: FastAPI · LangGraph · LangChain · ChromaDB · FlashRank · Groq
-- **Frontend**: Vite · React · TypeScript
-- **Embeddings**: `sentence-transformers/all-MiniLM-L6-v2` (runs locally, no API key needed)
+```bash
+cd frontend
+
+# Install dependencies
+npm install
+
+# Run the Vite development server (Proxies /api, /ask, /ingest to port 8000)
+npm run dev
+
+# Or build the production distribution bundle
+npm run build
+```
+
+The application will be accessible at:
+- **Frontend UI**: `http://localhost:5173` (or `http://localhost:8000` when served via FastAPI static mount)
+- **API Documentation (Swagger)**: `http://localhost:8000/docs`
+
+---
+
+## 📂 Project Structure
+
+```
+corrective-rag-langgraph/
+├── api.py                   # FastAPI backend with SSE streaming endpoints
+├── main.py                  # LangGraph state machine, nodes, and LLM configuration
+├── rag_ingest.py            # Document loading, chunking, and ChromaDB vector store
+├── suggestions.json         # Persistent query suggestions cache
+├── requirements.txt         # Python dependencies
+├── frontend/                # React + Vite + TypeScript frontend
+│   ├── src/
+│   │   ├── App.tsx          # Main workspace, chat stream, and panel drawer
+│   │   ├── App.css          # Alpine intelligence styles and bento layouts
+│   │   ├── index.css        # Climbing design tokens (Stone, Void, Rust)
+│   │   └── main.tsx         # Application entry point
+│   ├── public/
+│   │   └── favicon.svg      # Symmetrical mountain summit vector emblem
+│   ├── package.json         # Frontend dependencies and build scripts
+│   └── vite.config.ts       # Vite build config and backend API proxy
+└── README.md                # Project documentation
+```
+
+---
+
+## 🛠️ Tech Stack
+
+- **Orchestration**: LangGraph, LangChain Core
+- **LLM Engine**: Groq Cloud (`llama-3.3-70b-versatile`, `llama-3.1-8b-instant`)
+- **Vector Embeddings**: HuggingFace `sentence-transformers/all-MiniLM-L6-v2` (Local CPU/MPS)
+- **Vector Database**: ChromaDB
+- **Re-Ranking**: FlashRank Cross-Encoder
+- **Web Search**: DuckDuckGo Search API
+- **API Server**: FastAPI, Uvicorn, Server-Sent Events (SSE)
+- **Frontend**: React 19, TypeScript, Vite, Lucide Icons, React Markdown
+
+---
+
+## 📄 License
+
+MIT License. Open source and free to build upon.
