@@ -15,9 +15,23 @@ PERSIST_DIR = os.getenv("CHROMA_DIR", "./chroma_db")
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "sentence-transformers/all-MiniLM-L6-v2")
 
 
+def get_device() -> str:
+    import torch
+    if torch.backends.mps.is_available():
+        return "mps"
+    elif torch.cuda.is_available():
+        return "cuda"
+    return "cpu"
+
+
 def rebuild_vectorstore(sources: list[str]) -> Chroma:
-    print("1. Loading embedding model...")
-    embeddings = HuggingFaceEmbeddings(model_name=EMBEDDING_MODEL)
+    device = get_device()
+    print(f"1. Loading embedding model ({EMBEDDING_MODEL}) on {device.upper()}...")
+    embeddings = HuggingFaceEmbeddings(
+        model_name=EMBEDDING_MODEL,
+        model_kwargs={"device": device},
+        encode_kwargs={"normalize_embeddings": True},
+    )
 
     print(f"2. Loading and splitting {len(sources)} source(s)...")
     splits = load_and_split_sources(sources)

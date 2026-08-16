@@ -157,8 +157,11 @@ async def generate_chat_events(question: str, user: UserProfile) -> AsyncGenerat
             
             elif node_name == "generate_node":
                 gen = node_output.get("generation", "")
+                conf = node_output.get("confidence", {})
                 trace_data["message"] = "Generated final answer"
                 trace_data["answer"] = gen
+                if conf:
+                    trace_data["confidence"] = conf
             
             yield f"data: {json.dumps(trace_data)}\n\n"
             
@@ -268,40 +271,48 @@ def get_stats(user: UserProfile = Depends(get_current_user)):
 def get_kb_sources(user: UserProfile = Depends(get_current_user)):
     from main import get_vectorstore
     from pathlib import Path
-    vectorstore = get_vectorstore()
-    coll = vectorstore._collection
-    data = coll.get(include=["metadatas", "documents"])
-    ids = data.get("ids", [])
-    metas = data.get("metadatas", [])
-    docs = data.get("documents", [])
+    try:
+        vectorstore = get_vectorstore()
+        coll = vectorstore._collection
+        count = coll.count()
+        if count == 0:
+            return {"total_chunks": 0, "total_sources": 0, "sources": []}
 
-    sources_map = {}
-    for i, id_ in enumerate(ids):
-        meta = metas[i] if i < len(metas) and metas[i] else {}
-        raw_src = meta.get("source", "Unknown Source")
-        name = Path(raw_src).name if ("/" in raw_src or "\\" in raw_src) else raw_src
-        if not name:
-            name = raw_src
+        data = coll.get(limit=count + 100, include=["metadatas", "documents"])
+        ids = data.get("ids", [])
+        metas = data.get("metadatas", [])
+        docs = data.get("documents", [])
 
-        if raw_src not in sources_map:
-            sources_map[raw_src] = {
-                "source": raw_src,
-                "name": name,
-                "type": meta.get("type", "document"),
-                "h1": meta.get("h1", name),
-                "chunk_count": 0,
-                "sample": docs[i][:180] if i < len(docs) else "",
-                "ids": []
-            }
-        sources_map[raw_src]["chunk_count"] += 1
-        sources_map[raw_src]["ids"].append(id_)
+        sources_map = {}
+        for i, id_ in enumerate(ids):
+            meta = metas[i] if i < len(metas) and metas[i] else {}
+            raw_src = meta.get("source", "Unknown Source")
+            name = Path(raw_src).name if ("/" in raw_src or "\\" in raw_src) else raw_src
+            if not name:
+                name = raw_src
 
-    sources_list = list(sources_map.values())
-    return {
-        "total_chunks": len(ids),
-        "total_sources": len(sources_list),
-        "sources": sources_list
-    }
+            if raw_src not in sources_map:
+                sources_map[raw_src] = {
+                    "source": raw_src,
+                    "name": name,
+                    "type": meta.get("type", "document"),
+                    "h1": meta.get("h1", name),
+                    "chunk_count": 0,
+                    "sample": docs[i][:180] if i < len(docs) else "",
+                    "ids": []
+                }
+            sources_map[raw_src]["chunk_count"] += 1
+            sources_map[raw_src]["ids"].append(id_)
+
+        sources_list = list(sources_map.values())
+        return {
+            "total_chunks": len(ids),
+            "total_sources": len(sources_list),
+            "sources": sources_list
+        }
+    except Exception as e:
+        logger.error(f"Failed to get KB sources: {e}")
+        return {"total_chunks": 0, "total_sources": 0, "sources": [], "error": str(e)}
 
 
 class DeleteKBRequest(BaseModel):
@@ -312,38 +323,67 @@ class DeleteKBRequest(BaseModel):
 @app.post("/api/kb/delete")
 def delete_kb_source(req: DeleteKBRequest, user: UserProfile = Depends(get_current_user)):
     from main import get_vectorstore
-    vectorstore = get_vectorstore()
-    coll = vectorstore._collection
+    from pathlib import Path
+    try:
+        vectorstore = get_vectorstore()
+        coll = vectorstore._collection
 
-    if req.ids:
-        coll.delete(ids=req.ids)
-    elif req.source:
-        # Delete by source or find matching IDs
-        data = coll.get(include=["metadatas"])
-        matching_ids = [data["ids"][i] for i, m in enumerate(data["metadatas"]) if m and m.get("source") == req.source]
-        if matching_ids:
-            coll.delete(ids=matching_ids)
-        else:
-            try:
-                coll.delete(where={"source": req.source})
-            except Exception:
-                pass
-    else:
+        if req.ids:
+            coll.delete(ids=req.ids)
+            remaining_chunks = coll.count()
+            return {"status": "deleted", "remaining_chunks": remaining_chunks}
+
+        if req.source:
+            count = coll.count()
+            if count > 0:
+                data = coll.get(limit=count + 100, include=["metadatas"])
+                matching_ids = []
+                req_name = Path(req.source).name.lower()
+                req_norm = req.source.rstrip("/").lower()
+                
+                for i, m in enumerate(data.get("metadatas", [])):
+                    if not m:
+                        continue
+                    m_src = str(m.get("source", "")).strip()
+                    m_norm = m_src.rstrip("/").lower()
+                    m_name = Path(m_src).name.lower()
+                    
+                    if m_src == req.source or m_norm == req_norm or (req_name and m_name == req_name):
+                        matching_ids.append(data["ids"][i])
+
+                if matching_ids:
+                    coll.delete(ids=matching_ids)
+                else:
+                    try:
+                        coll.delete(where={"source": req.source})
+                    except Exception:
+                        pass
+
+            remaining_chunks = coll.count()
+            return {"status": "deleted", "remaining_chunks": remaining_chunks}
+
         raise HTTPException(status_code=400, detail="Must provide 'source' or 'ids'")
-
-    remaining_chunks = coll.count()
-    return {"status": "deleted", "remaining_chunks": remaining_chunks}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error in delete_kb_source: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.post("/api/kb/clear")
 def clear_kb(user: UserProfile = Depends(get_current_user)):
     from main import get_vectorstore
-    vectorstore = get_vectorstore()
-    coll = vectorstore._collection
-    all_data = coll.get()
-    ids = all_data.get("ids", [])
-    if ids:
-        coll.delete(ids=ids)
+    try:
+        vectorstore = get_vectorstore()
+        coll = vectorstore._collection
+        count = coll.count()
+        if count > 0:
+            data = coll.get(limit=count + 500)
+            ids = data.get("ids", [])
+            if ids:
+                coll.delete(ids=ids)
+    except Exception as e:
+        logger.error(f"Error in clear_kb: {e}")
 
     if os.path.exists("suggestions.json"):
         try:

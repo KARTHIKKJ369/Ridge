@@ -83,6 +83,17 @@ const RidgeLogo = ({ size = 22, className = '' }: { size?: number; className?: s
   </svg>
 );
 
+type ConfidenceMetric = {
+  score: number;
+  level: 'HIGH' | 'MEDIUM' | 'LOW';
+  breakdown: {
+    grader_consensus: number;
+    source_trust: string;
+    relevant_chunks: number;
+    reformulation_loops: number;
+  };
+};
+
 type TraceEvent = {
   node: string;
   message: string;
@@ -90,6 +101,7 @@ type TraceEvent = {
   documents?: string[];
   doc_grades?: any[];
   answer?: string;
+  confidence?: ConfidenceMetric;
   latency_ms?: number;
 };
 
@@ -98,6 +110,7 @@ type Message = {
   role: 'user' | 'assistant';
   content: string;
   traces?: TraceEvent[];
+  confidence?: ConfidenceMetric;
   isStreaming?: boolean;
   timestamp?: string;
   liked?: boolean | null;
@@ -462,7 +475,7 @@ export default function App() {
     }
   };
 
-  const handleDeleteKBSource = async (source: string, name: string) => {
+  const handleDeleteKBSource = async (source: string, name: string, ids?: string[]) => {
     if (!window.confirm(`Are you sure you want to delete '${name}' and all its indexed chunks from the knowledge base?`)) {
       return;
     }
@@ -471,10 +484,11 @@ export default function App() {
       const res = await fetchWithAuth('/api/kb/delete', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ source })
+        body: JSON.stringify({ source, ids })
       });
       if (res.ok) {
         showToast(`Deleted '${name}' from knowledge base`, 'success');
+        setKbSources(prev => prev.filter(s => s.source !== source));
         await fetchKBSources();
         fetchSuggestionsAndStats(true);
       } else {
@@ -655,6 +669,9 @@ export default function App() {
                   newMsg.traces = [...(newMsg.traces || []), data];
                   if (data.answer) {
                     newMsg.content = data.answer;
+                  }
+                  if (data.confidence) {
+                    newMsg.confidence = data.confidence;
                   }
                   return newMsg;
                 }
@@ -1322,7 +1339,43 @@ export default function App() {
                         {/* Markdown Text */}
                         {msg.content ? (
                           <div className="recall-markdown-body">
-                            <ReactMarkdown>{msg.content}</ReactMarkdown>
+                            <ReactMarkdown
+                              components={{
+                                a: ({ href, children, ...props }) => {
+                                  if (href?.startsWith('file://')) {
+                                    const path = href.replace('file://', '');
+                                    const fname = path.split('/').pop() || path;
+                                    return (
+                                      <span
+                                        className="inline-file-link"
+                                        title={`Local path: ${path} (Click to copy)`}
+                                        onClick={(e) => {
+                                          e.preventDefault();
+                                          navigator.clipboard.writeText(path);
+                                          showToast(`Copied path: ${fname}`, 'info');
+                                        }}
+                                        style={{
+                                          cursor: 'pointer',
+                                          textDecoration: 'underline',
+                                          color: 'var(--color-5)',
+                                          fontFamily: 'var(--font-mono)',
+                                          fontSize: '0.9em'
+                                        }}
+                                      >
+                                        {children}
+                                      </span>
+                                    );
+                                  }
+                                  return (
+                                    <a href={href} target="_blank" rel="noopener noreferrer" {...props}>
+                                      {children}
+                                    </a>
+                                  );
+                                }
+                              }}
+                            >
+                              {msg.content}
+                            </ReactMarkdown>
                           </div>
                         ) : (
                           msg.isStreaming && (
@@ -1363,6 +1416,32 @@ export default function App() {
                                   </button>
                                 );
                               })}
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Grounded Confidence Scorecard & Badge */}
+                        {isAssistant && msg.confidence && (
+                          <div className="confidence-metric-container">
+                            <div className={`confidence-badge-pill ${msg.confidence.level.toLowerCase()}`}>
+                              <span className="confidence-dot" />
+                              <span className="confidence-percent">{msg.confidence.score}%</span>
+                              <span className="confidence-text">
+                                {msg.confidence.level === 'HIGH' ? 'High Grounded Confidence' : (msg.confidence.level === 'MEDIUM' ? 'Moderate Confidence' : 'Low Context Confidence')}
+                              </span>
+                            </div>
+                            <div className="confidence-meta-chips">
+                              <span className="meta-chip">
+                                <span className="chip-label">Source:</span> {msg.confidence.breakdown.source_trust}
+                              </span>
+                              <span className="meta-chip">
+                                <span className="chip-label">Grader Pass:</span> {msg.confidence.breakdown.grader_consensus}%
+                              </span>
+                              {msg.confidence.breakdown.reformulation_loops > 0 && (
+                                <span className="meta-chip">
+                                  <span className="chip-label">Query Rewrites:</span> {msg.confidence.breakdown.reformulation_loops}
+                                </span>
+                              )}
                             </div>
                           </div>
                         )}
@@ -1772,7 +1851,7 @@ export default function App() {
                             </div>
                             <button 
                               className="source-delete-btn"
-                              onClick={() => handleDeleteKBSource(src.source, src.name)}
+                              onClick={() => handleDeleteKBSource(src.source, src.name, src.ids)}
                               disabled={deletingSource === src.source}
                               title={`Delete ${src.name}`}
                               aria-label={`Delete ${src.name}`}
@@ -1798,16 +1877,54 @@ export default function App() {
             )}
 
             {/* Tab 3: Grader & Citation Inspector */}
-            {activeArtifactTab === 'grader' && (
-              <div className="tab-pane grader-pane">
-                {allDocGrades.length === 0 ? (
-                  <div className="pane-empty-state">
-                    <CheckCircle size={32} className="text-muted" />
-                    <h4>No Graded Contexts</h4>
-                    <p>Ask a question to see how Groq LLM evaluates each retrieved chunk for hallucinations.</p>
-                  </div>
-                ) : (
-                  <div className="grader-cards-list">
+            {activeArtifactTab === 'grader' && (() => {
+              const latestConfMsg = [...messages].reverse().find(m => m.role === 'assistant' && m.confidence);
+              const conf = latestConfMsg?.confidence;
+
+              return (
+                <div className="tab-pane grader-pane">
+                  {conf && (
+                    <div className={`grader-confidence-hero ${conf.level.toLowerCase()}`}>
+                      <div className="conf-hero-top">
+                        <div className="conf-big-score-group">
+                          <span className="conf-big-score">{conf.score}%</span>
+                          <div className="conf-hero-text">
+                            <span className="conf-hero-title">Grounded Confidence</span>
+                            <span className={`conf-hero-badge ${conf.level.toLowerCase()}`}>
+                              {conf.level} VERACITY
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+                      <div className="conf-hero-metrics-grid">
+                        <div className="conf-metric-tile">
+                          <span className="tile-label">Source Provenance</span>
+                          <span className="tile-value">{conf.breakdown.source_trust}</span>
+                        </div>
+                        <div className="conf-metric-tile">
+                          <span className="tile-label">Grader Consensus</span>
+                          <span className="tile-value">{conf.breakdown.grader_consensus}%</span>
+                        </div>
+                        <div className="conf-metric-tile">
+                          <span className="tile-label">Verified Chunks</span>
+                          <span className="tile-value">{conf.breakdown.relevant_chunks}</span>
+                        </div>
+                        <div className="conf-metric-tile">
+                          <span className="tile-label">Reformulations</span>
+                          <span className="tile-value">{conf.breakdown.reformulation_loops}</span>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {allDocGrades.length === 0 ? (
+                    <div className="pane-empty-state">
+                      <CheckCircle size={32} className="text-muted" />
+                      <h4>No Graded Contexts</h4>
+                      <p>Ask a question to see how Groq LLM evaluates each retrieved chunk for hallucinations.</p>
+                    </div>
+                  ) : (
+                    <div className="grader-cards-list">
                     {allDocGrades.map((g: any, idx: number) => {
                       const isPass = g.score === 'yes';
                       return (
@@ -1835,7 +1952,8 @@ export default function App() {
                   </div>
                 )}
               </div>
-            )}
+            );
+          })()}
           </div>
         </aside>
       )}

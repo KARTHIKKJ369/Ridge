@@ -26,6 +26,7 @@
 * **Adaptive Query Reformulation**: Context-aware query optimizer that reformulates queries when local retrieval yields no relevant passages.
 * **Dynamic Web Fallback**: Seamless fallback to DuckDuckGo search with strict 5-second timeouts when local document recall is insufficient.
 * **Multi-Model Grounded Synthesis**: Primary synthesis using `llama-3.3-70b-versatile` with **instant zero-lag fallback** to `llama-3.1-8b-instant` if rate limits or network issues occur.
+* **Grounded Confidence Scoring Engine**: Computes a multi-factor composite confidence score (0–100%) factoring in FlashRank cross-encoder relevance, LLM grader consensus ratio, source provenance (Local KB vs. Web), and query reformulation count. Surfaced via real-time SSE and interactive badges in the UI.
 
 ---
 
@@ -124,7 +125,23 @@ BASE_URL=http://localhost:8000
 
 ---
 
-### 1. Backend Setup
+### 1. 🚀 One-Command Background Hosting (Production + Cloudflare Tunnel)
+
+To compile the frontend, start the backend, and automatically tunnel public HTTPS traffic to **`https://ridge.karthikjayan.tech`** in the background:
+
+```bash
+./start.sh
+```
+
+* **Check Live Status**: `./status.sh`
+* **Tail Live Logs**: `tail -f logs/backend.log` or `tail -f logs/tunnel.log`
+* **Stop Services**: `./stop.sh`
+
+---
+
+### 2. 🛠️ Development Setup (Manual)
+
+#### Backend Setup
 
 ```bash
 # Clone the repository
@@ -137,13 +154,11 @@ uv sync
 # Or using standard pip
 pip install -r requirements.txt
 
-# Run the FastAPI server
+# Run development server with hot-reloading
 uv run uvicorn api:app --reload --port 8000
 ```
 
----
-
-### 2. Frontend Setup
+#### Frontend Setup
 
 ```bash
 # Navigate to the frontend directory
@@ -160,6 +175,7 @@ npm run build
 ```
 
 The application will be accessible at:
+* **Public Domain**: `https://ridge.karthikjayan.tech` (via Cloudflare Tunnel)
 * **Web UI**: `http://localhost:5173` (development) or `http://localhost:8000` (production)
 * **Swagger API Docs**: `http://localhost:8000/docs`
 
@@ -217,7 +233,7 @@ Ridge/
 
 * **Graph Orchestration**: LangGraph, LangChain Core
 * **High-Throughput LLMs**: Groq Cloud (`llama-3.3-70b-versatile`, `llama-3.1-8b-instant`)
-* **Vector Embeddings**: HuggingFace `sentence-transformers/all-MiniLM-L6-v2` (Local CPU/MPS)
+* **Vector Embeddings**: HuggingFace `BAAI/bge-large-en-v1.5` (1024-dim SOTA embeddings with Apple Silicon Metal/MPS acceleration)
 * **Vector Store**: ChromaDB
 * **Cross-Encoder Re-Ranking**: FlashRank
 * **Embedded OCR Engine**: RapidOCR ONNX (`rapidocr-onnxruntime`, pure Python, zero system dependencies)

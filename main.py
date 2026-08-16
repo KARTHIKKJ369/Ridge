@@ -34,6 +34,7 @@ class GraphState(TypedDict):
     documents: list[str]
     documents_metadata: list[dict]
     generation: str
+    confidence: dict
     loop_count: int
     past_queries: list[str]
     latency_ms: int
@@ -88,9 +89,29 @@ def _get_retry_after(exc, default=5):
     return default
 
 
+def get_device() -> str:
+    import torch
+    if torch.backends.mps.is_available():
+        return "mps"
+    elif torch.cuda.is_available():
+        return "cuda"
+    return "cpu"
+
+
+def get_embeddings(model_name: str | None = None) -> HuggingFaceEmbeddings:
+    settings = get_settings()
+    model = model_name or settings["embedding_model"]
+    device = get_device()
+    return HuggingFaceEmbeddings(
+        model_name=model,
+        model_kwargs={"device": device},
+        encode_kwargs={"normalize_embeddings": True},
+    )
+
+
 def get_vectorstore():
     settings = get_settings()
-    embeddings = HuggingFaceEmbeddings(model_name=settings["embedding_model"])
+    embeddings = get_embeddings(settings["embedding_model"])
     return Chroma(
         persist_directory=settings["chroma_dir"],
         embedding_function=embeddings,
@@ -317,9 +338,66 @@ def build_app():
         print("--- NODE: GENERATE ---")
         question = state.get("original_question") or state["question"]
         docs = state.get("documents", [])
+        doc_grades = state.get("doc_grades", [])
+        loop_count = state.get("loop_count", 0)
         context = "\n\n".join(docs).strip()
 
         print(f"  Total context length: {len(context)} chars")
+
+        # --- COMPUTE COMPOSITE GROUNDED CONFIDENCE METRIC ---
+        # 1. Grader Consensus Ratio (35% weight)
+        yes_count = sum(1 for g in doc_grades if g.get("score") == "yes")
+        total_grades = len(doc_grades)
+        grader_ratio = (yes_count / total_grades) if total_grades > 0 else (0.85 if docs else 0.0)
+
+        # 2. Source Provenance Weight (25% weight)
+        is_web = any("duckduckgo" in str(d).lower() or "web" in str(d).lower() for d in docs)
+        if docs and not is_web:
+            source_weight = 1.0
+            source_type_name = "Local Knowledge Base"
+        elif docs and is_web:
+            source_weight = 0.82
+            source_type_name = "Web Search Fallback"
+        else:
+            source_weight = 0.40
+            source_type_name = "General Synthesized Knowledge"
+
+        # 3. Context Richness / Relevant Chunks Coverage (25% weight)
+        if len(docs) >= 2:
+            coverage_weight = 1.0
+        elif len(docs) == 1:
+            coverage_weight = 0.75
+        else:
+            coverage_weight = 0.35
+
+        # 4. Search Loop Penalty (15% weight)
+        if loop_count == 0:
+            loop_weight = 1.0
+        elif loop_count == 1:
+            loop_weight = 0.85
+        else:
+            loop_weight = 0.65
+
+        raw_confidence = (grader_ratio * 35) + (source_weight * 25) + (coverage_weight * 25) + (loop_weight * 15)
+        confidence_score = max(15, min(99, int(round(raw_confidence))))
+
+        if confidence_score >= 80:
+            confidence_level = "HIGH"
+        elif confidence_score >= 60:
+            confidence_level = "MEDIUM"
+        else:
+            confidence_level = "LOW"
+
+        confidence_data = {
+            "score": confidence_score,
+            "level": confidence_level,
+            "breakdown": {
+                "grader_consensus": round(grader_ratio * 100, 1),
+                "source_trust": source_type_name,
+                "relevant_chunks": len(docs),
+                "reformulation_loops": loop_count,
+            }
+        }
 
         prompt = (
             "You are Ridge, an expert AI assistant.\n"
@@ -336,16 +414,25 @@ def build_app():
         # Primary: 70B Model with instant 8B fallback on rate-limit
         try:
             response = llm_generate.invoke(prompt)
-            return {"generation": response.content, "latency_ms": int((time.time() - t0) * 1000)}
+            return {
+                "generation": response.content,
+                "confidence": confidence_data,
+                "latency_ms": int((time.time() - t0) * 1000)
+            }
         except Exception as e:
             print(f"Primary generation rate-limited or error ({e}). Switching instantly to fast model...")
             try:
                 response = llm_fast.invoke(prompt)
-                return {"generation": response.content, "latency_ms": int((time.time() - t0) * 1000)}
+                return {
+                    "generation": response.content,
+                    "confidence": confidence_data,
+                    "latency_ms": int((time.time() - t0) * 1000)
+                }
             except Exception as e2:
                 print(f"Fallback generation error: {e2}")
                 return {
                     "generation": f"Model provider error: {e2}",
+                    "confidence": confidence_data,
                     "latency_ms": int((time.time() - t0) * 1000)
                 }
 

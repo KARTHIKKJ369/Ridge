@@ -1,0 +1,7 @@
+tunnel: be8573d9-14a0-4050-91ad-283521dc8b23
+credentials-file: /Users/karthikjayan/.cloudflared/be8573d9-14a0-4050-91ad-283521dc8b23.json
+
+ingress:
+  - hostname: ridge.karthikjayan.tech
+    service: http://localhost:8000
+  - service: http_status:404
