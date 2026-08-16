@@ -1,21 +1,55 @@
-beautifulsoup4
-lxml
-langchain-chroma
-langchain-community
-langchain-huggingface
-langchain-groq
-langchain-text-splitters
-langgraph
-fastapi
-uvicorn[standard]
-python-multipart
-langchain-openrouter
-pypdf
-python-dotenv
-requests
-sentence-transformers
-typing-extensions
-flashrank
-duckduckgo-search
-pyjwt[crypto]
-httpx
+# ------------------------------------------------------------------------------
+# Ridge: Core Agentic RAG & Graph Orchestration
+# ------------------------------------------------------------------------------
+langgraph>=1.2.11
+langchain-core>=0.3.0
+langchain-community>=0.4.2
+langchain-chroma>=1.1.0
+langchain-groq>=1.1.3
+langchain-huggingface>=1.2.2
+langchain-openrouter>=0.2.8
+langchain-text-splitters>=1.1.2
+
+# ------------------------------------------------------------------------------
+# Vector Embeddings, Re-Ranking, & Vector Store
+# ------------------------------------------------------------------------------
+sentence-transformers>=5.7.0
+flashrank>=0.2.10
+chromadb>=0.6.0
+
+# ------------------------------------------------------------------------------
+# Web Search & Scraper Tools
+# ------------------------------------------------------------------------------
+duckduckgo-search>=8.1.1
+requests>=2.34.2
+httpx>=0.27.0
+beautifulsoup4>=4.15.0
+lxml>=6.1.1
+
+# ------------------------------------------------------------------------------
+# Universal Document, Media & Code Parsers
+# ------------------------------------------------------------------------------
+pypdf>=6.16.1
+python-docx>=1.2.0
+python-pptx>=1.0.2
+openpyxl>=3.1.5
+pillow>=12.3.0
+youtube-transcript-api>=1.2.4
+
+# ------------------------------------------------------------------------------
+# High-Accuracy Embedded OCR Engine (ONNX-Based)
+# ------------------------------------------------------------------------------
+rapidocr-onnxruntime>=1.4.4
+opencv-python>=5.0.0
+shapely>=2.1.2
+pyclipper>=1.4.0
+
+# ------------------------------------------------------------------------------
+# Backend API, Authentication & Session Security
+# ------------------------------------------------------------------------------
+fastapi>=0.141.1
+uvicorn[standard]>=0.52.3
+python-multipart>=0.0.32
+python-dotenv>=1.2.2
+pyjwt[crypto]>=2.8.0
+typing-extensions>=4.16.0

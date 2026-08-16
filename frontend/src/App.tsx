@@ -1700,7 +1700,7 @@ export default function App() {
                         setIngestInput('');
                       }
                     }}
-                    accept=".pdf,.md,.txt"
+                    accept=".pdf,.png,.jpg,.jpeg,.webp,.bmp,.tiff,.docx,.doc,.pptx,.ppt,.xlsx,.xls,.csv,.tsv,.md,.markdown,.txt,.py,.js,.ts,.tsx,.jsx,.json,.yaml,.yml,.toml,.sql,.html,.css,.cpp,.c,.h,.java,.go,.rs,.sh,.srt,.vtt"
                     style={{ display: 'none' }}
                   />
                   {selectedFile ? (
@@ -1712,21 +1712,26 @@ export default function App() {
                   ) : (
                     <div className="dropzone-empty-prompt">
                       <Upload size={32} className="text-teal" />
-                      <p>Drag and drop <strong>PDF, Markdown (.md), or Text (.txt)</strong></p>
-                      <span>or tap here to select files</span>
+                      <p>Drag and drop <strong>Documents, Images (OCR), Code, or Spreadsheets</strong></p>
+                      <span className="dropzone-sub-formats">PDF, Images (PNG, JPG), Word (.docx), PPTX, Excel, CSV, Code, Markdown</span>
+                      <span className="dropzone-tap-prompt">or tap to browse files</span>
                     </div>
                   )}
                 </div>
               ) : (
                 <div className="url-scrape-area">
-                  <label className="input-field-label">Article URL or Raw Markdown Topo:</label>
+                  <label className="input-field-label">Web URL, YouTube Video, or Raw Text / Code:</label>
                   <textarea 
                     className="recall-modal-textarea"
-                    placeholder="https://example.com/research-paper OR paste raw markdown..."
+                    placeholder="Enter Web URL, YouTube link (e.g. https://youtu.be/... for automatic transcript extraction), GitHub link, or paste raw text..."
                     value={ingestInput}
                     onChange={e => setIngestInput(e.target.value)}
                     rows={5}
                   />
+                  <div className="url-hints-row">
+                    <span className="url-hint-badge">✨ Auto-transcribes YouTube Videos</span>
+                    <span className="url-hint-badge">🌐 Scrapes Web & ArXiv Papers</span>
+                  </div>
                 </div>
               )}
             </div>

@@ -29,7 +29,21 @@
 
 ---
 
-### 2. 🔐 Built-in Security & Authentication
+### 2. 📂 Universal Multi-Format Ingestion & OCR Engine
+* **High-Accuracy OCR & Image Ingestion**:
+  * Direct ingestion of **Images** (`.png`, `.jpg`, `.jpeg`, `.webp`, `.bmp`, `.tiff`) via embedded ONNX RapidOCR (zero native C-library dependencies, runs in ~160ms with 99% accuracy).
+  * **Automatic Scanned PDF Fallback**: When a flat/scanned PDF without selectable text is uploaded, Ridge automatically extracts page images and applies OCR.
+* **Office & Enterprise Documents**: Native parsing for **PDF** (`.pdf`), **Microsoft Word** (`.docx`), **PowerPoint** (`.pptx`), and **Markdown** (`.md`).
+* **Structured & Tabular Data**: Automatically transforms **Excel** (`.xlsx`) and **CSV/TSV** (`.csv`, `.tsv`) spreadsheets into clean markdown tables with preserved columns.
+* **Codebases & Dev Configs**: Language-aware ingestion for Python (`.py`), JavaScript/TypeScript (`.js`, `.jsx`, `.ts`, `.tsx`), Web (`.html`, `.css`), Configs (`.json`, `.yaml`, `.yml`, `.toml`), Database (`.sql`), and Systems (`.c`, `.cpp`, `.java`, `.go`, `.rs`, `.sh`).
+* **Subtitles & Video Transcripts**:
+  * **YouTube Videos**: Instant URL extraction of full video transcripts with timestamp anchors (`[01:23] ...`).
+  * **Subtitle Files**: Parses SubRip (`.srt`) and WebVTT (`.vtt`) files into indexed semantic chunks.
+* **Web & Academic Sources**: Clean scraping for standard web articles, GitHub raw files/repos, and ArXiv research papers.
+
+---
+
+### 3. 🔐 Built-in Security & Authentication
 * **Local ID + Password Accounts**: Secure user registration and login with unique random salts and **PBKDF2-SHA256** password hashing (100,000 iterations).
 * **Persistent SQLite Storage**: User credentials and metadata safely stored in `users.db`.
 * **Signed JWT Bearer Sessions**: High-entropy 32-byte signed JWT session tokens with configurable expiration.
@@ -38,7 +52,7 @@
 
 ---
 
-### 3. 🎨 2026 Alpine UI Design System (React + Vite + TypeScript)
+### 4. 🎨 2026 Alpine UI Design System (React + Vite + TypeScript)
 * **Climbing-Inspired Themes**:
   * **Stone & Summit** (Default): Sandstone off-white topo aesthetic with summit blue highlights.
   * **Chalk & Void**: Basalt dark mode with glacier cyan accents.
@@ -156,8 +170,8 @@ The application will be accessible at:
 | Endpoint | Method | Description | Auth Required |
 | :--- | :---: | :--- | :---: |
 | `/ask` | `POST` | Streams LangGraph SSE execution events and synthesized answer | Yes |
-| `/ingest` | `POST` | Ingests plain text or web URL into ChromaDB | Yes |
-| `/upload` | `POST` | Uploads and indexes PDF, Markdown, or TXT document | Yes |
+| `/ingest` | `POST` | Ingests plain text, web articles, or YouTube video transcripts into ChromaDB | Yes |
+| `/upload` | `POST` | Uploads and indexes PDF, Images (OCR), Word, PPTX, Excel, CSV, Code, or Markdown | Yes |
 | `/api/suggestions` | `GET` | Returns cached grounded search prompts (<2ms) | Yes |
 | `/api/stats` | `GET` | Returns vector store document and chunk count | Yes |
 | `/api/auth/register` | `POST` | Registers a new user and issues a signed JWT token | No |
@@ -174,7 +188,7 @@ Ridge/
 ├── api.py                   # FastAPI application with SSE streaming & auth routes
 ├── auth.py                  # PBKDF2 hashing, SQLite user storage, & JWT sessions
 ├── main.py                  # LangGraph state machine, nodes, and Groq LLM pipelines
-├── rag_ingest.py            # Recursive character chunking & ChromaDB embedding engine
+├── rag_ingest.py            # Universal multi-format parser & ChromaDB embedding engine
 ├── suggestions.json         # Persistent suggestion cache for 0ms initial load
 ├── users.db                 # SQLite user database (auto-generated)
 ├── requirements.txt         # Python dependencies
@@ -203,8 +217,10 @@ Ridge/
 * **Vector Embeddings**: HuggingFace `sentence-transformers/all-MiniLM-L6-v2` (Local CPU/MPS)
 * **Vector Store**: ChromaDB
 * **Cross-Encoder Re-Ranking**: FlashRank
+* **Embedded OCR Engine**: RapidOCR ONNX (`rapidocr-onnxruntime`, pure Python, zero system dependencies)
+* **Document & Media Parsers**: `pypdf`, `python-docx`, `python-pptx`, `openpyxl`, `youtube-transcript-api`, `beautifulsoup4`
 * **Web Search Engine**: DuckDuckGo (`ddgs`)
-* **Backend API**: FastAPI, Uvicorn, Server-Sent Events (SSE)
+* **Backend API & Security**: FastAPI, Uvicorn, Server-Sent Events (SSE), PBKDF2-SHA256, PyJWT
 * **Frontend Client**: React 19, TypeScript, Vite, Lucide Icons, React Markdown
 
 ---

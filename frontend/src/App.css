@@ -2118,6 +2118,19 @@ textarea:focus-visible,
   color: var(--recall-text-muted);
 }
 
+.dropzone-sub-formats {
+  font-size: 0.74rem;
+  color: var(--color-5);
+  font-weight: 500;
+  max-width: 380px;
+  line-height: 1.35;
+}
+
+.dropzone-tap-prompt {
+  font-size: 0.72rem;
+  color: var(--recall-text-muted);
+}
+
 .dropzone-file-preview {
   display: flex;
   flex-direction: column;
@@ -2145,6 +2158,23 @@ textarea:focus-visible,
 
 .input-field-label {
   font-size: 0.8rem;
+  color: var(--recall-text-secondary);
+}
+
+.url-hints-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.url-hint-badge {
+  font-size: 0.72rem;
+  font-weight: 500;
+  background-color: var(--recall-surface-subtle);
+  border: 1px solid var(--recall-border);
+  padding: 3px 8px;
+  border-radius: 6px;
   color: var(--recall-text-secondary);
 }
 
