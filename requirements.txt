@@ -17,3 +17,5 @@ sentence-transformers
 typing-extensions
 flashrank
 duckduckgo-search
+pyjwt[crypto]
+httpx

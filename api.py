@@ -4,12 +4,22 @@ from typing import AsyncGenerator
 import os
 import tempfile
 import shutil
-from fastapi import FastAPI, HTTPException, UploadFile, File
-from fastapi.responses import StreamingResponse, FileResponse
+from fastapi import FastAPI, HTTPException, UploadFile, File, Request, Depends, status
+from fastapi.responses import StreamingResponse, FileResponse, RedirectResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from main import build_app, get_settings, ingest_document
+from auth import (
+    get_current_user,
+    get_auth_settings,
+    create_access_token,
+    register_user,
+    authenticate_user,
+    RegisterRequest,
+    LoginRequest,
+    UserProfile,
+)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -36,7 +46,72 @@ class ChatRequest(BaseModel):
 class IngestRequest(BaseModel):
     text_or_url: str
 
-async def generate_chat_events(question: str) -> AsyncGenerator[str, None]:
+
+# ---------------------------------------------------------------------------
+# Authentication Endpoints (ID + Password Registration & Login)
+# ---------------------------------------------------------------------------
+
+@app.get("/api/auth/config")
+def auth_config():
+    """Returns auth configuration status."""
+    settings = get_auth_settings()
+    return {
+        "enabled": settings["enabled"],
+        "mode": "password",
+    }
+
+
+@app.post("/api/auth/register")
+def auth_register(req: RegisterRequest):
+    """Registers a new user and issues a signed JWT session token."""
+    user = register_user(req)
+    token = create_access_token(user.model_dump())
+    response = JSONResponse({"user": user.model_dump(), "token": token})
+    response.set_cookie(
+        key="ridge_token",
+        value=token,
+        max_age=7 * 86400,
+        httponly=False,
+        samesite="lax",
+    )
+    return response
+
+
+@app.post("/api/auth/login")
+def auth_login(req: LoginRequest):
+    """Authenticates username/email and password, returning JWT token."""
+    user = authenticate_user(req)
+    token = create_access_token(user.model_dump())
+    response = JSONResponse({"user": user.model_dump(), "token": token})
+    response.set_cookie(
+        key="ridge_token",
+        value=token,
+        max_age=7 * 86400,
+        httponly=False,
+        samesite="lax",
+    )
+    return response
+
+
+@app.get("/api/auth/me")
+def get_me(user: UserProfile = Depends(get_current_user)):
+    """Returns the authenticated user profile."""
+    return user
+
+
+@app.post("/api/auth/logout")
+def logout():
+    """Clears the authentication session."""
+    response = JSONResponse({"status": "logged_out"})
+    response.delete_cookie("ridge_token")
+    return response
+
+
+# ---------------------------------------------------------------------------
+# Corrective RAG Chat & Knowledge Ingestion Endpoints (Protected)
+# ---------------------------------------------------------------------------
+
+async def generate_chat_events(question: str, user: UserProfile) -> AsyncGenerator[str, None]:
     initial_state = {
         "question": question,
         "original_question": question,
@@ -95,14 +170,14 @@ async def generate_chat_events(question: str) -> AsyncGenerator[str, None]:
 
 
 @app.post("/ask")
-async def ask_question(req: ChatRequest):
+async def ask_question(req: ChatRequest, user: UserProfile = Depends(get_current_user)):
     return StreamingResponse(
-        generate_chat_events(req.question),
+        generate_chat_events(req.question, user),
         media_type="text/event-stream"
     )
 
 @app.post("/ingest")
-async def ingest(req: IngestRequest):
+async def ingest(req: IngestRequest, user: UserProfile = Depends(get_current_user)):
     try:
         result = ingest_document(req.text_or_url)
         return result
@@ -111,7 +186,7 @@ async def ingest(req: IngestRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/upload")
-async def upload_file(file: UploadFile = File(...)):
+async def upload_file(file: UploadFile = File(...), user: UserProfile = Depends(get_current_user)):
     try:
         suffix = ""
         if file.filename:
@@ -139,7 +214,7 @@ def status():
     return {"status": "ok"}
 
 @app.get("/api/suggestions")
-def get_suggestions(force: bool = False):
+def get_suggestions(force: bool = False, user: UserProfile = Depends(get_current_user)):
     """
     Returns suggested queries from the persistent suggestions.json cache.
     Does NOT make LLM or Chroma DB calls on refresh.
@@ -178,7 +253,7 @@ def get_suggestions(force: bool = False):
     return {"suggestions": [], "empty": True}
 
 @app.get("/api/stats")
-def get_stats():
+def get_stats(user: UserProfile = Depends(get_current_user)):
     from main import get_vectorstore
     vectorstore = get_vectorstore()
     chunk_count = vectorstore._collection.count()

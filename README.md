@@ -60,9 +60,14 @@ EMBEDDING_MODEL=sentence-transformers/all-MiniLM-L6-v2
 # Optional: Vector Store & Retrieval Settings
 CHROMA_DIR=./chroma_db
 RETRIEVER_K=5
-RETRIEVER_FETCH_K=15
+RETRIEVER_FETCH_K=50
 RETRIEVER_LAMBDA_MULT=0.5
 MAX_REWRITE_LOOPS=2
+
+# Optional: Authentication & JWT Security (Local Accounts)
+AUTH_ENABLED=true
+JWT_SECRET=your_super_secret_jwt_key_here
+AUTH_DB_PATH=./users.db
 ```
 
 ---

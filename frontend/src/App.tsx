@@ -29,9 +29,12 @@ import {
   ShieldCheck, 
   Edit3,
   Paperclip,
-  ArrowUp
+  ArrowUp,
+  LogOut,
+  LogIn
 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
+import { AuthModal } from './components/AuthModal';
 import './App.css';
 
 // Symmetrical Mountain Summit & Neural Ridge Emblem
@@ -105,6 +108,24 @@ type ChatSession = {
 
 type ThemeMode = 'void' | 'stone' | 'rust';
 
+type UserProfile = {
+  id: string;
+  username?: string;
+  name: string;
+  email: string;
+  avatar_url?: string;
+  provider?: string;
+  is_guest?: boolean;
+};
+
+type AuthConfig = {
+  enabled: boolean;
+  providers: {
+    github: boolean;
+    google: boolean;
+  };
+};
+
 const DEFAULT_SUGGESTIONS = [
   "Summarize the key findings and core concepts across the indexed documents.",
   "What are the main methodologies and step-by-step implementations described?",
@@ -112,6 +133,19 @@ const DEFAULT_SUGGESTIONS = [
 ];
 
 export default function App() {
+  // Authentication & User State
+  const [user, setUser] = useState<UserProfile | null>(() => {
+    try {
+      const saved = localStorage.getItem('ridge_user');
+      return saved ? JSON.parse(saved) : null;
+    } catch {
+      return null;
+    }
+  });
+  const [authConfig, setAuthConfig] = useState<AuthConfig | null>(null);
+  const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
+  const [isUserDropdownOpen, setIsUserDropdownOpen] = useState(false);
+
   // Theme Management: Defaults to 'stone' (Stone & Summit)
   const [theme, setTheme] = useState<ThemeMode>(() => {
     return (localStorage.getItem('recall_theme') as ThemeMode) || 'stone';
@@ -190,6 +224,18 @@ export default function App() {
   const chatAttachRef = useRef<HTMLInputElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const userDropdownRef = useRef<HTMLDivElement>(null);
+
+  // Close dropdown on outside click
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (userDropdownRef.current && !userDropdownRef.current.contains(e.target as Node)) {
+        setIsUserDropdownOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
 
   // Helper for relative timestamps on recent sessions
   const getRelativeTime = (timestamp: number) => {
@@ -269,21 +315,93 @@ export default function App() {
     }
   }, [input]);
 
+  // Authenticated API request wrapper
+  const fetchWithAuth = async (url: string, options: RequestInit = {}) => {
+    const token = localStorage.getItem('ridge_token');
+    const headers = new Headers(options.headers || {});
+    if (token) {
+      headers.set('Authorization', `Bearer ${token}`);
+    }
+    const res = await fetch(url, { ...options, headers });
+    if (res.status === 401 && authConfig?.enabled) {
+      setUser(null);
+      localStorage.removeItem('ridge_token');
+      localStorage.removeItem('ridge_user');
+      setIsAuthModalOpen(true);
+    }
+    return res;
+  };
+
+  // Authentication Initialization & OAuth Callback Handler
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const tokenParam = params.get('token');
+    const authErr = params.get('auth_error');
+
+    if (tokenParam) {
+      localStorage.setItem('ridge_token', tokenParam);
+      window.history.replaceState({}, document.title, window.location.pathname);
+      showToast('Welcome back, Climber', 'success');
+    } else if (authErr) {
+      window.history.replaceState({}, document.title, window.location.pathname);
+      showToast(`Authentication failed: ${authErr}`, 'error');
+    }
+
+    // Fetch Auth Configuration and Profile
+    fetch('/api/auth/config')
+      .then(res => res.json())
+      .then(config => {
+        setAuthConfig(config);
+        return fetchWithAuth('/api/auth/me');
+      })
+      .then(async res => {
+        if (res && res.ok) {
+          const userData = await res.json();
+          setUser(userData);
+          localStorage.setItem('ridge_user', JSON.stringify(userData));
+        } else if (res && res.status === 401) {
+          setUser(null);
+          localStorage.removeItem('ridge_user');
+        }
+      })
+      .catch(err => {
+        console.warn('Auth check error:', err);
+      });
+  }, []);
+
+  const handleLogout = async () => {
+    try {
+      await fetchWithAuth('/api/auth/logout', { method: 'POST' });
+    } catch (e) {}
+    localStorage.removeItem('ridge_token');
+    localStorage.removeItem('ridge_user');
+    setUser(null);
+    setIsUserDropdownOpen(false);
+    showToast('Signed out of Ridge', 'info');
+    if (authConfig?.enabled) {
+      setIsAuthModalOpen(true);
+    }
+  };
+
   // Fetch Suggestions & Knowledge Stats (Only hits API/cache; updates local storage)
   const fetchSuggestionsAndStats = async (forceRefresh = false) => {
     try {
       const [sugRes, statRes] = await Promise.all([
-        fetch(`/api/suggestions${forceRefresh ? '?force=true' : ''}`),
-        fetch('/api/stats')
+        fetchWithAuth(`/api/suggestions${forceRefresh ? '?force=true' : ''}`),
+        fetchWithAuth('/api/stats')
       ]);
-      const sugData = await sugRes.json();
-      const statData = await statRes.json();
-      if (!sugData.empty && sugData.suggestions?.length > 0) {
-        setSuggestions(sugData.suggestions);
-        localStorage.setItem('ridge_cached_suggestions', JSON.stringify(sugData.suggestions));
+      if (sugRes.ok) {
+        const sugData = await sugRes.json();
+        if (!sugData.empty && sugData.suggestions?.length > 0) {
+          setSuggestions(sugData.suggestions);
+          localStorage.setItem('ridge_cached_suggestions', JSON.stringify(sugData.suggestions));
+        }
       }
-      setStats(statData);
-      localStorage.setItem('ridge_cached_stats', JSON.stringify(statData));
+      if (statRes.ok) {
+        const statData = await statRes.json();
+        setStats(statData);
+        localStorage.setItem('ridge_cached_stats', JSON.stringify(statData));
+      }
     } catch (e) {
       console.error('Failed to fetch stats/suggestions:', e);
     }
@@ -376,7 +494,7 @@ export default function App() {
     setExpandedThinking(prev => ({ ...prev, [assistantId]: true }));
 
     try {
-      const response = await fetch('/ask', {
+      const response = await fetchWithAuth('/ask', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ question: userMessage.content })
@@ -450,12 +568,12 @@ export default function App() {
         const formData = new FormData();
         formData.append('file', selectedFile);
 
-        response = await fetch('/upload', {
+        response = await fetchWithAuth('/upload', {
           method: 'POST',
           body: formData
         });
       } else {
-        response = await fetch('/ingest', {
+        response = await fetchWithAuth('/ingest', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ text_or_url: ingestInput.trim() })
@@ -832,6 +950,65 @@ export default function App() {
                     <Trash2 size={16} />
                   </button>
                 </>
+              )}
+            </div>
+
+            {/* User Profile / Auth Action */}
+            <div className="navbar-divider" />
+            <div className="nav-group-user">
+              {user && !user.is_guest ? (
+                <div className="user-capsule-container" ref={userDropdownRef}>
+                  <button 
+                    className="user-profile-capsule"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setIsUserDropdownOpen(prev => !prev);
+                    }}
+                    title={user.name || user.username}
+                    aria-label="User profile menu"
+                    type="button"
+                  >
+                    {user.avatar_url ? (
+                      <img src={user.avatar_url} alt={user.name || user.username} className="user-avatar-img" />
+                    ) : (
+                      <div className="user-avatar-placeholder">
+                        {(user.name || user.username || 'C').charAt(0).toUpperCase()}
+                      </div>
+                    )}
+                    <span className="user-capsule-name">{(user.name || user.username || 'Climber').split(' ')[0]}</span>
+                    <ChevronDown size={13} className={`dropdown-caret ${isUserDropdownOpen ? 'open' : ''}`} />
+                  </button>
+
+                  {isUserDropdownOpen && (
+                    <div className="user-dropdown-menu" onClick={e => e.stopPropagation()}>
+                      <div className="user-dropdown-header">
+                        <div className="dropdown-user-name">{user.name || user.username}</div>
+                        <div className="dropdown-user-email">{user.email}</div>
+                        <div className="dropdown-user-provider">
+                          <span className={`provider-badge ${user.provider || 'local'}`}>
+                            {user.provider === 'local' ? 'Local Account' : user.provider}
+                          </span>
+                        </div>
+                      </div>
+                      <div className="dropdown-divider" />
+                      <button className="dropdown-action-btn logout-btn" onClick={handleLogout} type="button">
+                        <LogOut size={14} />
+                        <span>Sign Out</span>
+                      </button>
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <button 
+                  className="nav-action-pill login-pill"
+                  onClick={() => setIsAuthModalOpen(true)}
+                  title="Sign in or Register"
+                  aria-label="Sign in"
+                  type="button"
+                >
+                  <LogIn size={15} />
+                  <span>Sign In</span>
+                </button>
               )}
             </div>
           </div>
@@ -1614,6 +1791,34 @@ export default function App() {
           </div>
         </div>
       )}
+
+      {/* Authentication Modal (ID + Password Login & Registration) */}
+      <AuthModal
+        isOpen={isAuthModalOpen}
+        onClose={() => setIsAuthModalOpen(false)}
+        onSuccess={(newUser, token) => {
+          localStorage.setItem('ridge_token', token);
+          localStorage.setItem('ridge_user', JSON.stringify(newUser));
+          setUser(newUser);
+          setIsAuthModalOpen(false);
+          showToast(`Welcome, ${newUser.name}`, 'success');
+        }}
+        onGuestContinue={
+          !authConfig?.enabled
+            ? () => {
+                setIsAuthModalOpen(false);
+                setUser({
+                  id: 'guest_climber',
+                  username: 'guest',
+                  name: 'Climber Guest',
+                  email: 'guest@ridge.local',
+                  is_guest: true,
+                  provider: 'guest'
+                });
+              }
+            : undefined
+        }
+      />
 
       {/* Toast Notification */}
       {toast && (
