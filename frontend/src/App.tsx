@@ -46,10 +46,97 @@ import './App.css';
 const cleanMarkdownContent = (content: string) => {
   if (!content) return '';
   return content
+    .replace(/【(\d+)†[^】]*】/g, ' [$1](#cit-$1)')
+    .replace(/【(\d+)】/g, ' [$1](#cit-$1)')
+    .replace(/\[(\d+)\](?!\()/g, '[$1](#cit-$1)')
+    .replace(/【[^】]*】/g, '')
     .replace(/<br\s*\/?>\s*•/gi, '\n- ')
     .replace(/<br\s*\/?>\s*\*/gi, '\n* ')
     .replace(/<br\s*\/?>\s*-/gi, '\n- ')
     .replace(/<br\s*\/?>/gi, '\n\n');
+};
+
+const markdownToReportHtml = (md: string): string => {
+  if (!md) return '';
+
+  // 1. Normalize line endings and strip reasoning tags
+  let text = md.replace(/\r\n/g, '\n').replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
+
+  // 2. Headings (Markdown #, ##, ###)
+  text = text
+    .replace(/^### (.*$)/gim, '<h3 class="report-h3">$1</h3>')
+    .replace(/^## (.*$)/gim, '<h2 class="report-h2">$1</h2>')
+    .replace(/^# (.*$)/gim, '<h1 class="report-h1">$1</h1>');
+
+  // 3. Bold & Italic formatting
+  text = text
+    .replace(/\*\*\*(.*?)\*\*\*/gim, '<strong><em>$1</em></strong>')
+    .replace(/\*\*(.*?)\*\*/gim, '<strong>$1</strong>')
+    .replace(/\*(.*?)\*/gim, '<em>$1</em>')
+    .replace(/___(.*?)___/gim, '<strong><em>$1</em></strong>')
+    .replace(/__(.*?)__/gim, '<strong>$1</strong>')
+    .replace(/_(.*?)_/gim, '<em>$1</em>');
+
+  // 4. Citation badges: [1], [2] or 【1†L1-L4】
+  text = text
+    .replace(/【(\d+)†[^】]*】/gim, '<span class="report-cit-badge">[$1]</span>')
+    .replace(/【(\d+)】/gim, '<span class="report-cit-badge">[$1]</span>')
+    .replace(/【[^】]*】/gim, '')
+    .replace(/\[(\d+)\]/gim, '<span class="report-cit-badge">[$1]</span>');
+
+  // 5. Code blocks & inline code
+  text = text
+    .replace(/```([\w]*)\n([\s\S]*?)```/gim, '<pre class="report-code-block"><code>$2</code></pre>')
+    .replace(/`([^`]+)`/gim, '<code class="report-inline-code">$1</code>');
+
+  // 6. Blockquotes
+  text = text.replace(/^>\s+(.*$)/gim, '<blockquote class="report-blockquote">$1</blockquote>');
+
+  // 7. Parse lists vs paragraphs
+  const rawLines = text.split('\n');
+  const result: string[] = [];
+  let inList = false;
+  let inOrderedList = false;
+
+  for (let i = 0; i < rawLines.length; i++) {
+    const line = rawLines[i].trim();
+    if (!line) {
+      if (inList) { result.push('</ul>'); inList = false; }
+      if (inOrderedList) { result.push('</ol>'); inOrderedList = false; }
+      continue;
+    }
+
+    if (line.startsWith('* ') || line.startsWith('- ') || line.startsWith('• ')) {
+      if (inOrderedList) { result.push('</ol>'); inOrderedList = false; }
+      if (!inList) { result.push('<ul class="report-ul">'); inList = true; }
+      const itemText = line.replace(/^[\*\-•]\s+/, '');
+      result.push(`  <li class="report-li">${itemText}</li>`);
+    } else if (/^\d+\.\s+/.test(line)) {
+      if (inList) { result.push('</ul>'); inList = false; }
+      if (!inOrderedList) { result.push('<ol class="report-ol">'); inOrderedList = true; }
+      const itemText = line.replace(/^\d+\.\s+/, '');
+      result.push(`  <li class="report-li">${itemText}</li>`);
+    } else if (
+      line.startsWith('<h1') || 
+      line.startsWith('<h2') || 
+      line.startsWith('<h3') || 
+      line.startsWith('<pre') ||
+      line.startsWith('<blockquote')
+    ) {
+      if (inList) { result.push('</ul>'); inList = false; }
+      if (inOrderedList) { result.push('</ol>'); inOrderedList = false; }
+      result.push(line);
+    } else {
+      if (inList) { result.push('</ul>'); inList = false; }
+      if (inOrderedList) { result.push('</ol>'); inOrderedList = false; }
+      result.push(`<p class="report-p">${line}</p>`);
+    }
+  }
+
+  if (inList) result.push('</ul>');
+  if (inOrderedList) result.push('</ol>');
+
+  return result.join('\n');
 };
 
 // Symmetrical Mountain Summit & Neural Ridge Emblem
@@ -102,6 +189,7 @@ type ConfidenceMetric = {
     source_trust: string;
     relevant_chunks: number;
     reformulation_loops: number;
+    faithfulness?: string;
   };
 };
 
@@ -216,6 +304,13 @@ export default function App() {
   const [isIngestOpen, setIsIngestOpen] = useState(false);
   const [isExportOpen, setIsExportOpen] = useState(false);
   const [selectedSourceModal, setSelectedSourceModal] = useState<any | null>(null);
+  const [activeCitationHighlight, setActiveCitationHighlight] = useState<string | null>(null);
+  const [hoveredCitation, setHoveredCitation] = useState<{
+    msgId: string;
+    index: number;
+    target?: any;
+    rect: DOMRect;
+  } | null>(null);
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [toast, setToast] = useState<{ msg: string; type: 'success' | 'error' | 'info' } | null>(null);
 
@@ -672,22 +767,34 @@ export default function App() {
             if (dataStr === '[DONE]') continue;
 
             try {
-              const data = JSON.parse(dataStr) as TraceEvent;
+              const data = JSON.parse(dataStr);
 
-              updateCurrentMessages(prev => prev.map(msg => {
-                if (msg.id === assistantId) {
-                  const newMsg = { ...msg };
-                  newMsg.traces = [...(newMsg.traces || []), data];
-                  if (data.answer) {
-                    newMsg.content = data.answer;
+              if (data.type === 'token' && typeof data.token === 'string') {
+                updateCurrentMessages(prev => prev.map(msg => {
+                  if (msg.id === assistantId) {
+                    return {
+                      ...msg,
+                      content: (msg.content || '') + data.token
+                    };
                   }
-                  if (data.confidence) {
-                    newMsg.confidence = data.confidence;
+                  return msg;
+                }));
+              } else {
+                updateCurrentMessages(prev => prev.map(msg => {
+                  if (msg.id === assistantId) {
+                    const newMsg = { ...msg };
+                    newMsg.traces = [...(newMsg.traces || []), data];
+                    if (data.answer) {
+                      newMsg.content = data.answer;
+                    }
+                    if (data.confidence) {
+                      newMsg.confidence = data.confidence;
+                    }
+                    return newMsg;
                   }
-                  return newMsg;
-                }
-                return msg;
-              }));
+                  return msg;
+                }));
+              }
             } catch (e) {
               console.error('Failed to parse SSE payload:', dataStr);
             }
@@ -797,7 +904,337 @@ export default function App() {
     showToast('Conversation cleared');
   };
 
-  const exportConversation = (format: 'md' | 'json') => {
+  const exportConversation = (format: 'md' | 'json' | 'pdf') => {
+    setIsExportOpen(false);
+
+    if (format === 'pdf') {
+      const printDoc = `
+        <!DOCTYPE html>
+        <html>
+          <head>
+            <meta charset="utf-8">
+            <title>Ridge Ascent - ${activeSession.title}</title>
+            <style>
+              @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+              @page {
+                size: A4 portrait;
+                margin: 16mm 14mm;
+              }
+              * { box-sizing: border-box; }
+              body {
+                font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+                color: #0F172A;
+                background: #FFFFFF;
+                padding: 0;
+                max-width: 820px;
+                margin: 0 auto;
+                line-height: 1.6;
+              }
+              .header-banner {
+                border-bottom: 2px solid #E2E8F0;
+                padding-bottom: 14px;
+                margin-bottom: 24px;
+                display: flex;
+                justify-content: space-between;
+                align-items: flex-end;
+              }
+              .brand-title {
+                font-size: 22px;
+                font-weight: 700;
+                color: #0F172A;
+                margin: 0;
+                letter-spacing: -0.02em;
+              }
+              .report-title {
+                font-size: 14px;
+                color: #64748B;
+                margin: 4px 0 0 0;
+                font-weight: 500;
+              }
+              .report-date {
+                font-size: 11px;
+                color: #94A3B8;
+                font-family: monospace;
+              }
+              .message-block {
+                margin-bottom: 28px;
+              }
+              .user-msg {
+                background: #F8FAFC;
+                border-left: 4px solid #0284C7;
+                padding: 12px 16px;
+                border-radius: 0 8px 8px 0;
+                margin-bottom: 16px;
+                page-break-inside: avoid;
+              }
+              .user-label {
+                font-size: 10.5px;
+                font-weight: 700;
+                text-transform: uppercase;
+                letter-spacing: 0.06em;
+                color: #0284C7;
+                margin-bottom: 4px;
+              }
+              .user-content {
+                font-size: 14.5px;
+                font-weight: 600;
+                color: #0F172A;
+              }
+              .assistant-msg {
+                padding: 0 4px 22px 4px;
+                border-bottom: 1px solid #E2E8F0;
+              }
+              .assistant-label {
+                display: flex;
+                align-items: center;
+                gap: 10px;
+                font-size: 11px;
+                font-weight: 700;
+                text-transform: uppercase;
+                letter-spacing: 0.05em;
+                color: #0F172A;
+                margin-bottom: 12px;
+                page-break-inside: avoid;
+              }
+              .confidence-pill {
+                font-size: 10px;
+                padding: 2px 8px;
+                border-radius: 10px;
+                font-weight: 600;
+                background: #ECFDF5;
+                color: #059669;
+                border: 1px solid #A7F3D0;
+                text-transform: none;
+                letter-spacing: normal;
+              }
+              .confidence-pill.medium {
+                background: #EFF6FF;
+                color: #0284C7;
+                border-color: #BAE6FD;
+              }
+              .confidence-pill.low {
+                background: #FFFBEB;
+                color: #D97706;
+                border-color: #FDE68A;
+              }
+              .assistant-content {
+                font-size: 13.5px;
+                color: #1E293B;
+                line-height: 1.65;
+              }
+              .report-h1 {
+                font-size: 17px;
+                font-weight: 700;
+                color: #0F172A;
+                margin: 18px 0 8px 0;
+                letter-spacing: -0.01em;
+              }
+              .report-h2 {
+                font-size: 14.5px;
+                font-weight: 700;
+                color: #0F172A;
+                margin: 16px 0 6px 0;
+                border-bottom: 1px solid #F1F5F9;
+                padding-bottom: 4px;
+              }
+              .report-h3 {
+                font-size: 13.5px;
+                font-weight: 600;
+                color: #1E293B;
+                margin: 12px 0 4px 0;
+              }
+              .report-p {
+                margin: 0 0 10px 0;
+                font-size: 13.5px;
+                line-height: 1.65;
+                color: #1E293B;
+              }
+              .report-ul, .report-ol {
+                margin: 6px 0 12px 0;
+                padding-left: 22px;
+              }
+              .report-li {
+                margin-bottom: 5px;
+                font-size: 13.5px;
+                line-height: 1.55;
+                color: #1E293B;
+              }
+              strong {
+                color: #0F172A;
+                font-weight: 600;
+              }
+              .report-cit-badge {
+                display: inline-flex;
+                align-items: center;
+                justify-content: center;
+                background: #E0F2FE;
+                color: #0369A1;
+                font-family: monospace;
+                font-size: 10.5px;
+                font-weight: 700;
+                padding: 0 4px;
+                border-radius: 3px;
+                border: 1px solid #BAE6FD;
+                margin: 0 2px;
+                line-height: 1.3;
+              }
+              .report-inline-code {
+                font-family: monospace;
+                font-size: 12px;
+                background: #F1F5F9;
+                padding: 1px 4px;
+                border-radius: 3px;
+                color: #0F172A;
+              }
+              .report-code-block {
+                font-family: monospace;
+                font-size: 12px;
+                background: #F8FAFC;
+                border: 1px solid #E2E8F0;
+                border-radius: 6px;
+                padding: 10px 14px;
+                overflow-x: auto;
+                margin: 10px 0;
+                color: #0F172A;
+              }
+              .report-blockquote {
+                border-left: 3px solid #CBD5E1;
+                padding-left: 12px;
+                margin: 10px 0;
+                color: #475569;
+                font-style: italic;
+              }
+              .citations-summary {
+                margin-top: 16px;
+                padding: 12px 14px;
+                background: #F8FAFC;
+                border: 1px solid #E2E8F0;
+                border-radius: 6px;
+                font-size: 12px;
+                page-break-inside: avoid;
+              }
+              .citations-title {
+                font-weight: 700;
+                margin-bottom: 6px;
+                color: #334155;
+                font-size: 12px;
+              }
+              .citation-item {
+                margin-bottom: 4px;
+                color: #475569;
+                font-size: 12px;
+                line-height: 1.4;
+              }
+              .cit-status-pass {
+                color: #059669;
+                font-weight: 600;
+              }
+              .cit-status-fail {
+                color: #DC2626;
+              }
+              .footer-note {
+                margin-top: 36px;
+                text-align: center;
+                font-size: 11px;
+                color: #94A3B8;
+                border-top: 1px solid #E2E8F0;
+                padding-top: 14px;
+                page-break-inside: avoid;
+              }
+            </style>
+          </head>
+          <body>
+            <div class="header-banner">
+              <div>
+                <h1 class="brand-title">🏔️ Ridge Intelligence Report</h1>
+                <p class="report-title">${activeSession.title}</p>
+              </div>
+              <div class="report-date">${new Date().toLocaleString()}</div>
+            </div>
+            ${messages.map(m => {
+              if (m.role === 'user') {
+                return `
+                  <div class="message-block">
+                    <div class="user-msg">
+                      <div class="user-label">User Inquiry</div>
+                      <div class="user-content">${m.content}</div>
+                    </div>
+                  </div>
+                `;
+              } else {
+                const conf = m.confidence;
+                const confHtml = conf ? `
+                  <span class="confidence-pill ${conf.level.toLowerCase()}">
+                    ${conf.score}% Grounded Confidence (${conf.level})
+                  </span>
+                ` : '';
+                
+                const grades = (m.traces || []).reduce((acc: any[], t: any) => {
+                  if (t.doc_grades) acc.push(...t.doc_grades);
+                  return acc;
+                }, []);
+                
+                const citationsHtml = grades.length > 0 ? `
+                  <div class="citations-summary">
+                    <div class="citations-title">Verified Context & Citations (${grades.length} evaluated):</div>
+                    ${grades.map((g: any, i: number) => `
+                      <div class="citation-item">
+                        [${i + 1}] <strong>${g.source ? g.source.split('/').pop() : 'Source Passage'}</strong>
+                        ${g.score === 'yes' ? '<span class="cit-status-pass"> — (Verified Relevant)</span>' : '<span class="cit-status-fail"> — (Filtered Out)</span>'}
+                      </div>
+                    `).join('')}
+                  </div>
+                ` : '';
+
+                return `
+                  <div class="message-block">
+                    <div class="assistant-msg">
+                      <div class="assistant-label">
+                        <span>Ridge CRAG Synthesis</span>
+                        ${confHtml}
+                      </div>
+                      <div class="assistant-content">${markdownToReportHtml(m.content)}</div>
+                      ${citationsHtml}
+                    </div>
+                  </div>
+                `;
+              }
+            }).join('')}
+            <div class="footer-note">
+              Generated by Ridge: High-Performance Corrective RAG Platform
+            </div>
+          </body>
+        </html>
+      `;
+
+      const printFrame = document.createElement('iframe');
+      printFrame.style.position = 'fixed';
+      printFrame.style.right = '0';
+      printFrame.style.bottom = '0';
+      printFrame.style.width = '0';
+      printFrame.style.height = '0';
+      printFrame.style.border = '0';
+      document.body.appendChild(printFrame);
+
+      const frameDoc = printFrame.contentWindow?.document || printFrame.contentDocument;
+      if (frameDoc) {
+        frameDoc.open();
+        frameDoc.write(printDoc);
+        frameDoc.close();
+        setTimeout(() => {
+          printFrame.contentWindow?.focus();
+          printFrame.contentWindow?.print();
+          setTimeout(() => {
+            if (document.body.contains(printFrame)) {
+              document.body.removeChild(printFrame);
+            }
+          }, 4000);
+        }, 350);
+      }
+      showToast('Opening print dialog (Save as PDF)...', 'info');
+      return;
+    }
+
     let content = '';
     let mimeType = 'text/plain';
     let ext = format;
@@ -807,7 +1244,10 @@ export default function App() {
       mimeType = 'application/json';
     } else {
       content = `# Ridge: ${activeSession.title}\nExported on ${new Date().toLocaleString()}\n\n---\n\n` +
-        messages.map(m => `### ${m.role === 'user' ? 'User' : 'Ridge'}\n${m.content}\n\n`).join('\n---\n\n');
+        messages.map(m => {
+          const confidenceText = m.confidence ? `\n> **Grounded Confidence:** ${m.confidence.score}% (${m.confidence.level})\n` : '';
+          return `### ${m.role === 'user' ? 'User' : 'Ridge'}\n${confidenceText}\n${m.content}\n\n`;
+        }).join('\n---\n\n');
     }
 
     const blob = new Blob([content], { type: mimeType });
@@ -817,7 +1257,6 @@ export default function App() {
     a.download = `ridge-${activeSession.id}.${ext}`;
     a.click();
     URL.revokeObjectURL(url);
-    setIsExportOpen(false);
     showToast(`Exported as .${ext}`);
   };
 
@@ -826,8 +1265,8 @@ export default function App() {
     switch (nodeName) {
       case 'retrieve_node':
         return { 
-          title: 'MMR Vector Retrieval', 
-          desc: 'Chroma vector search with MMR diversity', 
+          title: 'Hybrid Retrieval', 
+          desc: 'Dense Chroma HNSW + Sparse BM25 with RRF & FlashRank', 
           icon: <Search size={13} />, 
           color: 'teal' 
         };
@@ -858,6 +1297,13 @@ export default function App() {
           desc: 'Grounded generation from verified context', 
           icon: <Sparkles size={13} />, 
           color: 'summit' 
+        };
+      case 'check_hallucination_node':
+        return { 
+          title: 'Hallucination Auditor', 
+          desc: 'Post-generation grounding and veracity verification', 
+          icon: <ShieldCheck size={13} />, 
+          color: 'moss' 
         };
       default:
         return { 
@@ -1360,6 +1806,44 @@ export default function App() {
                                   </div>
                                 ),
                                 a: ({ href, children, ...props }) => {
+                                  if (href?.startsWith('#cit-')) {
+                                    const citIdx = parseInt(href.replace('#cit-', ''), 10);
+                                    const targetGrade = msgGrades[citIdx - 1];
+                                    return (
+                                      <span
+                                        className="interactive-cit-wrapper"
+                                        onMouseEnter={(e) => {
+                                          const rect = e.currentTarget.getBoundingClientRect();
+                                          setHoveredCitation({
+                                            msgId: msg.id,
+                                            index: citIdx,
+                                            target: targetGrade,
+                                            rect,
+                                          });
+                                        }}
+                                        onMouseLeave={() => setHoveredCitation(null)}
+                                      >
+                                        <button
+                                          type="button"
+                                          className="inline-citation-badge"
+                                          onClick={(e) => {
+                                            e.preventDefault();
+                                            const elem = document.getElementById(`doc-card-${msg.id}-${citIdx}`);
+                                            if (elem) {
+                                              elem.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                                              setActiveCitationHighlight(`${msg.id}-${citIdx}`);
+                                              setTimeout(() => setActiveCitationHighlight(null), 2500);
+                                            } else if (targetGrade) {
+                                              setSelectedSourceModal(targetGrade);
+                                            }
+                                          }}
+                                          title={`Source [${citIdx}]: Click to jump to verified card`}
+                                        >
+                                          {citIdx}
+                                        </button>
+                                      </span>
+                                    );
+                                  }
                                   if (href?.startsWith('file://')) {
                                     const path = href.replace('file://', '');
                                     const fname = path.split('/').pop() || path;
@@ -1415,19 +1899,24 @@ export default function App() {
                             </div>
                             <div className="citations-flex">
                               {msgGrades.map((g: any, idx: number) => {
-                                const fname = g.source ? g.source.split('/').pop() || g.source : `Chunk #${idx + 1}`;
+                                const citNum = idx + 1;
+                                const cardId = `doc-card-${msg.id}-${citNum}`;
+                                const isHighlighted = activeCitationHighlight === `${msg.id}-${citNum}`;
+                                const fname = g.source ? g.source.split('/').pop() || g.source : `Chunk #${citNum}`;
                                 const isRelevant = g.score === 'yes';
+                                const displayTitle = g.breadcrumb ? (g.breadcrumb.split('>').pop()?.trim() || fname) : fname;
                                 return (
                                   <button 
+                                    id={cardId}
                                     key={idx} 
-                                    className={`citation-pill ${isRelevant ? 'relevant' : 'filtered'}`}
+                                    className={`citation-pill ${isRelevant ? 'relevant' : 'filtered'} ${isHighlighted ? 'pulse-highlight' : ''}`}
                                     onClick={() => setSelectedSourceModal(g)}
                                     title="Inspect grader rationale and chunk excerpt"
                                   >
                                     <span className="cit-icon">
                                       {isRelevant ? <Check size={12} className="text-moss" /> : <X size={12} className="text-rust" />}
                                     </span>
-                                    <span className="cit-name">{fname}</span>
+                                    <span className="cit-name">[{citNum}] {displayTitle}</span>
                                     <span className={`cit-verdict ${isRelevant ? 'pass' : 'fail'}`}>
                                       {isRelevant ? 'Verified' : 'Filtered Crux'}
                                     </span>
@@ -1455,6 +1944,11 @@ export default function App() {
                               <span className="meta-chip">
                                 <span className="chip-label">Grader Pass:</span> {msg.confidence.breakdown.grader_consensus}%
                               </span>
+                              {msg.confidence.breakdown.faithfulness && (
+                                <span className="meta-chip">
+                                  <span className="chip-label">Faithfulness:</span> {msg.confidence.breakdown.faithfulness}
+                                </span>
+                              )}
                               {msg.confidence.breakdown.reformulation_loops > 0 && (
                                 <span className="meta-chip">
                                   <span className="chip-label">Query Rewrites:</span> {msg.confidence.breakdown.reformulation_loops}
@@ -2113,6 +2607,11 @@ export default function App() {
                   <span className="choice-title">Markdown Topo (.md)</span>
                   <span className="choice-desc">Formatted document for Obsidian, Notion, or Github</span>
                 </button>
+                <button className="export-choice-card" onClick={() => exportConversation('pdf')}>
+                  <Sparkles size={24} className="text-moss" />
+                  <span className="choice-title">Print / PDF Report</span>
+                  <span className="choice-desc">Formatted research brief ready for print or saving as PDF</span>
+                </button>
                 <button className="export-choice-card" onClick={() => exportConversation('json')}>
                   <Database size={24} className="text-rust" />
                   <span className="choice-title">JSON Ascent (.json)</span>
@@ -2148,13 +2647,58 @@ export default function App() {
                 {selectedSourceModal.source && (
                   <span className="source-uri-tag">{selectedSourceModal.source}</span>
                 )}
+                {selectedSourceModal.breadcrumb && (
+                  <span className="source-uri-tag">{selectedSourceModal.breadcrumb}</span>
+                )}
               </div>
 
               <div className="detail-box">
                 <h4>LLM Grader Rationale:</h4>
                 <p className="rationale-text">{selectedSourceModal.rationale || 'No rationale provided by grader.'}</p>
               </div>
+
+              {selectedSourceModal.text && (
+                <div className="detail-box" style={{ marginTop: '12px' }}>
+                  <h4>Source Passage Excerpt:</h4>
+                  <pre style={{ 
+                    fontFamily: 'var(--font-mono)', 
+                    fontSize: '0.75rem', 
+                    whiteSpace: 'pre-wrap', 
+                    background: 'var(--recall-surface)', 
+                    padding: '10px', 
+                    borderRadius: '6px', 
+                    border: '1px solid var(--recall-border)',
+                    maxHeight: '180px',
+                    overflowY: 'auto'
+                  }}>
+                    {selectedSourceModal.text}
+                  </pre>
+                </div>
+              )}
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Floating Citation Hover Preview Popover */}
+      {hoveredCitation && (
+        <div 
+          className="citation-hover-popover"
+          style={{
+            position: 'fixed',
+            top: `${Math.max(10, hoveredCitation.rect.top - 120)}px`,
+            left: `${Math.min(window.innerWidth - 320, Math.max(16, hoveredCitation.rect.left - 100))}px`,
+            zIndex: 9999,
+          }}
+        >
+          <div className="cit-popover-header">
+            <span className="cit-popover-tag">Source [{hoveredCitation.index}]</span>
+            <span className="cit-popover-src">
+              {hoveredCitation.target?.source ? hoveredCitation.target.source.split('/').pop() : 'Verified Passage'}
+            </span>
+          </div>
+          <div className="cit-popover-body">
+            {hoveredCitation.target?.text ? hoveredCitation.target.text.slice(0, 200) + '...' : 'Referenced document passage evaluated and verified by the CRAG pipeline.'}
           </div>
         </div>
       )}

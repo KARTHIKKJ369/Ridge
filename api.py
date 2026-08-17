@@ -124,51 +124,79 @@ async def generate_chat_events(question: str, user: UserProfile) -> AsyncGenerat
     }
 
     try:
-        for event in rag_app.stream(initial_state):
-            node_name = list(event.keys())[0]
-            node_output = event[node_name]
-            
-            trace_data = {
-                "node": node_name,
-                "message": f"Finished node {node_name}",
-            }
-            if "latency_ms" in node_output:
-                trace_data["latency_ms"] = node_output["latency_ms"]
-            
-            if node_name == "retrieve_node":
-                docs = node_output.get("documents", [])
-                trace_data["message"] = f"Retrieved {len(docs)} documents"
-                trace_data["documents"] = docs
-            
-            elif node_name == "grade_node":
-                decision = node_output.get("generation", "unknown")
-                docs = node_output.get("documents", [])
-                trace_data["message"] = f"Grading decision: {decision} ({len(docs)} docs relevant)"
-                trace_data["doc_grades"] = node_output.get("doc_grades", [])
-            
-            elif node_name == "web_search_node":
-                docs = node_output.get("documents", [])
-                trace_data["message"] = f"Performed web search"
-                trace_data["documents"] = docs
+        accumulated_answer = ""
+        async for event in rag_app.astream_events(initial_state, version="v2"):
+            kind = event.get("event")
+            node_name = event.get("metadata", {}).get("langgraph_node")
 
-            elif node_name == "rewrite_node":
-                new_q = node_output.get("question", "")
-                trace_data["message"] = f"Rewrote query to: {new_q}"
-            
-            elif node_name == "generate_node":
-                gen = node_output.get("generation", "")
-                conf = node_output.get("confidence", {})
-                trace_data["message"] = "Generated final answer"
-                trace_data["answer"] = gen
-                if conf:
-                    trace_data["confidence"] = conf
-            
-            yield f"data: {json.dumps(trace_data)}\n\n"
-            
+            # 1. Live token-by-token streaming from ChatGroq during generate_node
+            if kind == "on_chat_model_stream" and node_name == "generate_node":
+                chunk = event.get("data", {}).get("chunk")
+                content = chunk.content if hasattr(chunk, "content") else str(chunk)
+                if content:
+                    accumulated_answer += content
+                    yield f"data: {json.dumps({'type': 'token', 'token': content})}\n\n"
+
+            # 2. Node completion & trace telemetry events
+            elif kind == "on_chain_end" and event.get("name") in [
+                "retrieve_node", "grade_node", "web_search_node",
+                "rewrite_node", "generate_node", "check_hallucination_node"
+            ]:
+                curr_node = event.get("name")
+                output = event.get("data", {}).get("output")
+                if not isinstance(output, dict):
+                    continue
+
+                trace_data = {
+                    "type": "trace",
+                    "node": curr_node,
+                    "message": f"Finished node {curr_node}",
+                }
+                if "latency_ms" in output:
+                    trace_data["latency_ms"] = output["latency_ms"]
+
+                if curr_node == "retrieve_node":
+                    docs = output.get("documents", [])
+                    trace_data["message"] = f"Retrieved {len(docs)} documents"
+                    trace_data["documents"] = docs
+
+                elif curr_node == "grade_node":
+                    decision = output.get("generation", "unknown")
+                    docs = output.get("documents", [])
+                    trace_data["message"] = f"Grading decision: {decision} ({len(docs)} docs relevant)"
+                    trace_data["doc_grades"] = output.get("doc_grades", [])
+
+                elif curr_node == "web_search_node":
+                    docs = output.get("documents", [])
+                    trace_data["message"] = f"Performed web search"
+                    trace_data["documents"] = docs
+
+                elif curr_node == "rewrite_node":
+                    new_q = output.get("question", "")
+                    trace_data["message"] = f"Rewrote query to: {new_q}"
+
+                elif curr_node == "generate_node":
+                    gen = output.get("generation", "")
+                    conf = output.get("confidence", {})
+                    trace_data["message"] = "Generated final answer"
+                    trace_data["answer"] = gen
+                    if conf:
+                        trace_data["confidence"] = conf
+
+                elif curr_node == "check_hallucination_node":
+                    h_grade = output.get("hallucination_grade", {})
+                    conf = output.get("confidence", {})
+                    trace_data["message"] = f"Hallucination audit: {h_grade.get('grounded', 'yes')}"
+                    trace_data["hallucination_grade"] = h_grade
+                    if conf:
+                        trace_data["confidence"] = conf
+
+                yield f"data: {json.dumps(trace_data)}\n\n"
+
     except Exception as e:
         logger.error(f"Error during streaming: {e}")
         yield f"data: {json.dumps({'error': str(e)})}\n\n"
-        
+
     yield "data: [DONE]\n\n"
 
 

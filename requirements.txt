@@ -16,6 +16,7 @@ pydantic>=2.10.0
 sentence-transformers>=5.7.0
 flashrank>=0.2.10
 chromadb>=0.6.0
+rank-bm25>=0.2.2
 
 # ------------------------------------------------------------------------------
 # Web Search & Scraper Tools

@@ -42,25 +42,46 @@ def heading_lines(metadata: dict) -> list[str]:
     return [metadata[key] for key in ("h1", "h2", "h3") if metadata.get(key)]
 
 
+def breadcrumb_string(metadata: dict) -> str:
+    parts = []
+    source = metadata.get("source")
+    if source:
+        src_name = source.split("/")[-1] if not is_url(source) else source
+        parts.append(src_name)
+    for key in ("h1", "h2", "h3"):
+        val = metadata.get(key)
+        if val:
+            clean = clean_heading(str(val))
+            if clean and clean not in parts:
+                parts.append(clean)
+    return " > ".join(parts) if parts else ""
+
+
 def format_section(section: Document, source: str) -> Document:
-    page_content = "\n".join(heading_lines(section.metadata) + [section.page_content]).strip()
     metadata = {"source": source, **section.metadata}
+    breadcrumb = breadcrumb_string(metadata)
+    if breadcrumb:
+        metadata["breadcrumb"] = breadcrumb
+    page_content = "\n".join(heading_lines(section.metadata) + [section.page_content]).strip()
     return Document(page_content=page_content, metadata=metadata)
 
 
 def ensure_chunk_has_headings(chunk: Document) -> Document:
-    headings = heading_lines(chunk.metadata)
-    if not headings:
-        return chunk
+    meta = dict(chunk.metadata)
+    breadcrumb = breadcrumb_string(meta)
+    if breadcrumb:
+        meta["breadcrumb"] = breadcrumb
+    
+    headings = heading_lines(meta)
+    prefix_header = f"[Context: {breadcrumb}]" if breadcrumb else ""
+    
+    content = chunk.page_content
+    if prefix_header and not content.startswith("[Context:"):
+        content = f"{prefix_header}\n{content}"
+    elif headings and not any(content.startswith(h) for h in headings):
+        content = "\n".join(headings + [content]).strip()
 
-    first_heading = headings[0]
-    if chunk.page_content.startswith(first_heading):
-        return chunk
-
-    return Document(
-        page_content="\n".join(headings + [chunk.page_content]).strip(),
-        metadata=chunk.metadata,
-    )
+    return Document(page_content=content, metadata=meta)
 
 
 def _sub_chunk(sections: list[Document], size: int, overlap: int) -> list[Document]:

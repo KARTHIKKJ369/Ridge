@@ -122,7 +122,7 @@ def run_benchmark():
     for tc in test_cases:
         res = evaluate_test_case(app, tc)
         results.append(res)
-        time.sleep(1)
+        time.sleep(2.5)
 
     # Compute Summary Statistics
     total_cases = len(results)

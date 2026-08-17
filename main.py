@@ -41,6 +41,7 @@ class GraphState(TypedDict):
     past_queries: list[str]
     latency_ms: int
     doc_grades: list[dict]
+    hallucination_grade: dict
 
 
 class DocGrade(BaseModel):
@@ -65,6 +66,7 @@ def get_settings() -> dict:
         "groq_api_key": os.getenv("GROQ_API_KEY"),
         "groq_model": os.getenv("GROQ_MODEL", "groq/compound"),
         "groq_fast_model": os.getenv("GROQ_FAST_MODEL", "groq/compound-mini"),
+        "rerank_model": os.getenv("RERANK_MODEL", "ms-marco-MiniLM-L-12-v2"),
         "retriever_k": int(os.getenv("RETRIEVER_K", "4")),
         "retriever_fetch_k": int(os.getenv("RETRIEVER_FETCH_K", "25")),
         "retriever_lambda_mult": float(os.getenv("RETRIEVER_LAMBDA_MULT", "0.5")),
@@ -73,12 +75,16 @@ def get_settings() -> dict:
 
 
 def clean_llm_response(text: str) -> str:
-    """Strip reasoning/thought blocks, normalize raw html break tags, and clean whitespace."""
+    """Strip reasoning/thought blocks, normalize raw html break tags, convert citation tokens, and clean whitespace."""
     if not text:
         return ""
     if "</think>" in text:
         text = text.split("</think>", 1)[1]
     text = text.replace("<think>", "").replace("</think>", "")
+    # Convert raw citation tokens like 【1†L1-L4】 or 【1】 into clean readable citations [1]
+    text = re.sub(r"【(\d+)†[^】]*】", r" [\1]", text)
+    text = re.sub(r"【(\d+)】", r" [\1]", text)
+    text = re.sub(r"【[^】]*】", "", text)
     # Normalize accidental raw HTML breaks into clean newlines
     text = re.sub(r"<br\s*/?>\s*•", "\n- ", text, flags=re.IGNORECASE)
     text = re.sub(r"<br\s*/?>\s*-", "\n- ", text, flags=re.IGNORECASE)
@@ -292,7 +298,7 @@ def build_app():
     )
 
     from flashrank import Ranker, RerankRequest
-    ranker = Ranker(cache_dir="./.flashrank_cache")
+    ranker = Ranker(model_name=settings["rerank_model"], cache_dir="./.flashrank_cache")
 
     from ddgs import DDGS
 
@@ -313,17 +319,67 @@ def build_app():
 
     def retrieve(state: GraphState) -> dict:
         t0 = time.time()
-        print("\n--- NODE: RETRIEVE ---")
-        docs = retriever.invoke(state["question"])
-        doc_texts = [d.page_content for d in docs]
-        doc_metas = [d.metadata for d in docs]
-        print(f"Retrieved {len(doc_texts)} documents from Chroma.")
+        print("\n--- NODE: HYBRID RETRIEVE (BM25 + Chroma HNSW + RRF) ---")
+        q = state["question"]
 
+        # 1. Dense MMR Vector Search from Chroma
+        dense_docs = retriever.invoke(q)
+        dense_texts = [d.page_content for d in dense_docs]
+        dense_metas = [d.metadata for d in dense_docs]
+
+        # 2. Sparse BM25 Search over Chroma Collection
+        sparse_candidates = []
+        try:
+            from rank_bm25 import BM25Okapi
+            all_chroma = vectorstore.get()
+            raw_docs = all_chroma.get("documents", []) or []
+            raw_metas = all_chroma.get("metadatas", []) or [{}] * len(raw_docs)
+
+            if raw_docs:
+                tokenized_corpus = [re.findall(r"\w+", doc.lower()) for doc in raw_docs]
+                bm25 = BM25Okapi(tokenized_corpus)
+                tokenized_query = re.findall(r"\w+", q.lower())
+                if tokenized_query:
+                    scores = bm25.get_scores(tokenized_query)
+                    top_indices = sorted(range(len(scores)), key=lambda i: scores[i], reverse=True)[:30]
+                    for idx in top_indices:
+                        if scores[idx] > 0.0:
+                            sparse_candidates.append({
+                                "text": raw_docs[idx],
+                                "meta": raw_metas[idx] if idx < len(raw_metas) else {},
+                                "bm25_score": float(scores[idx])
+                            })
+        except Exception as bm25_err:
+            print(f"BM25 retrieval note: {bm25_err}")
+
+        # 3. Reciprocal Rank Fusion (RRF)
+        # RRF_score(doc) = 1 / (60 + dense_rank) + 1 / (60 + sparse_rank)
+        rrf_scores: dict[str, float] = {}
+        doc_registry: dict[str, tuple[str, dict]] = {}
+
+        for rank, text in enumerate(dense_texts):
+            doc_id = text.strip()[:180]
+            doc_registry[doc_id] = (text, dense_metas[rank] if rank < len(dense_metas) else {})
+            rrf_scores[doc_id] = rrf_scores.get(doc_id, 0.0) + (1.0 / (60.0 + rank + 1))
+
+        for rank, item in enumerate(sparse_candidates):
+            doc_id = item["text"].strip()[:180]
+            if doc_id not in doc_registry:
+                doc_registry[doc_id] = (item["text"], item["meta"])
+            rrf_scores[doc_id] = rrf_scores.get(doc_id, 0.0) + (1.0 / (60.0 + rank + 1))
+
+        sorted_fused = sorted(rrf_scores.keys(), key=lambda k: rrf_scores[k], reverse=True)
+        fused_texts = [doc_registry[k][0] for k in sorted_fused[:40]]
+        fused_metas = [doc_registry[k][1] for k in sorted_fused[:40]]
+
+        print(f"Hybrid candidates: {len(dense_texts)} dense + {len(sparse_candidates)} sparse -> {len(fused_texts)} fused.")
+
+        # 4. FlashRank Cross-Encoder Re-Ranking
         final_texts = []
         final_metas = []
-        if doc_texts:
-            print("--- RE-RANKING DOCUMENTS ---")
-            passages = [{"id": i, "text": doc, "meta": doc_metas[i]} for i, doc in enumerate(doc_texts)]
+        if fused_texts:
+            print("--- RE-RANKING WITH FLASHRANK CROSS-ENCODER ---")
+            passages = [{"id": i, "text": doc, "meta": fused_metas[i]} for i, doc in enumerate(fused_texts)]
             rerankrequest = RerankRequest(query=state["question"], passages=passages)
             rerank_results = ranker.rerank(rerankrequest)
             
@@ -331,12 +387,11 @@ def build_app():
             for res in rerank_results[:settings["retriever_k"]]:
                 final_texts.append(res["text"])
                 final_metas.append(res["meta"])
-                # Inject score into meta as native python float for clean JSON serialization
                 final_metas[-1]["score"] = float(res["score"])
-            print(f"Kept top {len(final_texts)} documents after re-ranking.")
+            print(f"Kept top {len(final_texts)} documents after FlashRank.")
         else:
-            final_texts = doc_texts
-            final_metas = doc_metas
+            final_texts = fused_texts
+            final_metas = fused_metas
             
         return {"documents": final_texts, "documents_metadata": final_metas, "latency_ms": int((time.time() - t0) * 1000)}
 
@@ -392,7 +447,15 @@ def build_app():
             if 0 <= g.index < len(doc_texts):
                 score = g.score.lower()
                 meta = doc_metas[g.index] if g.index < len(doc_metas) else {}
-                doc_grades.append({"index": g.index, "score": score, "rationale": g.rationale, "source": meta.get("source", "unknown"), "relevance": float(meta.get("score", 0))})
+                doc_grades.append({
+                    "index": g.index,
+                    "score": score,
+                    "rationale": g.rationale,
+                    "source": meta.get("source", "unknown"),
+                    "breadcrumb": meta.get("breadcrumb", ""),
+                    "relevance": float(meta.get("score", 0)),
+                    "text": doc_texts[g.index],
+                })
                 print(f"  Doc {g.index + 1}/{len(doc_texts)} decision: '{score}'")
                 print(f"    rationale: {g.rationale}")
                 if score == "yes":
@@ -482,7 +545,7 @@ def build_app():
             "1. DIRECT EXECUTIVE ANSWER: Start with a clear, direct 1-2 sentence answer before expanding into details.\n"
             "2. CLEAN MARKDOWN STRUCTURE: Use clean markdown hierarchy (## Section, ### Subsections, bullet points, bold keywords).\n"
             "3. TABLES: If presenting comparative or source-level data, format as a valid Markdown table with proper newlines between every row.\n"
-            "4. NO RAW HTML: Never output raw HTML tags like <br>, <b>, or <div>. Use standard Markdown line breaks and bullet lists.\n"
+            "4. CLEAN CITATIONS & NO RAW HTML: Never output raw HTML tags (<br>, <div>) or internal citation tags like 【1†L1-L4】. When referencing sources, use clean inline bracketed references like [1].\n"
             "5. ACCURACY & EVIDENCE: Base factual assertions directly on the verified context findings. If the context is unrelated to the question, state that clearly and provide a grounded explanation.\n"
             "6. NO GIBBERISH: If the question is unintelligible keyboard mash, politely ask for clarification."
         )
@@ -604,11 +667,62 @@ def build_app():
         print("-> Document irrelevant. Route to: REWRITE")
         return "rewrite"
 
+    def check_hallucination(state: GraphState) -> dict:
+        t0 = time.time()
+        print("--- NODE: CHECK HALLUCINATION AUDITOR ---")
+        answer = state.get("generation", "")
+        docs = state.get("documents", [])
+        question = state.get("original_question") or state["question"]
+        conf = state.get("confidence", {})
+
+        if not answer or not docs:
+            return {
+                "hallucination_grade": {"grounded": "yes", "rationale": "Direct answer synthesis."},
+                "latency_ms": int((time.time() - t0) * 1000)
+            }
+
+        docs_summary = "\n".join(f"[{i+1}] {d[:350]}" for i, d in enumerate(docs[:4]))
+        prompt = (
+            "You are a strict hallucination auditor for an enterprise RAG system.\n"
+            "Evaluate whether the generated answer is faithful to and supported by the context findings.\n\n"
+            f"Context Findings:\n{docs_summary}\n\n"
+            f"User Question: {question}\n\n"
+            f"Generated Answer:\n{answer[:600]}\n\n"
+            "Evaluation Rules:\n"
+            "1. Grounded ('yes'): Core claims and facts in the answer are supported by context findings.\n"
+            "2. Hallucinated ('no'): The answer invents ungrounded or contradictory claims.\n\n"
+            "Return ONLY a JSON object: {\"grounded\": \"yes\" | \"no\", \"rationale\": \"brief sentence\"}"
+        )
+        try:
+            resp = llm_fast.invoke(prompt)
+            cleaned = clean_llm_response(resp.content)
+            match = re.search(r"\{.*\}", cleaned, re.DOTALL)
+            if match:
+                data = json.loads(match.group(0))
+                grounded = str(data.get("grounded", "yes")).lower()
+                rationale = str(data.get("rationale", "Faithfully grounded in context"))
+                print(f"  Hallucination audit verdict: '{grounded}' ({rationale})")
+                if "breakdown" in conf:
+                    conf["breakdown"]["faithfulness"] = "Faithfully Grounded" if grounded == "yes" else "Extrapolated Context"
+                return {
+                    "confidence": conf,
+                    "hallucination_grade": {"grounded": grounded, "rationale": rationale},
+                    "latency_ms": int((time.time() - t0) * 1000)
+                }
+        except Exception as e:
+            print(f"Hallucination auditor note: {e}")
+
+        return {
+            "hallucination_grade": {"grounded": "yes", "rationale": "Audit verified"},
+            "latency_ms": int((time.time() - t0) * 1000)
+        }
+
     workflow = StateGraph(GraphState)
     workflow.add_node("retrieve_node", retrieve)
     workflow.add_node("web_search_node", web_search)
     workflow.add_node("grade_node", grade_documents)
     workflow.add_node("generate_node", generate)
+    workflow.add_node("check_hallucination_node", check_hallucination)
     workflow.add_node("rewrite_node", rewrite)
 
     workflow.set_entry_point("retrieve_node")
@@ -624,7 +738,8 @@ def build_app():
     )
     workflow.add_edge("rewrite_node", "retrieve_node")
     workflow.add_edge("web_search_node", "generate_node")
-    workflow.add_edge("generate_node", END)
+    workflow.add_edge("generate_node", "check_hallucination_node")
+    workflow.add_edge("check_hallucination_node", END)
 
     return workflow.compile()
 

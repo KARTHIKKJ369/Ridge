@@ -3311,3 +3311,168 @@ textarea:focus-visible,
   background-color: var(--recall-accent);
   color: #FFFFFF;
 }
+
+/* ==============================================================================
+   Phase 1 & 6: Interactive Citations, Tooltips & Print Suite
+   ============================================================================== */
+
+/* Inline Clickable Citation Badge */
+.inline-citation-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  margin: 0 2px;
+  border-radius: 4px;
+  background: var(--recall-surface-elevated);
+  border: 1px solid var(--recall-border);
+  color: var(--recall-accent);
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  font-weight: 700;
+  line-height: 1;
+  vertical-align: 2px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+}
+
+.inline-citation-badge:hover {
+  background: var(--recall-accent);
+  color: #FFFFFF;
+  border-color: var(--recall-accent);
+  transform: translateY(-1px) scale(1.08);
+  box-shadow: 0 2px 6px rgba(14, 165, 233, 0.35);
+}
+
+/* Pulse Highlight on Target Citation Card */
+.citation-pill.pulse-highlight {
+  animation: citationPulse 2.5s cubic-bezier(0.4, 0, 0.6, 1) forwards;
+  border-color: var(--recall-accent) !important;
+  background: var(--recall-accent-subtle) !important;
+}
+
+@keyframes citationPulse {
+  0% {
+    box-shadow: 0 0 0 0 rgba(14, 165, 233, 0.7);
+    transform: scale(1.04);
+  }
+  30% {
+    box-shadow: 0 0 0 8px rgba(14, 165, 233, 0);
+    transform: scale(1.02);
+  }
+  60% {
+    box-shadow: 0 0 0 12px rgba(14, 165, 233, 0);
+  }
+  100% {
+    box-shadow: none;
+    transform: scale(1);
+  }
+}
+
+/* Hover Source Preview Popover */
+.citation-hover-popover {
+  width: 290px;
+  max-width: 90vw;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--recall-surface-elevated);
+  border: 1px solid var(--recall-border);
+  box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.35), 0 8px 10px -6px rgba(0, 0, 0, 0.2);
+  backdrop-filter: blur(12px);
+  pointer-events: none;
+  animation: popoverFadeIn 0.15s ease-out;
+}
+
+@keyframes popoverFadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.cit-popover-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 6px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--recall-border);
+}
+
+.cit-popover-tag {
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  font-weight: 700;
+  color: var(--recall-accent);
+  background: var(--recall-accent-subtle);
+  padding: 1px 5px;
+  border-radius: 3px;
+}
+
+.cit-popover-src {
+  font-size: 0.72rem;
+  color: var(--recall-text-muted);
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cit-popover-body {
+  font-size: 0.75rem;
+  line-height: 1.4;
+  color: var(--recall-text-secondary);
+  display: -webkit-box;
+  -webkit-line-clamp: 4;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* Clean Printable PDF Layout */
+@media print {
+  html, body, #root, .recall-app, .main-stage-wrapper, .conversation-viewport, .messages-thread {
+    height: auto !important;
+    min-height: auto !important;
+    overflow: visible !important;
+    position: static !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    background: #FFFFFF !important;
+    color: #0F172A !important;
+    padding: 0 !important;
+    margin: 0 !important;
+  }
+  .recall-sidebar,
+  .recall-top-bar,
+  .recall-input-container,
+  .quick-prompts-row,
+  .message-action-footer,
+  .thinking-toggle-bar,
+  .recall-toast-container,
+  .recall-modal-backdrop,
+  .citation-hover-popover,
+  button {
+    display: none !important;
+  }
+  .message-container {
+    page-break-inside: avoid;
+    border-bottom: 1px solid #E2E8F0;
+    padding-bottom: 16px;
+    margin-bottom: 16px;
+  }
+  .recall-markdown-body {
+    color: #1E293B !important;
+  }
+  .recall-markdown-body h1,
+  .recall-markdown-body h2,
+  .recall-markdown-body h3 {
+    color: #0F172A !important;
+  }
+}
