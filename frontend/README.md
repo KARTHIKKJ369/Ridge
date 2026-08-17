@@ -1,32 +1,23 @@
-# React + TypeScript + Vite
+# 🏔️ Ridge · Alpine UI Client
 
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
+React 19 + Vite + TypeScript frontend interface for the Ridge Corrective RAG (CRAG) system.
 
-Currently, two official plugins are available:
+## 🎨 Features
+- **Alpine 2026 Design System**: Custom climbing-inspired palettes (*Stone & Summit*, *Chalk & Void*, *Rust & Ridge*).
+- **Real-Time Ascent Trace Drawer**: Side-by-side observability drawer displaying execution steps, grader rationales, and latency telemetry.
+- **SSE Streaming Integration**: Low-latency Server-Sent Events stream for token-by-token answer generation and confidence scoring.
+- **Knowledge Crag Manager**: Ingest documents (PDF, Word, PPTX, Excel, Code, Images via OCR) and web URLs.
+- **Auth Modal**: Integrated JWT session management with PBKDF2 authentication.
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+## 🚀 Development Setup
 
-## React Compiler
+```bash
+# Install dependencies
+npm install
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+# Start Vite dev server with proxy to backend
+npm run dev
 
-## Expanding the Oxlint configuration
-
-If you are developing a production application, we recommend enabling type-aware lint rules by installing `oxlint-tsgolint` and editing `.oxlintrc.json`:
-
-```json
-{
-  "$schema": "./node_modules/oxlint/configuration_schema.json",
-  "plugins": ["react", "typescript", "oxc"],
-  "options": {
-    "typeAware": true
-  },
-  "rules": {
-    "react/rules-of-hooks": "error",
-    "react/only-export-components": ["warn", { "allowConstantExport": true }]
-  }
-}
+# Build production bundle
+npm run build
 ```
-
-See the [Oxlint rules documentation](https://oxc.rs/docs/guide/usage/linter/rules) for the full list of rules and categories.

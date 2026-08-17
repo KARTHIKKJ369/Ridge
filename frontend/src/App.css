@@ -917,16 +917,39 @@ textarea:focus-visible,
 .recall-markdown-body h2,
 .recall-markdown-body h3,
 .recall-markdown-body h4 {
-  font-family: var(--font-serif);
   font-weight: 600;
   color: var(--recall-text-primary);
-  margin-top: 1.2em;
-  margin-bottom: 0.5em;
-  line-height: 1.3;
+  margin-top: 1.4em;
+  margin-bottom: 0.6em;
+  line-height: 1.35;
+  letter-spacing: -0.015em;
+}
+
+.recall-markdown-body h1 {
+  font-size: 1.35rem;
+  border-bottom: 1px solid var(--recall-border);
+  padding-bottom: 0.3em;
+}
+
+.recall-markdown-body h2 {
+  font-size: 1.18rem;
+  border-bottom: 1px solid var(--recall-border-subtle);
+  padding-bottom: 0.25em;
+}
+
+.recall-markdown-body h3 {
+  font-size: 1.05rem;
+}
+
+.recall-markdown-body h4 {
+  font-size: 0.95rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--recall-text-secondary);
 }
 
 .recall-markdown-body p {
-  margin-bottom: 0.9em;
+  margin-bottom: 0.85em;
 }
 
 .recall-markdown-body p:last-child {
@@ -934,26 +957,89 @@ textarea:focus-visible,
 }
 
 .recall-markdown-body strong {
-  color: var(--recall-accent);
+  color: var(--recall-text-primary);
   font-weight: 600;
+}
+
+.recall-markdown-body hr {
+  border: none;
+  border-top: 1px solid var(--recall-border);
+  margin: 1.4em 0;
 }
 
 .recall-markdown-body ul, 
 .recall-markdown-body ol {
-  margin-left: 20px;
+  margin-left: 1.4em;
   margin-bottom: 0.9em;
+  padding-left: 0.2em;
 }
 
 .recall-markdown-body li {
+  margin-bottom: 0.35em;
+  line-height: 1.6;
+}
+
+.recall-markdown-body li > ul,
+.recall-markdown-body li > ol {
+  margin-top: 0.3em;
   margin-bottom: 0.3em;
 }
 
 .recall-markdown-body blockquote {
-  border-left: 3px solid var(--color-5);
-  padding-left: 14px;
-  margin: 12px 0;
+  border-left: 3px solid var(--recall-accent);
+  background: var(--recall-surface-subtle);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  padding: 10px 14px;
+  margin: 14px 0;
   color: var(--recall-text-secondary);
-  font-style: italic;
+  font-size: 0.92rem;
+}
+
+/* --- GitHub Flavored Markdown Tables --- */
+.markdown-table-wrapper {
+  width: 100%;
+  overflow-x: auto;
+  margin: 1.1em 0;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--recall-border);
+  background: var(--recall-surface-subtle);
+  -webkit-overflow-scrolling: touch;
+}
+
+.recall-markdown-body table {
+  width: 100%;
+  border-collapse: collapse;
+  text-align: left;
+  font-size: 0.88rem;
+  line-height: 1.5;
+}
+
+.recall-markdown-body thead {
+  background: var(--recall-surface-elevated);
+  border-bottom: 1px solid var(--recall-border);
+}
+
+.recall-markdown-body th {
+  padding: 10px 14px;
+  font-weight: 600;
+  color: var(--recall-text-primary);
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+
+.recall-markdown-body td {
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--recall-border-subtle);
+  color: var(--recall-text-primary);
+  vertical-align: top;
+}
+
+.recall-markdown-body tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.recall-markdown-body tbody tr:hover {
+  background: var(--recall-surface-hover);
 }
 
 .recall-markdown-body pre {
@@ -973,7 +1059,7 @@ textarea:focus-visible,
   font-size: 0.85em;
   background-color: var(--recall-surface-subtle);
   border: 1px solid var(--recall-border);
-  padding: 2px 5px;
+  padding: 2px 6px;
   border-radius: var(--radius-xs);
   color: var(--recall-text-primary);
 }

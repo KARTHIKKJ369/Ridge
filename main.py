@@ -63,22 +63,26 @@ def get_settings() -> dict:
         "chroma_dir": os.getenv("CHROMA_DIR", "./chroma_db"),
         # Primary synthesis model & Fast model for grading/suggestions/rewrite
         "groq_api_key": os.getenv("GROQ_API_KEY"),
-        "groq_model": os.getenv("GROQ_MODEL", "qwen/qwen3.6-27b"),
-        "groq_fast_model": os.getenv("GROQ_FAST_MODEL", "qwen/qwen3.6-27b"),
-        "retriever_k": int(os.getenv("RETRIEVER_K", "5")),
-        "retriever_fetch_k": int(os.getenv("RETRIEVER_FETCH_K", "15")),
+        "groq_model": os.getenv("GROQ_MODEL", "groq/compound"),
+        "groq_fast_model": os.getenv("GROQ_FAST_MODEL", "groq/compound-mini"),
+        "retriever_k": int(os.getenv("RETRIEVER_K", "4")),
+        "retriever_fetch_k": int(os.getenv("RETRIEVER_FETCH_K", "25")),
         "retriever_lambda_mult": float(os.getenv("RETRIEVER_LAMBDA_MULT", "0.5")),
         "max_rewrite_loops": int(os.getenv("MAX_REWRITE_LOOPS", "1")),
     }
 
 
 def clean_llm_response(text: str) -> str:
-    """Strip reasoning/thought blocks and whitespace from LLM response."""
+    """Strip reasoning/thought blocks, normalize raw html break tags, and clean whitespace."""
     if not text:
         return ""
     if "</think>" in text:
         text = text.split("</think>", 1)[1]
     text = text.replace("<think>", "").replace("</think>", "")
+    # Normalize accidental raw HTML breaks into clean newlines
+    text = re.sub(r"<br\s*/?>\s*•", "\n- ", text, flags=re.IGNORECASE)
+    text = re.sub(r"<br\s*/?>\s*-", "\n- ", text, flags=re.IGNORECASE)
+    text = re.sub(r"<br\s*/?>", "\n\n", text, flags=re.IGNORECASE)
     return text.strip()
 
 
@@ -295,15 +299,16 @@ def build_app():
     llm_fast = ChatGroq(
         api_key=settings["groq_api_key"],
         model_name=settings["groq_fast_model"],
-        temperature=0.1,
-        max_tokens=2048,
+        temperature=0.0,
+        max_tokens=900,
         max_retries=2,
     )
     llm_generate = ChatGroq(
         api_key=settings["groq_api_key"],
         model_name=settings["groq_model"],
-        temperature=0,
-        max_retries=0,  # Fail instantly on rate-limit to trigger immediate fallback
+        temperature=0.1,
+        max_tokens=800,
+        max_retries=1,
     )
 
     def retrieve(state: GraphState) -> dict:
@@ -347,7 +352,7 @@ def build_app():
             return {"generation": "no", "documents": [], "documents_metadata": [], "doc_grades": [], "latency_ms": int((time.time() - t0) * 1000)}
 
         docs_str = "\n".join(
-            f"--- Document {i} ---\n{doc}\n" for i, doc in enumerate(doc_texts)
+            f"--- Document {i} ---\n{doc[:450].strip()}\n" for i, doc in enumerate(doc_texts[:4])
         )
 
         prompt = (
@@ -356,10 +361,10 @@ def build_app():
             f"User Question: {question}\n\n"
             f"Retrieved Documents:\n{docs_str}\n\n"
             "Evaluation Rules:\n"
-            "1. GIBBERISH / NOISE FILTER: If the user question is random characters, keyboard mash, or nonsensical gibberish (e.g. 'euhygvdvg vbhsd', 'asdfghjkl'), you MUST score 'no' for all documents with rationale 'Question is gibberish/unintelligible'.\n"
-            "2. IDENTITY & PROFILE QUESTIONS: If the question asks 'who is [Name]' or asks about a person, and the document contains their resume, biography, education, contact info, or background, score 'yes'.\n"
-            "3. TECHNICAL CONCEPTS: If the question asks about a method, algorithm, concept, or technical subject, score 'yes' if the document discusses or defines it.\n"
-            "4. UNRELATED DOCUMENTS: Score 'no' if the document is on a completely different subject with no bearing on the question.\n\n"
+            "1. GIBBERISH / NOISE FILTER: If the user question is random characters or nonsensical gibberish (e.g. 'euhygvdvg vbhsd'), you MUST score 'no' for all documents.\n"
+            "2. IDENTITY & PROFILE QUESTIONS: If the question asks about a person, and the document contains their resume or background, score 'yes'.\n"
+            "3. TECHNICAL CONCEPTS: If the question asks about a method or algorithm, score 'yes' if the document discusses it.\n"
+            "4. UNRELATED DOCUMENTS: Score 'no' if the document is on a completely different subject.\n\n"
             "Return ONLY a valid JSON object matching this schema:\n"
             '{"grades": [{"index": 0, "rationale": "...", "score": "yes" | "no"}]}'
         )
@@ -409,7 +414,7 @@ def build_app():
         docs = state.get("documents", [])
         doc_grades = state.get("doc_grades", [])
         loop_count = state.get("loop_count", 0)
-        context = "\n\n".join(docs).strip()
+        context = "\n\n".join(f"[{i+1}] {doc[:750].strip()}" for i, doc in enumerate(docs[:4])).strip()
 
         print(f"  Total context length: {len(context)} chars")
 
@@ -469,15 +474,17 @@ def build_app():
         }
 
         prompt = (
-            "You are Ridge, an expert AI assistant.\n"
-            "Answer the user's question clearly.\n\n"
+            "You are Ridge, an advanced AI research assistant.\n"
+            "Synthesize a well-structured, authoritative, and cleanly formatted answer to the user's question based on the provided context.\n\n"
             f"Context findings:\n{context or 'No local document match found.'}\n\n"
             f"Question: {question}\n\n"
-            "Guidelines:\n"
-            "1. If the question is random keystrokes or nonsensical gibberish (e.g. 'euhygvdvg vbhsd'), politely state that the input is unintelligible, and ask for clarification or a rephrased query.\n"
-            "2. If verified context from indexed documents or web search is provided, synthesize the facts thoroughly with technical precision.\n"
-            "3. If context is empty or unrelated, provide a comprehensive, direct explanation of the requested topic using your verified knowledge, mentioning that it was synthesized outside the indexed documents.\n"
-            "4. Format your response with clean markdown headings, bullet points, and code/formulas where helpful."
+            "Formatting & Quality Rules:\n"
+            "1. DIRECT EXECUTIVE ANSWER: Start with a clear, direct 1-2 sentence answer before expanding into details.\n"
+            "2. CLEAN MARKDOWN STRUCTURE: Use clean markdown hierarchy (## Section, ### Subsections, bullet points, bold keywords).\n"
+            "3. TABLES: If presenting comparative or source-level data, format as a valid Markdown table with proper newlines between every row.\n"
+            "4. NO RAW HTML: Never output raw HTML tags like <br>, <b>, or <div>. Use standard Markdown line breaks and bullet lists.\n"
+            "5. ACCURACY & EVIDENCE: Base factual assertions directly on the verified context findings. If the context is unrelated to the question, state that clearly and provide a grounded explanation.\n"
+            "6. NO GIBBERISH: If the question is unintelligible keyboard mash, politely ask for clarification."
         )
 
         # Primary Model with instant fast model fallback on rate-limit
@@ -565,7 +572,7 @@ def build_app():
                 results = list(ddgs.text(search_query, max_results=3))
                 for r in results:
                     title = r.get("title", "Web Source")
-                    body = r.get("body", "")
+                    body = r.get("body", "")[:450].strip()
                     href = r.get("href", "")
                     if body:
                         docs_snippets.append(f"--- Web Source: {title} ({href}) ---\n{body}")

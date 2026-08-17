@@ -38,8 +38,19 @@ import {
   Code
 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
+import rehypeRaw from 'rehype-raw';
 import { AuthModal } from './components/AuthModal';
 import './App.css';
+
+const cleanMarkdownContent = (content: string) => {
+  if (!content) return '';
+  return content
+    .replace(/<br\s*\/?>\s*•/gi, '\n- ')
+    .replace(/<br\s*\/?>\s*\*/gi, '\n* ')
+    .replace(/<br\s*\/?>\s*-/gi, '\n- ')
+    .replace(/<br\s*\/?>/gi, '\n\n');
+};
 
 // Symmetrical Mountain Summit & Neural Ridge Emblem
 const RidgeLogo = ({ size = 22, className = '' }: { size?: number; className?: string }) => (
@@ -1340,7 +1351,14 @@ export default function App() {
                         {msg.content ? (
                           <div className="recall-markdown-body">
                             <ReactMarkdown
+                              remarkPlugins={[remarkGfm]}
+                              rehypePlugins={[rehypeRaw]}
                               components={{
+                                table: ({ children, ...props }) => (
+                                  <div className="markdown-table-wrapper">
+                                    <table {...props}>{children}</table>
+                                  </div>
+                                ),
                                 a: ({ href, children, ...props }) => {
                                   if (href?.startsWith('file://')) {
                                     const path = href.replace('file://', '');
@@ -1374,7 +1392,7 @@ export default function App() {
                                 }
                               }}
                             >
-                              {msg.content}
+                              {cleanMarkdownContent(msg.content)}
                             </ReactMarkdown>
                           </div>
                         ) : (

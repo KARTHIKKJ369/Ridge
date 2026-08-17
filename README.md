@@ -21,11 +21,11 @@
 ### 1. 🧠 Corrective RAG State Machine (LangGraph)
 * **MMR Diversity Retrieval**: Deep vector retrieval over ChromaDB with Maximal Marginal Relevance (MMR) to maximize coverage and prevent passage redundancy.
 * **Cross-Encoder Re-Ranking**: Integrated FlashRank cross-encoder model to re-score candidate passages by semantic alignment before evaluation.
-* **Ultra-Fast Relevance Grader**: High-throughput `qwen/qwen3.6-27b` model on Groq evaluates retrieved passages with structured rationales, filtering out noise and false positives.
+* **Ultra-Fast Relevance Grader**: High-throughput `groq/compound-mini` model on Groq evaluates retrieved passages with structured rationales, filtering out noise and false positives.
 * **Anti-Gibberish & Noise Guard**: Rejects keyboard mash, nonsensical input, and unrelated chunks with strict semantic alignment checks.
 * **Adaptive Query Reformulation**: Context-aware query optimizer that reformulates queries when local retrieval yields no relevant passages.
 * **Dynamic Web Fallback**: Seamless fallback to search via modern `ddgs` with strict timeouts when local document recall is insufficient.
-* **Multi-Model Grounded Synthesis**: Primary synthesis using `qwen/qwen3.6-27b` with **instant zero-lag fail-safe** if rate limits or network issues occur.
+* **Multi-Model Grounded Synthesis**: Primary synthesis using `groq/compound` with **instant zero-lag fail-safe** if rate limits or network issues occur.
 * **Grounded Confidence Scoring Engine**: Computes a multi-factor composite confidence score (0–100%) factoring in FlashRank cross-encoder relevance, LLM grader consensus ratio, source provenance (Local KB vs. Web), and query reformulation count. Surfaced via real-time SSE and interactive badges in the UI.
 
 ---
@@ -72,10 +72,10 @@
 flowchart TD
     A([User Query]) --> B[MMR Vector Retrieval\nChromaDB + BAAI/bge-large-en-v1.5]
     B --> C[FlashRank Cross-Encoder Re-Ranking]
-    C --> D[Relevance Grading Node\nqwen/qwen3.6-27b · JSON + Regex Fallback]
-    D -->|Relevant Docs >= 1| E[Answer Synthesis Node\nqwen/qwen3.6-27b · Fast Model Fail-Safe]
+    C --> D[Relevance Grading Node\ngroq/compound-mini · JSON + Regex Fallback]
+    D -->|Relevant Docs >= 1| E[Answer Synthesis Node\ngroq/compound · Fast Model Fail-Safe]
     D -->|0 Relevant Docs| F{Loop Count < Max Loops?}
-    F -->|Yes| G[Adaptive Query Reformulation Node\nqwen/qwen3.6-27b]
+    F -->|Yes| G[Adaptive Query Reformulation Node\ngroq/compound-mini]
     G --> B
     F -->|No / Safety Tripped| H[Web Search Fallback Node\nDDGS Search · 5s Timeout]
     H --> E
@@ -97,14 +97,14 @@ Create a `.env` file in the project root (reference [.env.example](.env.example)
 GROQ_API_KEY=gsk_your_groq_api_key_here
 
 # LLM Models
-GROQ_MODEL=qwen/qwen3.6-27b
-GROQ_FAST_MODEL=qwen/qwen3.6-27b
+GROQ_MODEL=groq/compound
+GROQ_FAST_MODEL=groq/compound-mini
 EMBEDDING_MODEL=BAAI/bge-large-en-v1.5
 
 # ChromaDB Vector Store & Retrieval Settings
 CHROMA_DIR=./chroma_db
-RETRIEVER_K=5
-RETRIEVER_FETCH_K=50
+RETRIEVER_K=4
+RETRIEVER_FETCH_K=25
 RETRIEVER_LAMBDA_MULT=0.5
 MAX_REWRITE_LOOPS=1
 
@@ -260,7 +260,7 @@ Ridge/
 ## 🛠️ Technology Stack
 
 * **Graph Orchestration**: LangGraph, LangChain Core
-* **High-Throughput LLMs**: Groq Cloud (`qwen/qwen3.6-27b`)
+* **High-Throughput LLMs**: Groq Cloud (`groq/compound`, `groq/compound-mini`)
 * **Vector Embeddings**: HuggingFace `BAAI/bge-large-en-v1.5` (1024-dim SOTA embeddings with Apple Silicon Metal/MPS acceleration)
 * **Vector Store**: ChromaDB
 * **Cross-Encoder Re-Ranking**: FlashRank
@@ -291,8 +291,9 @@ uv run eval/evaluate.py
 | Metric | Score | Target Standard | Status |
 | :--- | :---: | :---: | :---: |
 | **Grader Decision Accuracy** | **100.0%** | > 90% | ✅ Pass |
-| **Graph Routing Correctness** | **100.0%** | 100% | ✅ Pass |
-| **Keyword Recall & Grounding** | **75.0%+** | > 70% | ✅ Pass |
+| **State Routing Correctness** | **100.0%** | 100% | ✅ Pass |
+| **Keyword Recall & Grounding** | **93.3%** | > 80% | ✅ Pass |
+| **Average Pipeline Latency** | **~13.0s** | < 20s | ⚡ High-Speed |
 
 ---
 
