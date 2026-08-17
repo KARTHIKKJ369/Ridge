@@ -42,6 +42,7 @@ rag_app = build_app()
 
 class ChatRequest(BaseModel):
     question: str
+    web_search_enabled: bool = True
 
 class IngestRequest(BaseModel):
     text_or_url: str
@@ -111,10 +112,11 @@ def logout():
 # Corrective RAG Chat & Knowledge Ingestion Endpoints (Protected)
 # ---------------------------------------------------------------------------
 
-async def generate_chat_events(question: str, user: UserProfile) -> AsyncGenerator[str, None]:
+async def generate_chat_events(question: str, user: UserProfile, web_search_enabled: bool = True) -> AsyncGenerator[str, None]:
     initial_state = {
         "question": question,
         "original_question": question,
+        "web_search_enabled": web_search_enabled,
         "documents": [],
         "documents_metadata": [],
         "generation": "",
@@ -168,8 +170,9 @@ async def generate_chat_events(question: str, user: UserProfile) -> AsyncGenerat
 
                 elif curr_node == "web_search_node":
                     docs = output.get("documents", [])
-                    trace_data["message"] = f"Performed web search"
+                    trace_data["message"] = f"Performed web search ({len(docs)} sources retrieved)"
                     trace_data["documents"] = docs
+                    trace_data["doc_grades"] = output.get("doc_grades", [])
 
                 elif curr_node == "rewrite_node":
                     new_q = output.get("question", "")
@@ -203,7 +206,7 @@ async def generate_chat_events(question: str, user: UserProfile) -> AsyncGenerat
 @app.post("/ask")
 async def ask_question(req: ChatRequest, user: UserProfile = Depends(get_current_user)):
     return StreamingResponse(
-        generate_chat_events(req.question, user),
+        generate_chat_events(req.question, user, req.web_search_enabled),
         media_type="text/event-stream"
     )
 

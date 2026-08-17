@@ -33,6 +33,7 @@ DEFAULT_QUESTION = "What is task decomposition in LLM agents?"
 class GraphState(TypedDict):
     question: str
     original_question: str
+    web_search_enabled: bool
     documents: list[str]
     documents_metadata: list[dict]
     generation: str
@@ -481,6 +482,34 @@ def build_app():
 
         print(f"  Total context length: {len(context)} chars")
 
+        # CRAG Strict Grounding Guard: When no verified documents exist and web fallback is disabled/empty
+        if not docs:
+            print("  [CRAG Guard] No relevant documents found and external web search is disabled/empty.")
+            no_context_answer = (
+                "## Direct Answer\n\n"
+                "I could not find any relevant information in your indexed documents to answer this question, "
+                "and **Web Search Fallback is currently disabled**.\n\n"
+                "### Recommended Actions:\n"
+                "* **Enable Web Fallback**: Toggle **Web fallback: ON** in the toolbar to search and verify live external sources.\n"
+                "* **Upload Knowledge**: Ingest or upload relevant files (PDF, DOCX, TXT, MD) into your local knowledge crag."
+            )
+            confidence_data = {
+                "score": 15,
+                "level": "LOW",
+                "breakdown": {
+                    "grader_consensus": 0.0,
+                    "source_trust": "No Context Available (Web Search OFF)",
+                    "relevant_chunks": 0,
+                    "reformulation_loops": loop_count,
+                    "faithfulness": "Direct Fallback Guard"
+                }
+            }
+            return {
+                "generation": no_context_answer,
+                "confidence": confidence_data,
+                "latency_ms": int((time.time() - t0) * 1000)
+            }
+
         # --- COMPUTE COMPOSITE GROUNDED CONFIDENCE METRIC ---
         # 1. Grader Consensus Ratio (35% weight)
         yes_count = sum(1 for g in doc_grades if g.get("score") == "yes")
@@ -629,27 +658,36 @@ def build_app():
         search_query = state.get("original_question") or state["question"]
         print(f"--- NODE: WEB SEARCH: '{search_query}' ---")
         
-        docs_snippets = []
+        web_docs = []
+        web_doc_grades = []
+        web_metadata = []
         try:
-            with DDGS(timeout=5) as ddgs:
+            with DDGS(timeout=6) as ddgs:
                 results = list(ddgs.text(search_query, max_results=3))
-                for r in results:
+                for i, r in enumerate(results):
                     title = r.get("title", "Web Source")
                     body = r.get("body", "")[:450].strip()
                     href = r.get("href", "")
                     if body:
-                        docs_snippets.append(f"--- Web Source: {title} ({href}) ---\n{body}")
+                        web_docs.append(f"Web Source [{i+1}]: {title} ({href})\n{body}")
+                        web_doc_grades.append({
+                            "index": i + 1,
+                            "source": f"{title} ({href})",
+                            "score": "yes",
+                            "rationale": f"Live search result from DuckDuckGo: {title}",
+                            "text": body,
+                            "breadcrumb": "Web Search Fallback"
+                        })
+                        web_metadata.append({"source": href, "title": title, "type": "web"})
         except Exception as e:
             print(f"Web search note: {e}")
             
-        if docs_snippets:
-            web_results = "\n\n".join(docs_snippets)
-        else:
-            web_results = "No direct web snippets returned."
-            
-        current_docs = state.get("documents", [])
-        current_docs.append(f"Web Search Findings:\n{web_results}")
-        return {"documents": current_docs, "latency_ms": int((time.time() - t0) * 1000)}
+        return {
+            "documents": web_docs,
+            "doc_grades": web_doc_grades,
+            "documents_metadata": web_metadata,
+            "latency_ms": int((time.time() - t0) * 1000)
+        }
 
     def decide_to_generate(state: GraphState) -> str:
         print("--- ROUTER: EVALUATING NEXT STEP ---")
@@ -658,11 +696,16 @@ def build_app():
             print("-> Document matches. Route to: GENERATE")
             return "generate"
 
+        allow_web = state.get("web_search_enabled", True)
         loops = state.get("loop_count", 0)
         max_loops = int(settings.get("max_rewrite_loops", 1))
         if loops >= max_loops:
-            print(f"-> Safety valve tripped after {loops} rewrite attempts. Route to: WEB SEARCH.")
-            return "web_search"
+            if allow_web:
+                print(f"-> Safety valve tripped after {loops} rewrite attempts. Route to: WEB SEARCH.")
+                return "web_search"
+            else:
+                print(f"-> Safety valve tripped after {loops} rewrite attempts. Web fallback disabled by user -> Route to: GENERATE (Direct Local KB).")
+                return "generate"
 
         print("-> Document irrelevant. Route to: REWRITE")
         return "rewrite"
@@ -744,11 +787,13 @@ def build_app():
     return workflow.compile()
 
 
-def run_question(question: str) -> dict:
+def run_question(question: str, web_search_enabled: bool = True) -> dict:
     app = build_app()
     result = app.invoke(
         {
             "question": question,
+            "original_question": question,
+            "web_search_enabled": web_search_enabled,
             "documents": [],
             "documents_metadata": [],
             "generation": "",

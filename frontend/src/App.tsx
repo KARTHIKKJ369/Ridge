@@ -741,7 +741,10 @@ export default function App() {
       const response = await fetchWithAuth('/ask', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ question: userMessage.content }),
+        body: JSON.stringify({ 
+          question: userMessage.content,
+          web_search_enabled: webSearchEnabled 
+        }),
         signal: abortController.signal,
       });
 
@@ -1169,10 +1172,9 @@ export default function App() {
                   </span>
                 ` : '';
                 
-                const grades = (m.traces || []).reduce((acc: any[], t: any) => {
-                  if (t.doc_grades) acc.push(...t.doc_grades);
-                  return acc;
-                }, []);
+                const webSearchTrace = (m.traces || []).find(t => t.node === 'web_search_node' && t.doc_grades && t.doc_grades.length > 0);
+                const gradeTrace = [...(m.traces || [])].reverse().find(t => t.node === 'grade_node' && t.doc_grades && t.doc_grades.length > 0);
+                const grades = webSearchTrace?.doc_grades || gradeTrace?.doc_grades || [];
                 
                 const citationsHtml = grades.length > 0 ? `
                   <div class="citations-summary">
@@ -1320,10 +1322,9 @@ export default function App() {
   const activeTraces = lastAssistantMessage?.traces || [];
   const isCurrentlyStreaming = lastAssistantMessage?.isStreaming;
 
-  const allDocGrades: any[] = activeTraces.reduce<any[]>((acc, trace) => {
-    if (trace.doc_grades) acc.push(...trace.doc_grades);
-    return acc;
-  }, []);
+  const lastWebTrace = activeTraces.find(t => t.node === 'web_search_node' && t.doc_grades && t.doc_grades.length > 0);
+  const lastGradeTrace = [...activeTraces].reverse().find(t => t.node === 'grade_node' && t.doc_grades && t.doc_grades.length > 0);
+  const allDocGrades: any[] = lastWebTrace?.doc_grades || lastGradeTrace?.doc_grades || [];
 
   const totalPipelineLatency = activeTraces.reduce((sum, t) => sum + (t.latency_ms || 0), 0);
 
@@ -1708,10 +1709,9 @@ export default function App() {
               {messages.map((msg) => {
                 const isAssistant = msg.role === 'assistant';
                 const msgTraces = msg.traces || [];
-                const msgGrades: any[] = msgTraces.reduce<any[]>((acc, t) => {
-                  if (t.doc_grades) acc.push(...t.doc_grades);
-                  return acc;
-                }, []);
+                const webSearchTrace = msgTraces.find(t => t.node === 'web_search_node' && t.doc_grades && t.doc_grades.length > 0);
+                const gradeTrace = [...msgTraces].reverse().find(t => t.node === 'grade_node' && t.doc_grades && t.doc_grades.length > 0);
+                const msgGrades: any[] = webSearchTrace?.doc_grades || gradeTrace?.doc_grades || [];
                 const isExpanded = expandedThinking[msg.id] ?? false;
 
                 return (
@@ -1894,31 +1894,42 @@ export default function App() {
                         {isAssistant && msgGrades.length > 0 && (
                           <div className="recall-citations-section">
                             <div className="citations-header">
-                              <BookOpen size={13} className="text-teal" />
-                              <span>Anchored Topo and Grader Verdicts ({msgGrades.length} chunks evaluated)</span>
+                              {msgGrades.some((g: any) => g.breadcrumb === 'Web Search Fallback' || g.source?.startsWith('http')) ? (
+                                <Globe size={13} className="text-amber" />
+                              ) : (
+                                <BookOpen size={13} className="text-teal" />
+                              )}
+                              <span>
+                                {msgGrades.some((g: any) => g.breadcrumb === 'Web Search Fallback' || g.source?.startsWith('http'))
+                                  ? `Live Web Sources (${msgGrades.length} retrieved)`
+                                  : `Anchored Topo & Grader Verdicts (${msgGrades.length} chunks evaluated)`}
+                              </span>
                             </div>
                             <div className="citations-flex">
                               {msgGrades.map((g: any, idx: number) => {
                                 const citNum = idx + 1;
                                 const cardId = `doc-card-${msg.id}-${citNum}`;
                                 const isHighlighted = activeCitationHighlight === `${msg.id}-${citNum}`;
-                                const fname = g.source ? g.source.split('/').pop() || g.source : `Chunk #${citNum}`;
+                                const isWeb = g.breadcrumb === 'Web Search Fallback' || g.source?.startsWith('http') || g.source?.includes('(');
+                                const fname = g.source ? (g.source.split('/').pop() || g.source) : `Chunk #${citNum}`;
                                 const isRelevant = g.score === 'yes';
-                                const displayTitle = g.breadcrumb ? (g.breadcrumb.split('>').pop()?.trim() || fname) : fname;
+                                const displayTitle = isWeb 
+                                  ? (g.source ? g.source.split('(')[0]?.trim() : `Web Source #${citNum}`)
+                                  : (g.breadcrumb ? (g.breadcrumb.split('>').pop()?.trim() || fname) : fname);
                                 return (
                                   <button 
                                     id={cardId}
                                     key={idx} 
                                     className={`citation-pill ${isRelevant ? 'relevant' : 'filtered'} ${isHighlighted ? 'pulse-highlight' : ''}`}
                                     onClick={() => setSelectedSourceModal(g)}
-                                    title="Inspect grader rationale and chunk excerpt"
+                                    title={isWeb ? "Inspect live web source URL and snippet" : "Inspect grader rationale and chunk excerpt"}
                                   >
                                     <span className="cit-icon">
                                       {isRelevant ? <Check size={12} className="text-moss" /> : <X size={12} className="text-rust" />}
                                     </span>
                                     <span className="cit-name">[{citNum}] {displayTitle}</span>
                                     <span className={`cit-verdict ${isRelevant ? 'pass' : 'fail'}`}>
-                                      {isRelevant ? 'Verified' : 'Filtered Crux'}
+                                      {isRelevant ? (isWeb ? 'Web Verified' : 'Verified') : 'Filtered Crux'}
                                     </span>
                                   </button>
                                 );
@@ -2102,13 +2113,18 @@ export default function App() {
 
                 {/* Web Search Fallback Mode Toggle */}
                 <button 
+                  type="button"
                   className={`toolbar-btn fallback-toggle-chip ${webSearchEnabled ? 'active' : ''}`}
-                  onClick={() => setWebSearchEnabled(!webSearchEnabled)}
-                  title={webSearchEnabled ? "Web fallback enabled when knowledge base recall is low" : "Web fallback disabled"}
+                  onClick={() => {
+                    const nextVal = !webSearchEnabled;
+                    setWebSearchEnabled(nextVal);
+                    showToast(nextVal ? 'Web search fallback enabled' : 'Web search fallback disabled (Local KB only)', 'info');
+                  }}
+                  title={webSearchEnabled ? "Web fallback enabled when knowledge base recall is low (click to disable)" : "Web fallback disabled — queries will strictly stay within local documents (click to enable)"}
                   aria-label="Toggle web fallback"
                 >
                   <Globe size={13} className="fallback-globe-icon" />
-                  <span>Web fallback</span>
+                  <span>Web fallback: {webSearchEnabled ? 'ON' : 'OFF'}</span>
                   <span className={`fallback-indicator-dot ${webSearchEnabled ? 'active' : ''}`} />
                 </button>
 
