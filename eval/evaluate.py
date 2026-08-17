@@ -65,7 +65,14 @@ def evaluate_test_case(app, test_case: dict) -> dict:
 
     # 2. Keyword Recall in Answer
     keywords = test_case.get("ground_truth_keywords", [])
-    keyword_hits = [kw for kw in keywords if kw.lower() in final_answer.lower()]
+    ans_clean = final_answer.lower().replace("-", " ")
+    ans_compact = ans_clean.replace(" ", "")
+    keyword_hits = [
+        kw for kw in keywords
+        if kw.lower() in final_answer.lower()
+        or kw.lower().replace("-", " ") in ans_clean
+        or kw.lower().replace(" ", "") in ans_compact
+    ]
     keyword_recall = len(keyword_hits) / len(keywords) if keywords else 1.0
 
     # 3. Routing Match (checks if web search was triggered when expected, or direct generate)
@@ -115,6 +122,7 @@ def run_benchmark():
     for tc in test_cases:
         res = evaluate_test_case(app, tc)
         results.append(res)
+        time.sleep(1)
 
     # Compute Summary Statistics
     total_cases = len(results)

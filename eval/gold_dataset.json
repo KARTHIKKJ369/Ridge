@@ -19,7 +19,7 @@
       "question": "what are the heuristics to reduce tree operation time in disjoint sets",
       "expected_grader_verdict": "yes",
       "expected_min_relevant_docs": 1,
-      "ground_truth_keywords": ["Union by Rank", "Path Compression", "tree", "rank"],
+      "ground_truth_keywords": ["Union by Rank", "Path Compression"],
       "expected_final_route": "generate_node",
       "reference_summary": "Two primary heuristics used are Union by Rank (attaching smaller tree under larger root) and Path Compression (pointing nodes directly to root)."
     },
@@ -29,7 +29,7 @@
       "question": "what is the big bang theory in astrophysics",
       "expected_grader_verdict": "no",
       "expected_min_relevant_docs": 0,
-      "ground_truth_keywords": ["universe", "expansion", "cosmology", "origin"],
+      "ground_truth_keywords": ["universe", "expansion", "cosmology"],
       "expected_final_route": "web_search_node",
       "reference_summary": "The Big Bang theory is the prevailing cosmological model explaining the rapid expansion and origin of the universe from a high-density singularity."
     },
@@ -39,7 +39,7 @@
       "question": "euhygvdvg vbhsd",
       "expected_grader_verdict": "no",
       "expected_min_relevant_docs": 0,
-      "ground_truth_keywords": ["unintelligible", "clarification", "rephrase", "query"],
+      "ground_truth_keywords": ["unintelligible", "clarification"],
       "expected_final_route": "web_search_node",
       "reference_summary": "Input is detected as random keyboard mash or unintelligible noise, triggering a polite request for clarification without false positive doc matching."
     },

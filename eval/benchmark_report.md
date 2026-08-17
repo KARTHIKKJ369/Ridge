@@ -1,6 +1,6 @@
 # 🏔️ Ridge CRAG Benchmark Report
 
-**Generated:** 2026-08-17 01:49:14
+**Generated:** 2026-08-17 18:21:46
 **Dataset:** `Ridge CRAG Standard Evaluation Benchmark` (v1.0.0)
 
 ---
@@ -9,10 +9,10 @@
 
 | Metric | Score | Target Standard | Status |
 | :--- | :---: | :---: | :---: |
-| **Grader Decision Accuracy** | **60.0%** | > 90% | ⚠️ Needs Review |
-| **Average Grounded Recall** | **60.0%** | > 80% | ⚠️ Needs Review |
-| **Graph Routing Correctness** | **60.0%** | 100% | ⚠️ Needs Review |
-| **Average End-to-End Latency** | **36487 ms** | < 4000 ms | ⚡ Accelerated |
+| **Grader Decision Accuracy** | **100.0%** | > 90% | ✅ Pass |
+| **Average Grounded Recall** | **73.3%** | > 80% | ⚠️ Needs Review |
+| **Graph Routing Correctness** | **100.0%** | 100% | ✅ Pass |
+| **Average End-to-End Latency** | **41108 ms** | < 4000 ms | ⚡ Accelerated |
 
 ---
 
@@ -20,11 +20,11 @@
 
 | ID | Category | Question | Steps Executed | Grader Verdict | Keyword Recall | Latency | Status |
 | :--- | :--- | :--- | :--- | :---: | :---: | :---: | :---: |
-| `tc_001` | **in_domain_profile** | *"who is karthik"* | retrieve_node &rarr; grade_node &rarr; rewrite_node &rarr; retrieve_node &rarr; grade_node &rarr; web_search_node &rarr; generate_node | `no` | 0.0% | 4611ms | ⚠️ |
-| `tc_002` | **in_domain_technical** | *"what are the heuristics to reduce tree operation time in disjoint sets"* | retrieve_node &rarr; grade_node &rarr; rewrite_node &rarr; retrieve_node &rarr; grade_node &rarr; web_search_node &rarr; generate_node | `no` | 50.0% | 46296ms | ⚠️ |
-| `tc_003` | **out_of_context_general** | *"what is the big bang theory in astrophysics"* | retrieve_node &rarr; grade_node &rarr; rewrite_node &rarr; retrieve_node &rarr; grade_node &rarr; web_search_node &rarr; generate_node | `no` | 75.0% | 50652ms | ✅ |
-| `tc_004` | **gibberish_filter** | *"euhygvdvg vbhsd"* | retrieve_node &rarr; grade_node &rarr; rewrite_node &rarr; retrieve_node &rarr; grade_node &rarr; web_search_node &rarr; generate_node | `no` | 75.0% | 51953ms | ✅ |
-| `tc_005` | **query_reformulation** | *"dsu optimization algorithms"* | retrieve_node &rarr; grade_node &rarr; generate_node | `yes` | 100.0% | 28924ms | ✅ |
+| `tc_001` | **in_domain_profile** | *"who is karthik"* | retrieve_node &rarr; grade_node &rarr; generate_node | `yes` | 100.0% | 8206ms | ✅ |
+| `tc_002` | **in_domain_technical** | *"what are the heuristics to reduce tree operation time in disjoint sets"* | retrieve_node &rarr; grade_node &rarr; generate_node | `yes` | 100.0% | 27683ms | ✅ |
+| `tc_003` | **out_of_context_general** | *"what is the big bang theory in astrophysics"* | retrieve_node &rarr; grade_node &rarr; rewrite_node &rarr; retrieve_node &rarr; grade_node &rarr; web_search_node &rarr; generate_node | `no` | 66.7% | 70746ms | ✅ |
+| `tc_004` | **gibberish_filter** | *"euhygvdvg vbhsd"* | retrieve_node &rarr; grade_node &rarr; rewrite_node &rarr; retrieve_node &rarr; grade_node &rarr; web_search_node &rarr; generate_node | `no` | 0.0% | 71184ms | ⚠️ |
+| `tc_005` | **query_reformulation** | *"dsu optimization algorithms"* | retrieve_node &rarr; grade_node &rarr; generate_node | `yes` | 100.0% | 27719ms | ✅ |
 
 ---
 

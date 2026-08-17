@@ -7,8 +7,8 @@ langchain-community>=0.4.2
 langchain-chroma>=1.1.0
 langchain-groq>=1.1.3
 langchain-huggingface>=1.2.2
-langchain-openrouter>=0.2.8
 langchain-text-splitters>=1.1.2
+pydantic>=2.10.0
 
 # ------------------------------------------------------------------------------
 # Vector Embeddings, Re-Ranking, & Vector Store
@@ -20,7 +20,7 @@ chromadb>=0.6.0
 # ------------------------------------------------------------------------------
 # Web Search & Scraper Tools
 # ------------------------------------------------------------------------------
-duckduckgo-search>=8.1.1
+ddgs>=9.15.0
 requests>=2.34.2
 httpx>=0.27.0
 beautifulsoup4>=4.15.0
@@ -33,16 +33,12 @@ pypdf>=6.16.1
 python-docx>=1.2.0
 python-pptx>=1.0.2
 openpyxl>=3.1.5
-pillow>=12.3.0
 youtube-transcript-api>=1.2.4
 
 # ------------------------------------------------------------------------------
 # High-Accuracy Embedded OCR Engine (ONNX-Based)
 # ------------------------------------------------------------------------------
 rapidocr-onnxruntime>=1.4.4
-opencv-python>=5.0.0
-shapely>=2.1.2
-pyclipper>=1.4.0
 
 # ------------------------------------------------------------------------------
 # Backend API, Authentication & Session Security

@@ -1,8 +1,34 @@
-recall-env/
-chroma_db/
-.git/
+# Environments & Dependencies
+.venv/
+venv/
+env/
 frontend/node_modules/
-frontend/dist/
-.env
+
+# Version Control & IDE
+.git/
+.gitignore
+.agents/
+.vscode/
+.idea/
+.DS_Store
+
+# Cache & Build Artifacts
 __pycache__/
 *.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.flashrank_cache/
+.cache/
+
+# Local databases & secrets
+.env
+.env.*
+!*.example
+chroma_db/
+users.db
+*.db
+*.sqlite3
+logs/
+.ridge.pids
+suggestions.json

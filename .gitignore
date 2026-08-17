@@ -1,48 +1,81 @@
-# Python
+# ==============================================================================
+# Python & Bytecode Cache
+# ==============================================================================
 __pycache__/
 *.py[cod]
+*$py.class
 *.pyo
 *.pyd
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
 
-# Virtual environments
+# ==============================================================================
+# Virtual Environments & Package Managers
+# ==============================================================================
 .venv/
 venv/
 env/
-recall-env/
+ENV/
+env.bak/
+venv.bak/
 
-# Secrets and local config
+# ==============================================================================
+# Environment Secrets & Local Configs
+# ==============================================================================
 .env
 .env.*
 !.env.example
 
-# Cloudflare Tunnel credentials and certs
+# ==============================================================================
+# Databases & Persistence
+# ==============================================================================
+chroma_db/
+users.db
+*.db
+*.sqlite3
+*.sqlite
+suggestions.json
+
+# ==============================================================================
+# Model Cache & Inference Artifacts
+# ==============================================================================
+.flashrank_cache/
+.cache/
+
+# ==============================================================================
+# Cloudflare Tunnel Credentials & Certificates
+# ==============================================================================
 .cloudflared/
 *.pem
 *.tunnel.json
 
-# Generated vector database (rebuilt at runtime)
-chroma_db/
-
-# FlashRank & Hugging Face model cache
-.flashrank_cache/
-.cache/
-
-# Node & Frontend build
+# ==============================================================================
+# Node.js & React Frontend Build
+# ==============================================================================
 frontend/node_modules/
 frontend/.vite/
 frontend/dist/
+dist/
 
-# OS / Editor noise
+# ==============================================================================
+# Operating System & IDE Artifacts
+# ==============================================================================
 .DS_Store
+.DS_Store?
 ._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
 Thumbs.db
 .vscode/
 .idea/
+*.sublime-project
+*.sublime-workspace
 
-# Logs & Temporary files
+# ==============================================================================
+# Runtime Logs, PIDs & Temp Files
+# ==============================================================================
 *.log
 *.tmp
 logs/

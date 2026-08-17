@@ -9,7 +9,9 @@ This module implements the core LangGraph state graph for Corrective Retrieval-A
   5. Generate: Grounded synthesis across all verified passages.
 """
 
+import json
 import os
+import re
 import sys
 import time
 from typing import Literal
@@ -59,14 +61,74 @@ def get_settings() -> dict:
             "sentence-transformers/all-MiniLM-L6-v2",
         ),
         "chroma_dir": os.getenv("CHROMA_DIR", "./chroma_db"),
-        # Lean/fast model for grading + rewrite (called up to retriever_k times per loop)
+        # Primary synthesis model & Fast model for grading/suggestions/rewrite
         "groq_api_key": os.getenv("GROQ_API_KEY"),
-        "groq_model": os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile"),
+        "groq_model": os.getenv("GROQ_MODEL", "qwen/qwen3.6-27b"),
+        "groq_fast_model": os.getenv("GROQ_FAST_MODEL", "qwen/qwen3.6-27b"),
         "retriever_k": int(os.getenv("RETRIEVER_K", "5")),
         "retriever_fetch_k": int(os.getenv("RETRIEVER_FETCH_K", "15")),
         "retriever_lambda_mult": float(os.getenv("RETRIEVER_LAMBDA_MULT", "0.5")),
         "max_rewrite_loops": int(os.getenv("MAX_REWRITE_LOOPS", "1")),
     }
+
+
+def clean_llm_response(text: str) -> str:
+    """Strip reasoning/thought blocks and whitespace from LLM response."""
+    if not text:
+        return ""
+    if "</think>" in text:
+        text = text.split("</think>", 1)[1]
+    text = text.replace("<think>", "").replace("</think>", "")
+    return text.strip()
+
+
+def extract_batch_grades(raw_text: str, num_docs: int) -> BatchGrades:
+    """Safely extracts BatchGrades from markdown/JSON text output with regex fallback."""
+    raw = clean_llm_response(raw_text)
+    
+    # 1. Try standard JSON decode
+    json_candidate = raw
+    if "```json" in json_candidate:
+        json_candidate = json_candidate.split("```json")[1].split("```")[0]
+    elif "```" in json_candidate:
+        json_candidate = json_candidate.split("```")[1].split("```")[0]
+    
+    match = re.search(r"\{.*\}", json_candidate, re.DOTALL)
+    if match:
+        try:
+            data = json.loads(match.group(0))
+            grades = []
+            for idx, item in enumerate(data.get("grades", [])):
+                doc_idx = int(item.get("index", idx))
+                rationale = str(item.get("rationale", "")).strip()
+                score_val = str(item.get("score", "no")).strip().lower()
+                score = "yes" if score_val in ["yes", "true", "1"] else "no"
+                grades.append(DocGrade(index=doc_idx, rationale=rationale, score=score))
+            if grades:
+                return BatchGrades(grades=grades)
+        except Exception:
+            pass
+
+    # 2. Resilient regex field extraction if JSON has unescaped quotes
+    grades = []
+    items = re.findall(r'\{[^{}]*?"index"[^{}]*?\}', raw, re.DOTALL)
+    for idx, item_str in enumerate(items):
+        idx_match = re.search(r'"index"\s*:\s*(\d+)', item_str)
+        doc_idx = int(idx_match.group(1)) if idx_match else idx
+        
+        score_match = re.search(r'"score"\s*:\s*"(yes|no|true|false|1|0)"', item_str, re.IGNORECASE)
+        score_val = score_match.group(1).lower() if score_match else "no"
+        score = "yes" if score_val in ["yes", "true", "1"] else "no"
+        
+        rat_match = re.search(r'"rationale"\s*:\s*"(.*?)"(?=,\s*"score"|\s*\})', item_str, re.DOTALL)
+        rationale = rat_match.group(1) if rat_match else ""
+        
+        grades.append(DocGrade(index=doc_idx, rationale=rationale, score=score))
+    
+    if grades:
+        return BatchGrades(grades=grades)
+    
+    raise ValueError(f"Could not extract JSON grades: {raw[:150]}")
 
 
 def unload_ollama_model(model_name: str, base_url: str):
@@ -169,35 +231,42 @@ def ingest_document(text_or_url: str, original_filename: str | None = None) -> d
 
 def generate_suggestions(text: str):
     import json
+    import re
     from langchain_groq import ChatGroq
-    from pydantic import BaseModel, Field
-    
-    class Suggestions(BaseModel):
-        questions: list[str] = Field(description="List of exactly 3 natural, concise questions about the document")
     
     settings = get_settings()
     try:
-        # Use ultra-fast llama-3.1-8b-instant (800+ tok/s on Groq) for sub-250ms latency
         llm = ChatGroq(
             api_key=settings["groq_api_key"],
-            model_name="llama-3.1-8b-instant",
+            model_name=settings["groq_fast_model"],
             temperature=0.6,
-            max_tokens=256,
-        ).with_structured_output(Suggestions)
+            max_tokens=1024,
+        )
         
         prompt = (
             "You are an AI assistant. Based on this document excerpt, generate exactly 3 short, insightful questions "
             "that a user would ask about the concepts.\n\n"
-            f"Excerpt:\n{text}\n"
+            f"Excerpt:\n{text}\n\n"
+            "Return ONLY a valid JSON object matching this schema:\n"
+            '{"questions": ["question 1", "question 2", "question 3"]}'
         )
         
-        result = llm.invoke(prompt)
+        resp = llm.invoke(prompt)
+        raw = clean_llm_response(resp.content)
+        if "```json" in raw:
+            raw = raw.split("```json")[1].split("```")[0]
+        elif "```" in raw:
+            raw = raw.split("```")[1].split("```")[0]
         
-        if result and getattr(result, 'questions', None):
-            with open("suggestions.json", "w") as f:
-                json.dump({"suggestions": result.questions}, f)
-            print(f"Ultra-fast generated {len(result.questions)} suggestions.")
-            return result.questions
+        match = re.search(r"\{.*\}", raw, re.DOTALL)
+        if match:
+            data = json.loads(match.group(0))
+            questions = [str(q).strip() for q in data.get("questions", []) if q]
+            if questions:
+                with open("suggestions.json", "w") as f:
+                    json.dump({"suggestions": questions[:3]}, f)
+                print(f"Ultra-fast generated {len(questions[:3])} suggestions.")
+                return questions[:3]
     except Exception as e:
         print(f"Groq suggestions error (using fallback): {e}")
 
@@ -212,7 +281,7 @@ def build_app():
     retriever = vectorstore.as_retriever(
         search_type="mmr",
         search_kwargs={
-            "k": 50, # Fetch more for re-ranking
+            "k": 50,  # Fetch more for re-ranking
             "fetch_k": 100,
             "lambda_mult": settings["retriever_lambda_mult"],
         },
@@ -221,23 +290,21 @@ def build_app():
     from flashrank import Ranker, RerankRequest
     ranker = Ranker(cache_dir="./.flashrank_cache")
 
-    from duckduckgo_search import DDGS
+    from ddgs import DDGS
 
     llm_fast = ChatGroq(
         api_key=settings["groq_api_key"],
-        model_name="llama-3.1-8b-instant",
+        model_name=settings["groq_fast_model"],
         temperature=0.1,
-        max_tokens=256,
-        max_retries=1,
+        max_tokens=2048,
+        max_retries=2,
     )
     llm_generate = ChatGroq(
         api_key=settings["groq_api_key"],
         model_name=settings["groq_model"],
         temperature=0,
-        max_retries=0,  # Fail instantly on rate-limit to trigger immediate 8B fallback
+        max_retries=0,  # Fail instantly on rate-limit to trigger immediate fallback
     )
-    # Fast 8B model for grading - 20,000 TPM limit (prevents 429 rate limits & delivers sub-200ms latency)
-    structured_grader = llm_fast.with_structured_output(BatchGrades)
 
     def retrieve(state: GraphState) -> dict:
         t0 = time.time()
@@ -285,22 +352,24 @@ def build_app():
 
         prompt = (
             "You are an expert relevance evaluator for a technical document retrieval system.\n"
-            "Assess whether the retrieved document is relevant or helpful for answering the user question.\n\n"
+            "Assess whether the retrieved documents are relevant or helpful for answering the user question.\n\n"
             f"User Question: {question}\n\n"
             f"Retrieved Documents:\n{docs_str}\n\n"
             "Evaluation Rules:\n"
             "1. GIBBERISH / NOISE FILTER: If the user question is random characters, keyboard mash, or nonsensical gibberish (e.g. 'euhygvdvg vbhsd', 'asdfghjkl'), you MUST score 'no' for all documents with rationale 'Question is gibberish/unintelligible'.\n"
             "2. IDENTITY & PROFILE QUESTIONS: If the question asks 'who is [Name]' or asks about a person, and the document contains their resume, biography, education, contact info, or background, score 'yes'.\n"
             "3. TECHNICAL CONCEPTS: If the question asks about a method, algorithm, concept, or technical subject, score 'yes' if the document discusses or defines it.\n"
-            "4. UNRELATED DOCUMENTS: Score 'no' if the document is on a completely different subject with no bearing on the question.\n"
-            "Be helpful, practical, and objective."
+            "4. UNRELATED DOCUMENTS: Score 'no' if the document is on a completely different subject with no bearing on the question.\n\n"
+            "Return ONLY a valid JSON object matching this schema:\n"
+            '{"grades": [{"index": 0, "rationale": "...", "score": "yes" | "no"}]}'
         )
 
         result = None
         last_err = None
         for attempt in range(2):
             try:
-                result = structured_grader.invoke(prompt)
+                resp = llm_fast.invoke(prompt)
+                result = extract_batch_grades(resp.content, len(doc_texts))
                 break
             except Exception as e:
                 last_err = e
@@ -405,17 +474,18 @@ def build_app():
             f"Context findings:\n{context or 'No local document match found.'}\n\n"
             f"Question: {question}\n\n"
             "Guidelines:\n"
-            "1. If the question is random keystrokes or nonsensical gibberish (e.g. 'euhygvdvg vbhsd'), politely state that the input is unintelligible and ask for a clear query.\n"
+            "1. If the question is random keystrokes or nonsensical gibberish (e.g. 'euhygvdvg vbhsd'), politely state that the input is unintelligible, and ask for clarification or a rephrased query.\n"
             "2. If verified context from indexed documents or web search is provided, synthesize the facts thoroughly with technical precision.\n"
             "3. If context is empty or unrelated, provide a comprehensive, direct explanation of the requested topic using your verified knowledge, mentioning that it was synthesized outside the indexed documents.\n"
             "4. Format your response with clean markdown headings, bullet points, and code/formulas where helpful."
         )
 
-        # Primary: 70B Model with instant 8B fallback on rate-limit
+        # Primary Model with instant fast model fallback on rate-limit
         try:
             response = llm_generate.invoke(prompt)
+            gen_text = clean_llm_response(response.content)
             return {
-                "generation": response.content,
+                "generation": gen_text,
                 "confidence": confidence_data,
                 "latency_ms": int((time.time() - t0) * 1000)
             }
@@ -423,8 +493,9 @@ def build_app():
             print(f"Primary generation rate-limited or error ({e}). Switching instantly to fast model...")
             try:
                 response = llm_fast.invoke(prompt)
+                gen_text = clean_llm_response(response.content)
                 return {
-                    "generation": response.content,
+                    "generation": gen_text,
                     "confidence": confidence_data,
                     "latency_ms": int((time.time() - t0) * 1000)
                 }
@@ -455,11 +526,21 @@ def build_app():
         new_query = None
         try:
             response = llm_fast.invoke(prompt)
-            new_query = response.content.strip().replace("`", "").replace('"', "").split("\n")[0]
+            cleaned = clean_llm_response(response.content)
+            candidate_lines = []
+            for line in cleaned.split("\n"):
+                line_str = line.strip().replace("`", "").replace('"', "").replace("*", "").replace("#", "")
+                if not line_str:
+                    continue
+                if any(skip_kw in line_str.lower() for skip_kw in ["thinking process", "process:", "analyze", "here's", "<", "search query:", "reformulated:", "user question"]):
+                    continue
+                candidate_lines.append(line_str)
+            if candidate_lines:
+                new_query = candidate_lines[-1]
         except Exception as e:
             print(f"  rewrite attempt failed: {e}")
 
-        if not new_query:
+        if not new_query or len(new_query) < 3 or new_query.startswith("<"):
             new_query = original_q
 
         print(f"New Search Query: '{new_query}'")
@@ -480,11 +561,6 @@ def build_app():
         
         docs_snippets = []
         try:
-            try:
-                from ddgs import DDGS
-            except ImportError:
-                from duckduckgo_search import DDGS
-            
             with DDGS(timeout=5) as ddgs:
                 results = list(ddgs.text(search_query, max_results=3))
                 for r in results:

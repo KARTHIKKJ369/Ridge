@@ -1,10 +1,10 @@
 {
   "summary": {
     "total_cases": 5,
-    "grader_accuracy": 60.0,
-    "avg_keyword_recall": 60.0,
-    "avg_latency_ms": 36487.2,
-    "routing_accuracy": 60.0
+    "grader_accuracy": 100.0,
+    "avg_keyword_recall": 73.34,
+    "avg_latency_ms": 41107.6,
+    "routing_accuracy": 100.0
   },
   "test_cases": [
     {
@@ -14,26 +14,26 @@
       "steps": [
         "retrieve_node",
         "grade_node",
-        "rewrite_node",
-        "retrieve_node",
-        "grade_node",
-        "web_search_node",
         "generate_node"
       ],
-      "total_latency_ms": 4611,
-      "grader_verdict": "no",
+      "total_latency_ms": 8206,
+      "grader_verdict": "yes",
       "expected_grader_verdict": "yes",
-      "grader_correct": false,
-      "keyword_recall": 0.0,
-      "keyword_hits": [],
+      "grader_correct": true,
+      "keyword_recall": 100.0,
+      "keyword_hits": [
+        "Karthik Jayan",
+        "Computer Science",
+        "Engineering"
+      ],
       "keywords_expected": [
         "Karthik Jayan",
         "Computer Science",
         "Engineering"
       ],
-      "routing_correct": false,
-      "final_route": "web_search_node",
-      "answer_preview": "### Introduction to Karthik Since there are no direct web snippets or context findings provided, I will synthesize the information about Karthik using my verified knowledge.  ### Who is Karthik? Karth..."
+      "routing_correct": true,
+      "final_route": "generate_node",
+      "answer_preview": "Based on the provided context, **Karthik Jayan** is a final-year B.Tech Computer Science & Engineering student specializing in Artificial Intelligence, Machine Learning, and backend engineering. Below..."
     },
     {
       "id": "tc_002",
@@ -42,30 +42,24 @@
       "steps": [
         "retrieve_node",
         "grade_node",
-        "rewrite_node",
-        "retrieve_node",
-        "grade_node",
-        "web_search_node",
         "generate_node"
       ],
-      "total_latency_ms": 46296,
-      "grader_verdict": "no",
+      "total_latency_ms": 27683,
+      "grader_verdict": "yes",
       "expected_grader_verdict": "yes",
-      "grader_correct": false,
-      "keyword_recall": 50.0,
+      "grader_correct": true,
+      "keyword_recall": 100.0,
       "keyword_hits": [
-        "Path Compression",
-        "tree"
+        "Union by Rank",
+        "Path Compression"
       ],
       "keywords_expected": [
         "Union by Rank",
-        "Path Compression",
-        "tree",
-        "rank"
+        "Path Compression"
       ],
-      "routing_correct": false,
-      "final_route": "web_search_node",
-      "answer_preview": "**Disjoint Sets and Tree Operations** =====================================  **Understanding Disjoint Sets** -----------------------------  Disjoint sets are a fundamental data structure used in compu..."
+      "routing_correct": true,
+      "final_route": "generate_node",
+      "answer_preview": "To prevent disjoint-set trees from degenerating into linear chains (which would cause $O(N)$ operation times in a naive implementation), two fundamental optimization heuristics are employed:  ### 1. P..."
     },
     {
       "id": "tc_003",
@@ -80,25 +74,23 @@
         "web_search_node",
         "generate_node"
       ],
-      "total_latency_ms": 50652,
+      "total_latency_ms": 70746,
       "grader_verdict": "no",
       "expected_grader_verdict": "no",
       "grader_correct": true,
-      "keyword_recall": 75.0,
+      "keyword_recall": 66.7,
       "keyword_hits": [
         "universe",
-        "expansion",
-        "origin"
+        "expansion"
       ],
       "keywords_expected": [
         "universe",
         "expansion",
-        "cosmology",
-        "origin"
+        "cosmology"
       ],
       "routing_correct": true,
       "final_route": "web_search_node",
-      "answer_preview": "**The Big Bang Theory in Astrophysics** =====================================  ### Overview  The Big Bang Theory is the leading explanation for the origin and evolution of the universe, proposing that..."
+      "answer_preview": "# The Big Bang Theory in Astrophysics  ## Core Definition The Big Bang theory is the prevailing cosmological model that describes the origin, evolution, and large-scale structure of the observable uni..."
     },
     {
       "id": "tc_004",
@@ -113,25 +105,19 @@
         "web_search_node",
         "generate_node"
       ],
-      "total_latency_ms": 51953,
+      "total_latency_ms": 71184,
       "grader_verdict": "no",
       "expected_grader_verdict": "no",
       "grader_correct": true,
-      "keyword_recall": 75.0,
-      "keyword_hits": [
-        "unintelligible",
-        "rephrase",
-        "query"
-      ],
+      "keyword_recall": 0.0,
+      "keyword_hits": [],
       "keywords_expected": [
         "unintelligible",
-        "clarification",
-        "rephrase",
-        "query"
+        "clarification"
       ],
       "routing_correct": true,
       "final_route": "web_search_node",
-      "answer_preview": "# Unintelligible Input  Unfortunately, the input provided, \"euhygvdvg vbhsd,\" appears to be a series of random keystrokes or nonsensical gibberish. I'm unable to understand or interpret this text as a..."
+      "answer_preview": "It appears your message came through as random keystrokes. Could you please clarify or rephrase your question? I'm ready to help as soon as I understand what you're looking for!..."
     },
     {
       "id": "tc_005",
@@ -142,7 +128,7 @@
         "grade_node",
         "generate_node"
       ],
-      "total_latency_ms": 28924,
+      "total_latency_ms": 27719,
       "grader_verdict": "yes",
       "expected_grader_verdict": "yes",
       "grader_correct": true,
@@ -161,7 +147,7 @@
       ],
       "routing_correct": true,
       "final_route": "generate_node",
-      "answer_preview": "**DSU Optimization Algorithms** =====================================  ### Introduction  Disjoint-set union (DSU) is a fundamental data structure used in computer science to manage a set of elements p..."
+      "answer_preview": "# DSU Optimization Algorithms  The Disjoint-Set Union (DSU) or Union-Find data structure efficiently tracks elements partitioned into disjoint subsets. While a naive tree-based representation can dege..."
     }
   ]
 }

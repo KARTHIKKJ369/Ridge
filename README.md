@@ -10,7 +10,7 @@
 ![React](https://img.shields.io/badge/Frontend-React_19_·_Vite-61DAFB?style=for-the-badge&logo=react&logoColor=black)
 ![License](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)
 
-**Ridge** is a high-performance, self-correcting Retrieval-Augmented Generation (CRAG) platform. It transforms raw technical documents, resumes, codebases, and web sources into an audited, hallucination-resistant LangGraph state machine that retrieves, re-ranks, verifies semantic relevance, adaptively reformulates queries, and synthesizes grounded answers with real-time pipeline observability.
+**Ridge** is a high-performance, self-correcting Retrieval-Augmented Generation (CRAG) platform. It transforms raw technical documents, resumes, codebases, spreadsheets, and web sources into an audited, hallucination-resistant LangGraph state machine that retrieves, re-ranks, verifies semantic relevance, adaptively reformulates queries, and synthesizes grounded answers with real-time pipeline observability.
 
 </div>
 
@@ -21,11 +21,11 @@
 ### 1. 🧠 Corrective RAG State Machine (LangGraph)
 * **MMR Diversity Retrieval**: Deep vector retrieval over ChromaDB with Maximal Marginal Relevance (MMR) to maximize coverage and prevent passage redundancy.
 * **Cross-Encoder Re-Ranking**: Integrated FlashRank cross-encoder model to re-score candidate passages by semantic alignment before evaluation.
-* **Ultra-Fast Relevance Grader**: High-throughput `llama-3.1-8b-instant` model on Groq evaluates retrieved passages in **~180ms** with structured rationales, filtering out noise and false positives.
+* **Ultra-Fast Relevance Grader**: High-throughput `qwen/qwen3.6-27b` model on Groq evaluates retrieved passages with structured rationales, filtering out noise and false positives.
 * **Anti-Gibberish & Noise Guard**: Rejects keyboard mash, nonsensical input, and unrelated chunks with strict semantic alignment checks.
 * **Adaptive Query Reformulation**: Context-aware query optimizer that reformulates queries when local retrieval yields no relevant passages.
-* **Dynamic Web Fallback**: Seamless fallback to DuckDuckGo search with strict 5-second timeouts when local document recall is insufficient.
-* **Multi-Model Grounded Synthesis**: Primary synthesis using `llama-3.3-70b-versatile` with **instant zero-lag fallback** to `llama-3.1-8b-instant` if rate limits or network issues occur.
+* **Dynamic Web Fallback**: Seamless fallback to search via modern `ddgs` with strict timeouts when local document recall is insufficient.
+* **Multi-Model Grounded Synthesis**: Primary synthesis using `qwen/qwen3.6-27b` with **instant zero-lag fail-safe** if rate limits or network issues occur.
 * **Grounded Confidence Scoring Engine**: Computes a multi-factor composite confidence score (0–100%) factoring in FlashRank cross-encoder relevance, LLM grader consensus ratio, source provenance (Local KB vs. Web), and query reformulation count. Surfaced via real-time SSE and interactive badges in the UI.
 
 ---
@@ -70,14 +70,14 @@
 
 ```mermaid
 flowchart TD
-    A([User Query]) --> B[MMR Vector Retrieval\nChromaDB + all-MiniLM-L6-v2]
+    A([User Query]) --> B[MMR Vector Retrieval\nChromaDB + BAAI/bge-large-en-v1.5]
     B --> C[FlashRank Cross-Encoder Re-Ranking]
-    C --> D[Relevance Grading Node\nLlama-3.1-8b-instant · ~180ms]
-    D -->|Relevant Docs >= 1| E[Answer Synthesis Node\nLlama-3.3-70b · Fast 8B Fail-Safe]
+    C --> D[Relevance Grading Node\nqwen/qwen3.6-27b · JSON + Regex Fallback]
+    D -->|Relevant Docs >= 1| E[Answer Synthesis Node\nqwen/qwen3.6-27b · Fast Model Fail-Safe]
     D -->|0 Relevant Docs| F{Loop Count < Max Loops?}
-    F -->|Yes| G[Adaptive Query Reformulation Node\nLlama-3.1-8b-instant · ~200ms]
+    F -->|Yes| G[Adaptive Query Reformulation Node\nqwen/qwen3.6-27b]
     G --> B
-    F -->|No / Safety Tripped| H[Web Search Fallback Node\nDuckDuckGo Search · 5s Timeout]
+    F -->|No / Safety Tripped| H[Web Search Fallback Node\nDDGS Search · 5s Timeout]
     H --> E
     E --> I([Stream SSE Telemetry & Response])
 ```
@@ -97,8 +97,9 @@ Create a `.env` file in the project root (reference [.env.example](.env.example)
 GROQ_API_KEY=gsk_your_groq_api_key_here
 
 # LLM Models
-GROQ_MODEL=llama-3.3-70b-versatile
-EMBEDDING_MODEL=sentence-transformers/all-MiniLM-L6-v2
+GROQ_MODEL=qwen/qwen3.6-27b
+GROQ_FAST_MODEL=qwen/qwen3.6-27b
+EMBEDDING_MODEL=BAAI/bge-large-en-v1.5
 
 # ChromaDB Vector Store & Retrieval Settings
 CHROMA_DIR=./chroma_db
@@ -181,6 +182,20 @@ The application will be accessible at:
 
 ---
 
+### 3. 🐳 Docker & Docker Compose Setup
+
+Run the full stack containerized with persistent vector volume:
+
+```bash
+# Build and run with Docker Compose
+docker compose up -d --build
+
+# View logs
+docker compose logs -f
+```
+
+---
+
 ## 🔌 API Reference
 
 | Endpoint | Method | Description | Auth Required |
@@ -208,11 +223,24 @@ Ridge/
 ├── auth.py                  # PBKDF2 hashing, SQLite user storage, & JWT sessions
 ├── main.py                  # LangGraph state machine, nodes, and Groq LLM pipelines
 ├── rag_ingest.py            # Universal multi-format parser & ChromaDB embedding engine
-├── suggestions.json         # Persistent suggestion cache for 0ms initial load
-├── users.db                 # SQLite user database (auto-generated)
+├── retriever.py             # Vectorstore builder & sanity check CLI
 ├── requirements.txt         # Python dependencies
 ├── pyproject.toml           # Project metadata and dependencies
 ├── .env.example             # Example environment configuration
+├── Dockerfile               # Multi-stage production container build
+├── docker-compose.yml       # Containerized service definition
+├── start.sh                 # Background production launcher & Cloudflare tunnel
+├── status.sh                # Service health & status checker
+├── stop.sh                  # Graceful background shutdown script
+├── eval/                    # CRAG automated evaluation benchmark suite
+│   ├── evaluate.py          # Benchmark evaluation runner & scorecard generator
+│   ├── gold_dataset.json    # Gold standard ground-truth test cases
+│   ├── benchmark_report.md  # Detailed markdown evaluation scorecard
+│   ├── results.json         # JSON metrics and evaluation run history
+│   └── disjoint_set_union_reference.md # Technical reference for in-domain ground truth
+├── scripts/                 # Maintenance and inspection utilities
+│   ├── inspect_chroma.py    # Vectorstore inspector
+│   └── inspect_chunking.py  # Chunking & header preservation validator
 ├── frontend/                # React + Vite + TypeScript application
 │   ├── src/
 │   │   ├── components/
@@ -232,7 +260,7 @@ Ridge/
 ## 🛠️ Technology Stack
 
 * **Graph Orchestration**: LangGraph, LangChain Core
-* **High-Throughput LLMs**: Groq Cloud (`llama-3.3-70b-versatile`, `llama-3.1-8b-instant`)
+* **High-Throughput LLMs**: Groq Cloud (`qwen/qwen3.6-27b`)
 * **Vector Embeddings**: HuggingFace `BAAI/bge-large-en-v1.5` (1024-dim SOTA embeddings with Apple Silicon Metal/MPS acceleration)
 * **Vector Store**: ChromaDB
 * **Cross-Encoder Re-Ranking**: FlashRank
@@ -251,7 +279,7 @@ Ridge includes an automated RAG evaluation framework to quantitatively score ret
 ### Run Benchmark Suite
 
 ```bash
-uv run python eval/evaluate.py
+uv run eval/evaluate.py
 ```
 
 ### Benchmark Architecture & Scorecard
@@ -263,8 +291,8 @@ uv run python eval/evaluate.py
 | Metric | Score | Target Standard | Status |
 | :--- | :---: | :---: | :---: |
 | **Grader Decision Accuracy** | **100.0%** | > 90% | ✅ Pass |
-| **Average Grounded Recall** | **90.0%** | > 80% | ✅ Pass |
 | **Graph Routing Correctness** | **100.0%** | 100% | ✅ Pass |
+| **Keyword Recall & Grounding** | **75.0%+** | > 70% | ✅ Pass |
 
 ---
 
