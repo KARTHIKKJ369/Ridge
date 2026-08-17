@@ -1,0 +1,12 @@
+{
+  "HNSW": {
+    "term": "HNSW",
+    "expansion": "Hierarchical Navigable Small World",
+    "source": "sample_doc.md"
+  },
+  "PEAS": {
+    "term": "PEAS",
+    "expansion": "Performance, Environment, Actuators, Sensors",
+    "source": "sample_doc.md"
+  }
+}

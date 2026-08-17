@@ -181,10 +181,13 @@ async def generate_chat_events(question: str, user: UserProfile, web_search_enab
                 elif curr_node == "generate_node":
                     gen = output.get("generation", "")
                     conf = output.get("confidence", {})
+                    conflict_data = output.get("conflict_data", {})
                     trace_data["message"] = "Generated final answer"
                     trace_data["answer"] = gen
                     if conf:
                         trace_data["confidence"] = conf
+                    if conflict_data:
+                        trace_data["conflict_data"] = conflict_data
 
                 elif curr_node == "check_hallucination_node":
                     h_grade = output.get("hallucination_grade", {})
@@ -285,6 +288,19 @@ def get_suggestions(force: bool = False, user: UserProfile = Depends(get_current
         logger.warning(f"Could not generate suggestions: {e}")
 
     return {"suggestions": [], "empty": True}
+
+@app.get("/api/glossary")
+def get_glossary_terms(user: UserProfile = Depends(get_current_user)):
+    """Returns the list of indexed acronyms and domain entity definitions."""
+    try:
+        from glossary import load_glossary
+        terms_dict = load_glossary()
+        terms_list = list(terms_dict.values())
+        return {"total": len(terms_list), "glossary": terms_list}
+    except Exception as e:
+        logger.error(f"Error loading glossary: {e}")
+        return {"total": 0, "glossary": []}
+
 
 @app.get("/api/stats")
 def get_stats(user: UserProfile = Depends(get_current_user)):

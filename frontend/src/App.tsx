@@ -35,7 +35,8 @@ import {
   Square,
   Video,
   Image,
-  Code
+  Code,
+  AlertTriangle
 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -193,6 +194,12 @@ type ConfidenceMetric = {
   };
 };
 
+type ConflictData = {
+  detected: boolean;
+  summary: string;
+  sources: string[];
+};
+
 type TraceEvent = {
   node: string;
   message: string;
@@ -201,6 +208,7 @@ type TraceEvent = {
   doc_grades?: any[];
   answer?: string;
   confidence?: ConfidenceMetric;
+  conflict_data?: ConflictData;
   latency_ms?: number;
 };
 
@@ -210,9 +218,16 @@ type Message = {
   content: string;
   traces?: TraceEvent[];
   confidence?: ConfidenceMetric;
+  conflict_data?: ConflictData;
   isStreaming?: boolean;
   timestamp?: string;
   liked?: boolean | null;
+};
+
+type GlossaryItem = {
+  term: string;
+  expansion: string;
+  source: string;
 };
 
 type ChatSession = {
@@ -303,6 +318,9 @@ export default function App() {
   // Modals & Tools
   const [isIngestOpen, setIsIngestOpen] = useState(false);
   const [isExportOpen, setIsExportOpen] = useState(false);
+  const [isGlossaryOpen, setIsGlossaryOpen] = useState(false);
+  const [isGlossaryLoading, setIsGlossaryLoading] = useState(false);
+  const [glossary, setGlossary] = useState<GlossaryItem[]>([]);
   const [selectedSourceModal, setSelectedSourceModal] = useState<any | null>(null);
   const [activeCitationHighlight, setActiveCitationHighlight] = useState<string | null>(null);
   const [hoveredCitation, setHoveredCitation] = useState<{
@@ -313,6 +331,21 @@ export default function App() {
   } | null>(null);
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [toast, setToast] = useState<{ msg: string; type: 'success' | 'error' | 'info' } | null>(null);
+
+  const fetchGlossary = async () => {
+    setIsGlossaryLoading(true);
+    try {
+      const res = await fetchWithAuth('/api/glossary');
+      if (res.ok) {
+        const data = await res.json();
+        setGlossary(data.glossary || []);
+      }
+    } catch (e) {
+      console.error('Error fetching glossary:', e);
+    } finally {
+      setIsGlossaryLoading(false);
+    }
+  };
 
   // Ingestion States
   const [ingestMode, setIngestMode] = useState<'file' | 'url'>('file');
@@ -792,6 +825,9 @@ export default function App() {
                     }
                     if (data.confidence) {
                       newMsg.confidence = data.confidence;
+                    }
+                    if (data.conflict_data) {
+                      newMsg.conflict_data = data.conflict_data;
                     }
                     return newMsg;
                   }
@@ -1527,6 +1563,19 @@ export default function App() {
             {/* Session Action Cluster */}
             <div className="nav-group-actions">
               <button 
+                className="nav-action-pill glossary-pill"
+                onClick={() => {
+                  setIsGlossaryOpen(true);
+                  fetchGlossary();
+                }}
+                title="Inspect corpus acronym and domain entity glossary"
+                aria-label="Inspect glossary"
+              >
+                <BookOpen size={15} />
+                <span>Glossary</span>
+              </button>
+
+              <button 
                 className="nav-action-pill ingest-pill"
                 onClick={() => setIsIngestOpen(true)}
                 title="Ingest documents and articles into Knowledge Crag"
@@ -1788,6 +1837,27 @@ export default function App() {
                                     </div>
                                   );
                                 })}
+                              </div>
+                            )}
+                          </div>
+                        )}
+
+                        {/* Multi-Document Conflict Alert Banner */}
+                        {isAssistant && msg.conflict_data?.detected && (
+                          <div className="conflict-alert-banner">
+                            <div className="conflict-banner-header">
+                              <AlertTriangle size={15} className="text-rust" />
+                              <span className="conflict-banner-title">Document Conflict Detected</span>
+                            </div>
+                            <p className="conflict-banner-desc">
+                              {msg.conflict_data.summary || 'Multiple indexed documents present conflicting statements or policies on this question.'}
+                            </p>
+                            {msg.conflict_data.sources && msg.conflict_data.sources.length > 0 && (
+                              <div className="conflict-sources-row">
+                                <span className="conflict-sources-label">Conflicting Sources:</span>
+                                {msg.conflict_data.sources.map((src, i) => (
+                                  <span key={i} className="conflict-source-tag">{src}</span>
+                                ))}
                               </div>
                             )}
                           </div>
@@ -2689,6 +2759,45 @@ export default function App() {
                   }}>
                     {selectedSourceModal.text}
                   </pre>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Glossary Modal */}
+      {isGlossaryOpen && (
+        <div className="recall-modal-backdrop" onClick={() => setIsGlossaryOpen(false)}>
+          <div className="recall-modal-card glossary-modal" onClick={e => e.stopPropagation()}>
+            <div className="modal-header">
+              <div className="modal-title-wrap">
+                <BookOpen size={18} className="text-teal" />
+                <h3>Corpus Acronym & Entity Glossary</h3>
+              </div>
+              <button className="modal-close-btn" onClick={() => setIsGlossaryOpen(false)}>
+                <X size={18} />
+              </button>
+            </div>
+            <div className="modal-body-area">
+              <p className="export-desc">
+                Domain acronyms and terminology automatically indexed from your uploaded documents to power semantic query reformulation:
+              </p>
+              {isGlossaryLoading ? (
+                <div className="empty-state-card" style={{ padding: '24px' }}>Loading indexed glossary terms...</div>
+              ) : glossary.length === 0 ? (
+                <div className="empty-state-card" style={{ padding: '24px' }}>
+                  No domain acronyms indexed yet. Upload or ingest documents containing acronym definitions (e.g. <code>CRAG (Corrective Retrieval-Augmented Generation)</code>) to automatically build your domain glossary.
+                </div>
+              ) : (
+                <div className="glossary-items-grid">
+                  {glossary.map((item, idx) => (
+                    <div key={idx} className="glossary-item-card">
+                      <div className="glossary-term-badge">{item.term}</div>
+                      <div className="glossary-term-expansion">{item.expansion}</div>
+                      <div className="glossary-term-source">Source: {item.source}</div>
+                    </div>
+                  ))}
                 </div>
               )}
             </div>

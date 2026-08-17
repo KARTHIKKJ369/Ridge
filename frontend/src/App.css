@@ -3484,3 +3484,111 @@ textarea:focus-visible,
     color: #0F172A !important;
   }
 }
+
+/* ==========================================================================
+   Conflict Alert Banner & Glossary Modal Styles
+   ========================================================================== */
+
+.conflict-alert-banner {
+  background: rgba(217, 119, 6, 0.08);
+  border: 1px solid rgba(217, 119, 6, 0.3);
+  border-radius: var(--radius-md);
+  padding: 12px 14px;
+  margin-bottom: 14px;
+  backdrop-filter: blur(12px);
+  animation: fadeIn 0.3s ease-in-out;
+}
+
+.conflict-banner-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: #D97706;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-bottom: 4px;
+}
+
+.conflict-banner-desc {
+  font-size: 0.85rem;
+  color: var(--recall-text-secondary);
+  line-height: 1.45;
+  margin: 0 0 8px 0;
+}
+
+.conflict-sources-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  font-size: 0.75rem;
+}
+
+.conflict-sources-label {
+  color: var(--recall-text-muted);
+  font-weight: 600;
+}
+
+.conflict-source-tag {
+  background: rgba(217, 119, 6, 0.15);
+  color: #F59E0B;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  border: 1px solid rgba(217, 119, 6, 0.25);
+}
+
+.glossary-modal {
+  max-width: 620px !important;
+  width: 90%;
+}
+
+.glossary-items-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: 380px;
+  overflow-y: auto;
+  padding-right: 4px;
+  margin-top: 12px;
+}
+
+.glossary-item-card {
+  background: var(--recall-surface);
+  border: 1px solid var(--recall-border);
+  border-radius: var(--radius-sm);
+  padding: 10px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  transition: border-color 0.2s ease, transform 0.2s ease;
+}
+
+.glossary-item-card:hover {
+  border-color: var(--recall-accent);
+  transform: translateY(-1px);
+}
+
+.glossary-term-badge {
+  font-family: var(--font-mono);
+  font-weight: 700;
+  font-size: 0.82rem;
+  color: var(--recall-accent);
+  display: inline-block;
+}
+
+.glossary-term-expansion {
+  font-size: 0.88rem;
+  color: var(--recall-text-primary);
+  font-weight: 500;
+}
+
+.glossary-term-source {
+  font-size: 0.72rem;
+  color: var(--recall-text-muted);
+  font-style: italic;
+}
+

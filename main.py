@@ -38,6 +38,7 @@ class GraphState(TypedDict):
     documents_metadata: list[dict]
     generation: str
     confidence: dict
+    conflict_data: dict
     loop_count: int
     past_queries: list[str]
     latency_ms: int
@@ -65,8 +66,8 @@ def get_settings() -> dict:
         "chroma_dir": os.getenv("CHROMA_DIR", "./chroma_db"),
         # Primary synthesis model & Fast model for grading/suggestions/rewrite
         "groq_api_key": os.getenv("GROQ_API_KEY"),
-        "groq_model": os.getenv("GROQ_MODEL", "groq/compound"),
-        "groq_fast_model": os.getenv("GROQ_FAST_MODEL", "groq/compound-mini"),
+        "groq_model": os.getenv("GROQ_MODEL", "openai/gpt-oss-120b"),
+        "groq_fast_model": os.getenv("GROQ_FAST_MODEL", "openai/gpt-oss-20b"),
         "rerank_model": os.getenv("RERANK_MODEL", "ms-marco-MiniLM-L-12-v2"),
         "retriever_k": int(os.getenv("RETRIEVER_K", "4")),
         "retriever_fetch_k": int(os.getenv("RETRIEVER_FETCH_K", "25")),
@@ -228,6 +229,15 @@ def ingest_document(text_or_url: str, original_filename: str | None = None) -> d
     vectorstore = get_vectorstore()
     vectorstore.add_documents(doc_splits)
     print("Ingestion complete.")
+
+    # Extract & Index domain acronyms into glossary
+    try:
+        from glossary import index_text_glossary
+        full_text = " ".join(d.page_content for d in doc_splits)
+        source_name = original_filename or text_or_url
+        index_text_glossary(full_text, source_name)
+    except Exception as ge:
+        print(f"Glossary indexing note: {ge}")
     
     # Generate suggestions in a background thread so ingestion returns immediately
     if doc_splits:
@@ -564,10 +574,53 @@ def build_app():
                 "reformulation_loops": loop_count,
             }
         }
+        # --- MULTI-DOCUMENT CONFLICT AUDIT ---
+        distinct_sources = list(set(
+            g.get("source", "").split("/")[-1] for g in doc_grades 
+            if g.get("score") == "yes" and g.get("source") and g.get("breadcrumb") != "Web Search Fallback"
+        ))
+        
+        conflict_data = {"detected": False, "summary": "", "sources": distinct_sources}
+        conflict_instruction = ""
+        
+        if len(distinct_sources) >= 2 and len(docs) >= 2:
+            print(f"--- RUNNING CONFLICT DETECTOR ACROSS {len(distinct_sources)} SOURCES ---")
+            docs_paired = "\n\n".join(
+                f"--- Source: {g.get('source', f'Doc #{i+1}').split('/')[-1]} ---\n{g.get('text', docs[i] if i < len(docs) else '')[:400]}"
+                for i, g in enumerate(doc_grades[:4]) if g.get("score") == "yes"
+            )
+            conflict_prompt = (
+                "You are a strict inconsistency auditor for an enterprise document store.\n"
+                f"User Question: {question}\n\n"
+                f"Retrieved Passages from Multiple Documents:\n{docs_paired}\n\n"
+                "Task: Check if there is an explicit factual contradiction, differing policy terms/dates, or incompatible statements between these different documents regarding the user's question.\n"
+                "Return ONLY a JSON object: {\"conflict\": true | false, \"summary\": \"1-2 sentence description of the disagreement, or empty string\"}"
+            )
+            try:
+                c_resp = llm_fast.invoke(conflict_prompt)
+                c_clean = clean_llm_response(c_resp.content)
+                c_match = re.search(r"\{.*\}", c_clean, re.DOTALL)
+                if c_match:
+                    c_json = json.loads(c_match.group(0))
+                    if c_json.get("conflict") is True and c_json.get("summary"):
+                        conflict_data["detected"] = True
+                        conflict_data["summary"] = c_json.get("summary")
+                        print(f"  ⚠️ Document Conflict Detected: {conflict_data['summary']}")
+                        conflict_instruction = (
+                            f"\nIMPORTANT - DOCUMENT CONFLICT DETECTED: The knowledge base contains differing perspectives across documents:\n"
+                            f"Discrepancy: {conflict_data['summary']}\n"
+                            "You MUST begin your response with a structured callout block:\n"
+                            f"> ⚠️ **Document Conflict Detected**: Multiple indexed documents present differing information on this topic:\n"
+                            "> - State what each document asserts clearly with their source names.\n"
+                            "> - Do not silently favor one over the other; surface both perspectives.\n\n"
+                        )
+            except Exception as ce:
+                print(f"Conflict detector note: {ce}")
 
         prompt = (
             "You are Ridge, an advanced AI research assistant.\n"
             "Synthesize a well-structured, authoritative, and cleanly formatted answer to the user's question based on the provided context.\n\n"
+            f"{conflict_instruction}"
             f"Context findings:\n{context or 'No local document match found.'}\n\n"
             f"Question: {question}\n\n"
             "Formatting & Quality Rules:\n"
@@ -586,6 +639,7 @@ def build_app():
             return {
                 "generation": gen_text,
                 "confidence": confidence_data,
+                "conflict_data": conflict_data,
                 "latency_ms": int((time.time() - t0) * 1000)
             }
         except Exception as e:
@@ -596,6 +650,7 @@ def build_app():
                 return {
                     "generation": gen_text,
                     "confidence": confidence_data,
+                    "conflict_data": conflict_data,
                     "latency_ms": int((time.time() - t0) * 1000)
                 }
             except Exception as e2:
@@ -603,6 +658,7 @@ def build_app():
                 return {
                     "generation": f"Model provider error: {e2}",
                     "confidence": confidence_data,
+                    "conflict_data": conflict_data,
                     "latency_ms": int((time.time() - t0) * 1000)
                 }
 
@@ -641,6 +697,13 @@ def build_app():
 
         if not new_query or len(new_query) < 3 or new_query.startswith("<"):
             new_query = original_q
+
+        # Enrich query with domain acronym expansions from glossary
+        try:
+            from glossary import enrich_query_with_glossary
+            new_query = enrich_query_with_glossary(new_query)
+        except Exception as ge:
+            print(f"Glossary query enrichment note: {ge}")
 
         print(f"New Search Query: '{new_query}'")
         print(f"Current Loop Counter: {current_loops}/{settings['max_rewrite_loops']}")
