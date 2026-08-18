@@ -153,13 +153,18 @@ const sanitizeMermaidChart = (raw: string): string => {
   return text;
 };
 
+const mermaidSvgCache = new Map<string, string>();
+
 const MermaidDiagram = ({ chart }: { chart: string }) => {
-  const [svg, setSvg] = useState<string>('');
-  const [isRendered, setIsRendered] = useState<boolean>(false);
+  const initialClean = sanitizeMermaidChart(chart);
+  const cachedSvg = mermaidSvgCache.get(initialClean);
+
+  const [svg, setSvg] = useState<string>(cachedSvg || '');
+  const [isRendered, setIsRendered] = useState<boolean>(!!cachedSvg);
   const [showCode, setShowCode] = useState<boolean>(false);
   const [copied, setCopied] = useState<boolean>(false);
   const [renderError, setRenderError] = useState<string>('');
-  const [cleanChart, setCleanChart] = useState<string>('');
+  const [cleanChart, setCleanChart] = useState<string>(initialClean);
 
   useEffect(() => {
     let isMounted = true;
@@ -167,6 +172,17 @@ const MermaidDiagram = ({ chart }: { chart: string }) => {
 
     const sanitized = sanitizeMermaidChart(chart);
     if (isMounted) setCleanChart(sanitized);
+
+    // If already cached, apply immediately without re-rendering delay
+    if (mermaidSvgCache.has(sanitized)) {
+      const hit = mermaidSvgCache.get(sanitized)!;
+      if (isMounted) {
+        setSvg(hit);
+        setIsRendered(true);
+        setRenderError('');
+      }
+      return;
+    }
 
     // If diagram is still being streamed or incomplete, wait before calling mermaid.render
     if (!isMermaidComplete(sanitized)) {
@@ -178,6 +194,7 @@ const MermaidDiagram = ({ chart }: { chart: string }) => {
         const id = `mermaid_${Math.random().toString(36).substring(2, 9)}_${Date.now()}`;
         const { svg: renderedSvg } = await mermaid.render(id, sanitized);
         if (isMounted && renderedSvg) {
+          mermaidSvgCache.set(sanitized, renderedSvg);
           setSvg(renderedSvg);
           setIsRendered(true);
           setRenderError('');
@@ -194,7 +211,7 @@ const MermaidDiagram = ({ chart }: { chart: string }) => {
       }
     };
 
-    const timer = setTimeout(renderChart, 100);
+    const timer = setTimeout(renderChart, 40);
     return () => {
       isMounted = false;
       clearTimeout(timer);
@@ -245,13 +262,22 @@ const MermaidDiagram = ({ chart }: { chart: string }) => {
         </div>
       </div>
 
-      {showCode || !isRendered ? (
+      {showCode ? (
         <pre className="mermaid-code-preview">{(cleanChart || chart).trim()}</pre>
-      ) : (
+      ) : renderError ? (
+        <pre className="mermaid-code-preview">{(cleanChart || chart).trim()}</pre>
+      ) : isRendered && svg ? (
         <div 
           className="mermaid-diagram-canvas"
           dangerouslySetInnerHTML={{ __html: svg }}
         />
+      ) : (
+        <div className="mermaid-diagram-loading">
+          <div className="shimmer-pulse-dot" />
+          <div className="shimmer-pulse-dot" />
+          <div className="shimmer-pulse-dot" />
+          <span>Rendering visual diagram...</span>
+        </div>
       )}
     </div>
   );

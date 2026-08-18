@@ -4217,6 +4217,18 @@ textarea:focus-visible,
   padding: 12px 6px !important;
 }
 
+.mermaid-diagram-loading {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  gap: 8px !important;
+  padding: 28px 16px !important;
+  color: var(--recall-text-muted, #64748b) !important;
+  font-size: 0.85rem !important;
+  font-family: var(--font-sans, sans-serif) !important;
+  font-weight: 500 !important;
+}
+
 .mermaid-diagram-canvas svg {
   max-width: 100% !important;
   height: auto !important;
