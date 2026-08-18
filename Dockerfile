@@ -24,6 +24,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy backend source files
 COPY *.py ./
+COPY scripts/ ./scripts/
 
 # Copy env defaults (actual secrets are injected via HF Space Secrets at runtime)
 COPY .env.example .env

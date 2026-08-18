@@ -16,6 +16,12 @@ from auth import (
     create_access_token,
     register_user,
     authenticate_user,
+    check_and_increment_user_usage,
+    admin_list_users,
+    admin_update_user_role,
+    admin_update_user_limit,
+    admin_update_user_status,
+    admin_delete_user,
     RegisterRequest,
     LoginRequest,
     UserProfile,
@@ -171,6 +177,7 @@ async def generate_chat_events(question: str, user: UserProfile, web_search_enab
         "original_question": question,
         "web_search_enabled": web_search_enabled,
         "source_filter": source_filter,
+        "user_id": user.id,
         "documents": [],
         "documents_metadata": [],
         "generation": "",
@@ -296,8 +303,32 @@ async def generate_chat_events(question: str, user: UserProfile, web_search_enab
     yield "data: [DONE]\n\n"
 
 
+# ---------------------------------------------------------------------------
+# Admin Authorization Dependency
+# ---------------------------------------------------------------------------
+
+async def require_admin(user: UserProfile = Depends(get_current_user)) -> UserProfile:
+    if user.role != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Administrator privileges required to access this resource."
+        )
+    return user
+
+
+# ---------------------------------------------------------------------------
+# Corrective RAG Chat & Knowledge Ingestion Endpoints (Protected)
+# ---------------------------------------------------------------------------
+
 @app.post("/ask")
+@app.post("/api/chat")
 async def ask_question(req: ChatRequest, user: UserProfile = Depends(get_current_user)):
+    allowed, current_count, daily_limit = check_and_increment_user_usage(user.id)
+    if not allowed:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=f"Daily ascent limit reached ({current_count}/{daily_limit} requests used today). Quota resets at 00:00 UTC."
+        )
     return StreamingResponse(
         generate_chat_events(req.question, user, req.web_search_enabled, req.source_filter),
         media_type="text/event-stream"
@@ -306,7 +337,7 @@ async def ask_question(req: ChatRequest, user: UserProfile = Depends(get_current
 @app.post("/ingest")
 async def ingest(req: IngestRequest, user: UserProfile = Depends(get_current_user)):
     try:
-        result = ingest_document(req.text_or_url)
+        result = ingest_document(req.text_or_url, user_id=user.id)
         return result
     except Exception as e:
         logger.error(f"Error ingesting document: {e}")
@@ -341,7 +372,7 @@ async def upload_file(file: UploadFile = File(...), user: UserProfile = Depends(
             temp_path = temp_file.name
             
         try:
-            result = ingest_document(temp_path, original_filename=filename)
+            result = ingest_document(temp_path, original_filename=filename, user_id=user.id)
             return result
         finally:
             if os.path.exists(temp_path):
@@ -408,16 +439,29 @@ def get_glossary_terms(user: UserProfile = Depends(get_current_user)):
 def get_stats(user: UserProfile = Depends(get_current_user)):
     from main import get_vectorstore
     vectorstore = get_vectorstore()
-    chunk_count = vectorstore._collection.count()
-    data = vectorstore._collection.get(include=["metadatas"])
-    metas = data.get("metadatas", [])
-    unique_sources = set(m.get("source") for m in metas if m and m.get("source"))
-    doc_count = len(unique_sources) if unique_sources else (1 if chunk_count > 0 else 0)
-    return {"doc_count": doc_count, "chunk_count": chunk_count}
+    coll = vectorstore._collection
+    count = coll.count()
+    data = coll.get(include=["metadatas"])
+    metas = data.get("metadatas", []) or []
+    
+    # Filter strictly by user (admins see their own in default view or all if show_all)
+    is_admin = user.role == "admin"
+    user_metas = [m for m in metas if m and (m.get("user_id") == user.id or (is_admin and m.get("user_id") == user.id))]
+    user_chunks = len(user_metas)
+    unique_sources = set(m.get("source") for m in user_metas if m.get("source"))
+    doc_count = len(unique_sources) if unique_sources else (1 if user_chunks > 0 else 0)
+    
+    return {
+        "doc_count": doc_count,
+        "chunk_count": user_chunks,
+        "requests_today": user.requests_today,
+        "daily_request_limit": user.daily_request_limit,
+        "role": user.role
+    }
 
 
 @app.get("/api/kb/sources")
-def get_kb_sources(user: UserProfile = Depends(get_current_user)):
+def get_kb_sources(all_users: bool = False, user: UserProfile = Depends(get_current_user)):
     from main import get_vectorstore
     from pathlib import Path
     try:
@@ -427,35 +471,50 @@ def get_kb_sources(user: UserProfile = Depends(get_current_user)):
         if count == 0:
             return {"total_chunks": 0, "total_sources": 0, "sources": []}
 
-        data = coll.get(limit=count + 100, include=["metadatas", "documents"])
+        data = coll.get(limit=count + 500, include=["metadatas", "documents"])
         ids = data.get("ids", [])
         metas = data.get("metadatas", [])
         docs = data.get("documents", [])
 
+        is_admin = user.role == "admin"
+        show_all = all_users and is_admin
+
         sources_map = {}
+        filtered_chunk_count = 0
+
         for i, id_ in enumerate(ids):
             meta = metas[i] if i < len(metas) and metas[i] else {}
+            meta_user = meta.get("user_id")
+
+            # Multi-tenant isolation: Only include documents belonging strictly to this user
+            if not show_all and meta_user != user.id:
+                continue
+
+            filtered_chunk_count += 1
             raw_src = meta.get("source", "Unknown Source")
             name = Path(raw_src).name if ("/" in raw_src or "\\" in raw_src) else raw_src
             if not name:
                 name = raw_src
 
-            if raw_src not in sources_map:
-                sources_map[raw_src] = {
+            key = f"{meta_user}::{raw_src}" if show_all else raw_src
+
+            if key not in sources_map:
+                sources_map[key] = {
                     "source": raw_src,
                     "name": name,
                     "type": meta.get("type", "document"),
                     "h1": meta.get("h1", name),
+                    "user_id": meta_user,
                     "chunk_count": 0,
                     "sample": docs[i][:180] if i < len(docs) else "",
                     "ids": []
                 }
-            sources_map[raw_src]["chunk_count"] += 1
-            sources_map[raw_src]["ids"].append(id_)
+            sources_map[key]["chunk_count"] += 1
+            sources_map[key]["ids"].append(id_)
 
         sources_list = list(sources_map.values())
         return {
-            "total_chunks": len(ids),
+            "total_chunks": filtered_chunk_count,
             "total_sources": len(sources_list),
             "sources": sources_list
         }
@@ -471,21 +530,34 @@ class DeleteKBRequest(BaseModel):
 
 @app.post("/api/kb/delete")
 def delete_kb_source(req: DeleteKBRequest, user: UserProfile = Depends(get_current_user)):
-    from main import get_vectorstore
+    from main import get_vectorstore, invalidate_bm25
     from pathlib import Path
     try:
         vectorstore = get_vectorstore()
         coll = vectorstore._collection
+        is_admin = user.role == "admin"
 
         if req.ids:
-            coll.delete(ids=req.ids)
+            # If not admin, verify all ids belong to this user
+            if not is_admin:
+                data = coll.get(ids=req.ids, include=["metadatas"])
+                valid_ids = [
+                    id_ for i, id_ in enumerate(data.get("ids", []))
+                    if data.get("metadatas", [])[i].get("user_id") in (user.id, "default", None)
+                ]
+                if valid_ids:
+                    coll.delete(ids=valid_ids)
+            else:
+                coll.delete(ids=req.ids)
+
+            invalidate_bm25()
             remaining_chunks = coll.count()
             return {"status": "deleted", "remaining_chunks": remaining_chunks}
 
         if req.source:
             count = coll.count()
             if count > 0:
-                data = coll.get(limit=count + 100, include=["metadatas"])
+                data = coll.get(limit=count + 500, include=["metadatas"])
                 matching_ids = []
                 req_name = Path(req.source).name.lower()
                 req_norm = req.source.rstrip("/").lower()
@@ -496,17 +568,17 @@ def delete_kb_source(req: DeleteKBRequest, user: UserProfile = Depends(get_curre
                     m_src = str(m.get("source", "")).strip()
                     m_norm = m_src.rstrip("/").lower()
                     m_name = Path(m_src).name.lower()
-                    
+                    m_user = m.get("user_id")
+
+                    if not is_admin and m_user not in (user.id, "default", None):
+                        continue
+
                     if m_src == req.source or m_norm == req_norm or (req_name and m_name == req_name):
                         matching_ids.append(data["ids"][i])
 
                 if matching_ids:
                     coll.delete(ids=matching_ids)
-                else:
-                    try:
-                        coll.delete(where={"source": req.source})
-                    except Exception:
-                        pass
+                    invalidate_bm25()
 
             remaining_chunks = coll.count()
             return {"status": "deleted", "remaining_chunks": remaining_chunks}
@@ -521,16 +593,25 @@ def delete_kb_source(req: DeleteKBRequest, user: UserProfile = Depends(get_curre
 
 @app.post("/api/kb/clear")
 def clear_kb(user: UserProfile = Depends(get_current_user)):
-    from main import get_vectorstore, clear_suggestions_cache
+    from main import get_vectorstore, clear_suggestions_cache, invalidate_bm25
     try:
         vectorstore = get_vectorstore()
         coll = vectorstore._collection
         count = coll.count()
         if count > 0:
-            data = coll.get(limit=count + 500)
+            data = coll.get(limit=count + 500, include=["metadatas"])
             ids = data.get("ids", [])
-            if ids:
-                coll.delete(ids=ids)
+            metas = data.get("metadatas", []) or []
+
+            is_admin = user.role == "admin"
+            if is_admin:
+                if ids:
+                    coll.delete(ids=ids)
+            else:
+                user_ids = [ids[i] for i, m in enumerate(metas) if m and m.get("user_id") in (user.id, "default", None)]
+                if user_ids:
+                    coll.delete(ids=user_ids)
+            invalidate_bm25()
     except Exception as e:
         logger.error(f"Error in clear_kb: {e}")
 
@@ -543,6 +624,105 @@ def clear_kb(user: UserProfile = Depends(get_current_user)):
 
     return {"status": "cleared", "remaining_chunks": 0}
 
+
+# ---------------------------------------------------------------------------
+# Admin Management Endpoints
+# ---------------------------------------------------------------------------
+
+@app.get("/api/admin/users")
+def get_admin_users(admin: UserProfile = Depends(require_admin)):
+    """Lists all registered users with usage stats and roles."""
+    return {"users": admin_list_users()}
+
+
+class UpdateRoleRequest(BaseModel):
+    role: str
+
+@app.post("/api/admin/users/{target_id}/role")
+def set_user_role(target_id: str, req: UpdateRoleRequest, admin: UserProfile = Depends(require_admin)):
+    """Updates user role to admin or user."""
+    admin_update_user_role(target_id, req.role.strip().lower())
+    return {"status": "updated", "id": target_id, "role": req.role}
+
+
+class UpdateLimitRequest(BaseModel):
+    limit: int
+
+@app.post("/api/admin/users/{target_id}/limit")
+def set_user_limit(target_id: str, req: UpdateLimitRequest, admin: UserProfile = Depends(require_admin)):
+    """Updates the daily request quota for a user."""
+    admin_update_user_limit(target_id, req.limit)
+    return {"status": "updated", "id": target_id, "limit": req.limit}
+
+
+class UpdateStatusRequest(BaseModel):
+    is_active: bool
+
+@app.post("/api/admin/users/{target_id}/status")
+def set_user_status(target_id: str, req: UpdateStatusRequest, admin: UserProfile = Depends(require_admin)):
+    """Activates or suspends a user account."""
+    admin_update_user_status(target_id, req.is_active)
+    return {"status": "updated", "id": target_id, "is_active": req.is_active}
+
+
+@app.delete("/api/admin/users/{target_id}")
+def delete_user_account(target_id: str, admin: UserProfile = Depends(require_admin)):
+    """Deletes a user account and purges their indexed chunks from ChromaDB."""
+    if target_id == admin.id:
+        raise HTTPException(status_code=400, detail="Cannot delete your own administrator account.")
+    
+    # 1. Delete user files from ChromaDB
+    try:
+        from main import get_vectorstore, invalidate_bm25
+        vectorstore = get_vectorstore()
+        coll = vectorstore._collection
+        count = coll.count()
+        if count > 0:
+            data = coll.get(limit=count + 500, include=["metadatas"])
+            ids = data.get("ids", [])
+            metas = data.get("metadatas", []) or []
+            user_ids = [ids[i] for i, m in enumerate(metas) if m and m.get("user_id") == target_id]
+            if user_ids:
+                coll.delete(ids=user_ids)
+                invalidate_bm25()
+    except Exception as e:
+        logger.warning(f"Note purging user chunks on delete: {e}")
+
+    # 2. Delete user record from SQLite
+    admin_delete_user(target_id)
+    return {"status": "deleted", "id": target_id}
+
+
+@app.get("/api/admin/stats")
+def get_admin_stats(admin: UserProfile = Depends(require_admin)):
+    """Returns global system metrics."""
+    users = admin_list_users()
+    total_users = len(users)
+    active_users = sum(1 for u in users if u.get("is_active"))
+    total_requests_today = sum(u.get("requests_today", 0) for u in users)
+
+    from main import get_vectorstore
+    try:
+        vectorstore = get_vectorstore()
+        coll = vectorstore._collection
+        chunk_count = coll.count()
+        data = coll.get(include=["metadatas"])
+        metas = data.get("metadatas", []) or []
+        unique_sources = set(m.get("source") for m in metas if m and m.get("source"))
+        doc_count = len(unique_sources)
+    except Exception:
+        chunk_count = 0
+        doc_count = 0
+
+    return {
+        "total_users": total_users,
+        "active_users": active_users,
+        "total_requests_today": total_requests_today,
+        "total_documents": doc_count,
+        "total_chunks": chunk_count,
+    }
+
+
 # Mount the compiled React frontend
 frontend_dist = os.path.join(os.path.dirname(__file__), "frontend", "dist")
 if os.path.isdir(frontend_dist):
@@ -551,3 +731,4 @@ else:
     @app.get("/")
     def index():
         return {"message": "Frontend not built yet. Run 'npm run build' in frontend/"}
+

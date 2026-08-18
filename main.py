@@ -35,6 +35,7 @@ class GraphState(TypedDict):
     original_question: str
     web_search_enabled: bool
     source_filter: str | None       # Scoped retrieval to specific document/source
+    user_id: str | None             # Multi-tenant user isolation
     sub_queries: list[str]          # populated by decompose_node for multi-hop
     documents: list[str]
     documents_metadata: list[dict]
@@ -278,13 +279,13 @@ def clear_suggestions_cache() -> None:
     global _suggestions_store
     _suggestions_store = []
 
-def ingest_document(text_or_url: str, original_filename: str | None = None) -> dict:
+def ingest_document(text_or_url: str, original_filename: str | None = None, user_id: str = "default") -> dict:
     import urllib.parse
     import os
     from rag_ingest import load_and_split_source, _sub_chunk, semantic_split_documents
     from langchain_core.documents import Document
 
-    print(f"\n=== INGESTING ===\nInput: {text_or_url[:100]}...")
+    print(f"\n=== INGESTING ===\nUser: {user_id}\nInput: {text_or_url[:100]}...")
 
     # Check if URL
     is_url = False
@@ -306,9 +307,10 @@ def ingest_document(text_or_url: str, original_filename: str | None = None) -> d
         doc = Document(page_content=text_or_url, metadata={"source": original_filename or "user_input"})
         raw_splits = _sub_chunk([doc], 1500, 200)
 
-    # Attach original filename if provided (e.g. for uploads)
-    if original_filename:
-        for d in raw_splits:
+    # Attach original filename and user_id to all raw splits
+    for d in raw_splits:
+        d.metadata["user_id"] = user_id
+        if original_filename:
             d.metadata["source"] = original_filename
             d.metadata["h1"] = original_filename
 
@@ -338,6 +340,7 @@ def ingest_document(text_or_url: str, original_filename: str | None = None) -> d
     child_docs = []
 
     for parent_doc in doc_splits:
+        parent_doc.metadata["user_id"] = user_id
         source = parent_doc.metadata.get("source", "unknown")
         pid = make_parent_id(parent_doc.page_content, source)
         parent_records.append({"id": pid, "text": parent_doc.page_content, "metadata": parent_doc.metadata})
@@ -345,7 +348,7 @@ def ingest_document(text_or_url: str, original_filename: str | None = None) -> d
         # Split parent into child chunks
         children = child_splitter.split_documents([parent_doc])
         for child in children:
-            child.metadata = {**parent_doc.metadata, "parent_id": pid}
+            child.metadata = {**parent_doc.metadata, "parent_id": pid, "user_id": user_id}
             child_docs.append(child)
 
     # Save parents to persistent JSON store
@@ -356,7 +359,7 @@ def ingest_document(text_or_url: str, original_filename: str | None = None) -> d
 
     # Index child chunks (fine-grained) into Chroma
     docs_to_index = child_docs if child_docs else doc_splits
-    print(f"  Small-to-Big: {len(doc_splits)} parent chunks -> {len(docs_to_index)} child chunks indexed.")
+    print(f"  Small-to-Big: {len(doc_splits)} parent chunks -> {len(docs_to_index)} child chunks indexed for user {user_id}.")
     vectorstore.add_documents(docs_to_index)
     invalidate_bm25()
     print("Ingestion complete.")
@@ -463,34 +466,53 @@ def build_app():
         print("\n--- NODE: HYBRID RETRIEVE (BM25 + Chroma HNSW + RRF) ---")
         q = state["question"]
         src_filter = state.get("source_filter")
+        user_id = state.get("user_id")
         is_filtered = bool(src_filter and src_filter.strip().lower() not in ("", "all", "all sources", "none"))
+        has_user_scope = bool(user_id and user_id not in ("admin", "system", "all"))
         if is_filtered:
             print(f"  [Source Scope Filter Active]: '{src_filter}'")
+        if has_user_scope:
+            print(f"  [User Scope Filter Active]: '{user_id}'")
 
-        # 1. Dense MMR Vector Search from Chroma (with optional metadata filter)
-        if is_filtered:
+        # Build Chroma metadata filter
+        chroma_filter = None
+        if is_filtered and has_user_scope:
+            chroma_filter = {"$and": [{"source": src_filter}, {"user_id": user_id}]}
+        elif is_filtered:
+            chroma_filter = {"source": src_filter}
+        elif has_user_scope:
+            chroma_filter = {"user_id": user_id}
+
+        # 1. Dense MMR Vector Search from Chroma (with metadata filter)
+        if chroma_filter:
             try:
-                dense_docs = vectorstore.similarity_search(q, k=50, filter={"source": src_filter})
+                dense_docs = vectorstore.similarity_search(q, k=50, filter=chroma_filter)
             except Exception:
                 dense_docs = retriever.invoke(q)
-                dense_docs = [d for d in dense_docs if d.metadata.get("source") == src_filter or src_filter.lower() in str(d.metadata.get("source", "")).lower()]
+                if is_filtered:
+                    dense_docs = [d for d in dense_docs if d.metadata.get("source") == src_filter or src_filter.lower() in str(d.metadata.get("source", "")).lower()]
+                if has_user_scope:
+                    dense_docs = [d for d in dense_docs if d.metadata.get("user_id") == user_id]
         else:
             dense_docs = retriever.invoke(q)
 
         dense_texts = [d.page_content for d in dense_docs]
         dense_metas = [d.metadata for d in dense_docs]
 
-        # 2. Sparse BM25 Search over Chroma Collection (filtered)
+        # 2. Sparse BM25 Search over Chroma Collection (filtered by source & user_id)
         sparse_candidates = []
         try:
             bm25, raw_docs, raw_metas = get_bm25()
 
-            if is_filtered and raw_docs:
+            if (is_filtered or has_user_scope) and raw_docs:
                 filtered_docs = []
                 filtered_metas = []
                 for d, m in zip(raw_docs, raw_metas):
                     m_src = str(m.get("source", "")) if m else ""
-                    if m_src == src_filter or src_filter.lower() in m_src.lower():
+                    m_uid = str(m.get("user_id", "")) if m else ""
+                    match_src = (not is_filtered) or (m_src == src_filter or src_filter.lower() in m_src.lower())
+                    match_user = (not has_user_scope) or (m_uid == str(user_id))
+                    if match_src and match_user:
                         filtered_docs.append(d)
                         filtered_metas.append(m)
                 if filtered_docs:
