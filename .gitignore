@@ -35,6 +35,9 @@ users.db
 *.db
 *.sqlite3
 *.sqlite
+data/*.db
+data/parent_store.db
+data/parent_store.json
 suggestions.json
 
 # ==============================================================================

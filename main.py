@@ -71,10 +71,14 @@ def get_settings() -> dict:
         "groq_model": os.getenv("GROQ_MODEL", "openai/gpt-oss-120b"),
         "groq_fast_model": os.getenv("GROQ_FAST_MODEL", "openai/gpt-oss-20b"),
         "rerank_model": os.getenv("RERANK_MODEL", "ms-marco-MiniLM-L-12-v2"),
-        "retriever_k": int(os.getenv("RETRIEVER_K", "4")),
-        "retriever_fetch_k": int(os.getenv("RETRIEVER_FETCH_K", "25")),
+        "retriever_k": int(os.getenv("RETRIEVER_K", "6")),
+        "retriever_fetch_k": int(os.getenv("RETRIEVER_FETCH_K", "60")),
+        "rerank_top_n": int(os.getenv("RERANK_TOP_N", "20")),
         "retriever_lambda_mult": float(os.getenv("RETRIEVER_LAMBDA_MULT", "0.5")),
         "max_rewrite_loops": int(os.getenv("MAX_REWRITE_LOOPS", "1")),
+        "grade_doc_limit": int(os.getenv("GRADE_DOC_LIMIT", "4")),
+        "max_context_docs": int(os.getenv("MAX_CONTEXT_DOCS", "6")),
+        "max_context_chars": int(os.getenv("MAX_CONTEXT_CHARS", "1200")),
     }
 
 
@@ -174,24 +178,105 @@ def get_device() -> str:
     return "cpu"
 
 
+_embeddings_cache: dict[str, HuggingFaceEmbeddings] = {}
+
 def get_embeddings(model_name: str | None = None) -> HuggingFaceEmbeddings:
+    """Return a cached HuggingFaceEmbeddings instance for the given model."""
     settings = get_settings()
-    model = model_name or settings["embedding_model"]
-    device = get_device()
-    return HuggingFaceEmbeddings(
-        model_name=model,
-        model_kwargs={"device": device},
-        encode_kwargs={"normalize_embeddings": True},
-    )
+    key = model_name or settings["embedding_model"]
+    if key not in _embeddings_cache:
+        device = get_device()
+        _embeddings_cache[key] = HuggingFaceEmbeddings(
+            model_name=key,
+            model_kwargs={"device": device},
+            encode_kwargs={"normalize_embeddings": True},
+        )
+        print(f"  [Embeddings] Loaded '{key}' on {device.upper()}.")
+    return _embeddings_cache[key]
 
 
 def get_vectorstore():
+    """Return Chroma vector store instance, supporting local persistence and Chroma Cloud."""
     settings = get_settings()
     embeddings = get_embeddings(settings["embedding_model"])
+    chroma_host = os.getenv("CHROMA_CLOUD_HOST")
+    
+    if chroma_host:
+        import chromadb
+        token = os.getenv("CHROMA_CLOUD_TOKEN", "")
+        headers = {"X-Chroma-Token": token} if token else None
+        client = chromadb.HttpClient(
+            host=chroma_host,
+            port=int(os.getenv("CHROMA_CLOUD_PORT", "8000")),
+            headers=headers,
+        )
+        return Chroma(
+            client=client,
+            collection_name=os.getenv("CHROMA_COLLECTION_NAME", "ridge_kb"),
+            embedding_function=embeddings,
+        )
     return Chroma(
         persist_directory=settings["chroma_dir"],
         embedding_function=embeddings,
     )
+
+
+# ---------------------------------------------------------------------------
+# BM25 In-Memory Cache with Invalidation
+# ---------------------------------------------------------------------------
+_bm25_cache: dict = {"index": None, "docs": None, "metas": None}
+
+def _build_bm25():
+    """Fetch all Chroma docs and build a BM25Okapi index. Cached until invalidated."""
+    vectorstore = get_vectorstore()
+    try:
+        all_chroma = vectorstore.get()
+        docs = all_chroma.get("documents", []) or []
+        metas = all_chroma.get("metadatas", []) or [{}] * len(docs)
+        if docs:
+            tokenized = [re.findall(r"\w+", d.lower()) for d in docs]
+            from rank_bm25 import BM25Okapi
+            _bm25_cache.update({"index": BM25Okapi(tokenized), "docs": docs, "metas": metas})
+            print(f"  [BM25 Cache] Built index over {len(docs)} documents.")
+        else:
+            _bm25_cache.update({"index": None, "docs": [], "metas": []})
+    except Exception as e:
+        print(f"  [BM25 Cache] Build note: {e}")
+        _bm25_cache.update({"index": None, "docs": [], "metas": []})
+
+def get_bm25():
+    """Return cached (index, docs, metas), building if needed."""
+    if _bm25_cache["index"] is None and _bm25_cache["docs"] is None:
+        _build_bm25()
+    return _bm25_cache["index"], _bm25_cache["docs"] or [], _bm25_cache["metas"] or []
+
+def invalidate_bm25():
+    """Call this after any ingestion to force a BM25 rebuild on the next query."""
+    _bm25_cache["index"] = None
+    _bm25_cache["docs"] = None
+    _bm25_cache["metas"] = None
+    print("  [BM25 Cache] Invalidated — will rebuild on next query.")
+
+
+# ---------------------------------------------------------------------------
+# Suggestions In-Memory Store
+# ---------------------------------------------------------------------------
+_suggestions_store: list[str] = []
+
+def get_suggestions_cache() -> list[str]:
+    """Return the in-memory cached suggestions."""
+    global _suggestions_store
+    return list(_suggestions_store)
+
+def set_suggestions_cache(questions: list[str]) -> None:
+    """Update the in-memory cached suggestions (top 3)."""
+    global _suggestions_store
+    _suggestions_store = [str(q).strip() for q in questions if q][:3]
+
+def clear_suggestions_cache() -> None:
+    """Clear the in-memory cached suggestions."""
+    global _suggestions_store
+    _suggestions_store = []
 
 def ingest_document(text_or_url: str, original_filename: str | None = None) -> dict:
     import urllib.parse
@@ -273,6 +358,7 @@ def ingest_document(text_or_url: str, original_filename: str | None = None) -> d
     docs_to_index = child_docs if child_docs else doc_splits
     print(f"  Small-to-Big: {len(doc_splits)} parent chunks -> {len(docs_to_index)} child chunks indexed.")
     vectorstore.add_documents(docs_to_index)
+    invalidate_bm25()
     print("Ingestion complete.")
 
     # Extract & Index domain acronyms into glossary
@@ -329,8 +415,7 @@ def generate_suggestions(text: str):
             data = json.loads(match.group(0))
             questions = [str(q).strip() for q in data.get("questions", []) if q]
             if questions:
-                with open("suggestions.json", "w") as f:
-                    json.dump({"suggestions": questions[:3]}, f)
+                set_suggestions_cache(questions[:3])
                 print(f"Ultra-fast generated {len(questions[:3])} suggestions.")
                 return questions[:3]
     except Exception as e:
@@ -348,7 +433,7 @@ def build_app():
         search_type="mmr",
         search_kwargs={
             "k": 50,  # Fetch more for re-ranking
-            "fetch_k": 100,
+            "fetch_k": settings["retriever_fetch_k"],
             "lambda_mult": settings["retriever_lambda_mult"],
         },
     )
@@ -398,12 +483,9 @@ def build_app():
         # 2. Sparse BM25 Search over Chroma Collection (filtered)
         sparse_candidates = []
         try:
-            from rank_bm25 import BM25Okapi
-            all_chroma = vectorstore.get()
-            raw_docs = all_chroma.get("documents", []) or []
-            raw_metas = all_chroma.get("metadatas", []) or [{}] * len(raw_docs)
+            bm25, raw_docs, raw_metas = get_bm25()
 
-            if is_filtered:
+            if is_filtered and raw_docs:
                 filtered_docs = []
                 filtered_metas = []
                 for d, m in zip(raw_docs, raw_metas):
@@ -411,11 +493,16 @@ def build_app():
                     if m_src == src_filter or src_filter.lower() in m_src.lower():
                         filtered_docs.append(d)
                         filtered_metas.append(m)
-                raw_docs, raw_metas = filtered_docs, filtered_metas
+                if filtered_docs:
+                    from rank_bm25 import BM25Okapi
+                    tokenized_corpus = [re.findall(r"\w+", doc.lower()) for doc in filtered_docs]
+                    bm25 = BM25Okapi(tokenized_corpus)
+                    raw_docs, raw_metas = filtered_docs, filtered_metas
+                else:
+                    bm25 = None
+                    raw_docs, raw_metas = [], []
 
-            if raw_docs:
-                tokenized_corpus = [re.findall(r"\w+", doc.lower()) for doc in raw_docs]
-                bm25 = BM25Okapi(tokenized_corpus)
+            if bm25 and raw_docs:
                 tokenized_query = re.findall(r"\w+", q.lower())
                 if tokenized_query:
                     scores = bm25.get_scores(tokenized_query)
@@ -446,9 +533,10 @@ def build_app():
                 doc_registry[doc_id] = (item["text"], item["meta"])
             rrf_scores[doc_id] = rrf_scores.get(doc_id, 0.0) + (1.0 / (60.0 + rank + 1))
 
+        rerank_top_n = settings.get("rerank_top_n", 20)
         sorted_fused = sorted(rrf_scores.keys(), key=lambda k: rrf_scores[k], reverse=True)
-        fused_texts = [doc_registry[k][0] for k in sorted_fused[:40]]
-        fused_metas = [doc_registry[k][1] for k in sorted_fused[:40]]
+        fused_texts = [doc_registry[k][0] for k in sorted_fused[:rerank_top_n]]
+        fused_metas = [doc_registry[k][1] for k in sorted_fused[:rerank_top_n]]
 
         print(f"Hybrid candidates: {len(dense_texts)} dense + {len(sparse_candidates)} sparse -> {len(fused_texts)} fused.")
 
@@ -501,8 +589,11 @@ def build_app():
             print("Decision: 'no' (empty database results)")
             return {"generation": "no", "documents": [], "documents_metadata": [], "doc_grades": [], "latency_ms": int((time.time() - t0) * 1000)}
 
+        grade_limit = settings.get("grade_doc_limit", 4)
+        docs_to_grade = doc_texts[:grade_limit]
+
         docs_str = "\n".join(
-            f"--- Document {i} ---\n{doc[:450].strip()}\n" for i, doc in enumerate(doc_texts[:4])
+            f"--- Document {i} ---\n{doc[:450].strip()}\n" for i, doc in enumerate(docs_to_grade)
         )
 
         prompt = (
@@ -524,7 +615,7 @@ def build_app():
         for attempt in range(2):
             try:
                 resp = llm_fast.invoke(prompt)
-                result = extract_batch_grades(resp.content, len(doc_texts))
+                result = extract_batch_grades(resp.content, len(docs_to_grade))
                 break
             except Exception as e:
                 last_err = e
@@ -539,7 +630,7 @@ def build_app():
         relevant_metas = []
         doc_grades = []
         for g in result.grades:
-            if 0 <= g.index < len(doc_texts):
+            if 0 <= g.index < len(docs_to_grade):
                 score = g.score.lower()
                 meta = doc_metas[g.index] if g.index < len(doc_metas) else {}
                 doc_grades.append({
@@ -549,17 +640,17 @@ def build_app():
                     "source": meta.get("source", "unknown"),
                     "breadcrumb": meta.get("breadcrumb", ""),
                     "relevance": float(meta.get("score", 0)),
-                    "text": doc_texts[g.index],
+                    "text": docs_to_grade[g.index],
                 })
-                print(f"  Doc {g.index + 1}/{len(doc_texts)} decision: '{score}'")
+                print(f"  Doc {g.index + 1}/{len(docs_to_grade)} decision: '{score}'")
                 print(f"    rationale: {g.rationale}")
                 if score == "yes":
-                    relevant_docs.append(doc_texts[g.index])
+                    relevant_docs.append(docs_to_grade[g.index])
                     relevant_metas.append(meta)
 
         lat = int((time.time() - t0) * 1000)
         if relevant_docs:
-            print(f"Decision: 'yes' ({len(relevant_docs)}/{len(doc_texts)} docs relevant)")
+            print(f"Decision: 'yes' ({len(relevant_docs)}/{len(docs_to_grade)} docs relevant)")
             return {"generation": "yes", "documents": relevant_docs, "documents_metadata": relevant_metas, "doc_grades": doc_grades, "latency_ms": lat}
 
         print("Decision: 'no' (no relevant docs found)")
@@ -572,7 +663,9 @@ def build_app():
         docs = state.get("documents", [])
         doc_grades = state.get("doc_grades", [])
         loop_count = state.get("loop_count", 0)
-        context = "\n\n".join(f"[{i+1}] {doc[:750].strip()}" for i, doc in enumerate(docs[:4])).strip()
+        max_docs = settings.get("max_context_docs", 6)
+        max_chars = settings.get("max_context_chars", 1200)
+        context = "\n\n".join(f"[{i+1}] {doc[:max_chars].strip()}" for i, doc in enumerate(docs[:max_docs])).strip()
 
         print(f"  Total context length: {len(context)} chars")
 
@@ -937,6 +1030,15 @@ def build_app():
     # ---------------------------------------------------------------------------
     # MULTI-HOP DECOMPOSITION NODE
     # ---------------------------------------------------------------------------
+    COMPOUND_SIGNALS = [
+        " and ", " also ", " compare ", " vs ", " versus ",
+        " as well as ", " both ", " additionally ", " furthermore ", " difference between "
+    ]
+
+    def _looks_compound(q: str) -> bool:
+        q_lower = q.lower()
+        return any(sig in q_lower for sig in COMPOUND_SIGNALS)
+
     def decompose(state: GraphState) -> dict:
         """Detect compound/multi-part questions, split into focused sub-queries,
         run parallel hybrid retrieval for each, and merge results via RRF."""
@@ -944,7 +1046,12 @@ def build_app():
         question = state["question"]
         print("\n--- NODE: QUERY DECOMPOSITION ---")
 
-        # --- Step 1: Detect if question is compound ---
+        # Skip LLM call entirely for clearly simple questions
+        if not _looks_compound(question):
+            print("  [Decompose] Simple question (heuristic). Skipping LLM decomposition.")
+            return {"sub_queries": [question], "latency_ms": 0}
+
+        # --- Step 1: Detect if question is compound via LLM ---
         detect_prompt = (
             "You are a query analysis assistant.\n"
             f"User question: {question}\n\n"
@@ -980,14 +1087,11 @@ def build_app():
             return {"sub_queries": sub_queries, "latency_ms": int((time.time() - t0) * 1000)}
 
         # --- Step 2: Parallel hybrid retrieval per sub-query ---
-        from rank_bm25 import BM25Okapi
-        all_chroma = vectorstore.get()
-        raw_docs = all_chroma.get("documents", []) or []
-        raw_metas = all_chroma.get("metadatas", []) or [{}] * len(raw_docs)
+        bm25, raw_docs, raw_metas = get_bm25()
         
         src_filter = state.get("source_filter")
         is_filtered = bool(src_filter and src_filter.strip().lower() not in ("", "all", "all sources", "none"))
-        if is_filtered:
+        if is_filtered and raw_docs:
             filtered_docs = []
             filtered_metas = []
             for d, m in zip(raw_docs, raw_metas):
@@ -995,10 +1099,14 @@ def build_app():
                 if m_src == src_filter or src_filter.lower() in m_src.lower():
                     filtered_docs.append(d)
                     filtered_metas.append(m)
-            raw_docs, raw_metas = filtered_docs, filtered_metas
-
-        tokenized_corpus = [re.findall(r"\w+", doc.lower()) for doc in raw_docs] if raw_docs else []
-        bm25 = BM25Okapi(tokenized_corpus) if tokenized_corpus else None
+            if filtered_docs:
+                from rank_bm25 import BM25Okapi
+                tokenized_corpus = [re.findall(r"\w+", doc.lower()) for doc in filtered_docs]
+                bm25 = BM25Okapi(tokenized_corpus)
+                raw_docs, raw_metas = filtered_docs, filtered_metas
+            else:
+                bm25 = None
+                raw_docs, raw_metas = [], []
 
         # RRF registry across all sub-queries
         rrf_scores: dict[str, float] = {}
@@ -1034,7 +1142,8 @@ def build_app():
                             rrf_scores[did] = rrf_scores.get(did, 0.0) + 1.0 / (K + rank + 1)
 
         # --- Step 3: Sort + FlashRank re-rank merged pool ---
-        sorted_fused = sorted(rrf_scores.keys(), key=lambda k: rrf_scores[k], reverse=True)[:40]
+        rerank_top_n = settings.get("rerank_top_n", 20)
+        sorted_fused = sorted(rrf_scores.keys(), key=lambda k: rrf_scores[k], reverse=True)[:rerank_top_n]
         fused_texts = [doc_registry[k][0] for k in sorted_fused]
         fused_metas = [doc_registry[k][1] for k in sorted_fused]
         print(f"  Multi-hop merged pool: {len(fused_texts)} candidates from {len(sub_queries)} sub-queries.")
@@ -1101,8 +1210,18 @@ def build_app():
     return workflow.compile()
 
 
+_app = None
+
+def get_app():
+    """Return the compiled LangGraph app, building it once and caching it as a lazy singleton."""
+    global _app
+    if _app is None:
+        _app = build_app()
+    return _app
+
+
 def run_question(question: str, web_search_enabled: bool = True, source_filter: str | None = None) -> dict:
-    app = build_app()
+    app = get_app()
     result = app.invoke(
         {
             "question": question,

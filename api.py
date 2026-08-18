@@ -9,7 +9,7 @@ from fastapi.responses import StreamingResponse, FileResponse, RedirectResponse,
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from main import build_app, get_settings, ingest_document
+from main import get_app, get_settings, ingest_document
 from auth import (
     get_current_user,
     get_auth_settings,
@@ -27,18 +27,29 @@ logger = logging.getLogger(__name__)
 app = FastAPI(
     title="Ridge API",
     description="High-performance Corrective RAG (CRAG) platform with LangGraph state machine, ChromaDB, FlashRank, and Groq LLMs.",
-    version="1.0.0",
+    version="2.0.0",
 )
+
+ALLOWED_ORIGINS = [
+    origin.strip()
+    for origin in os.getenv(
+        "ALLOWED_ORIGINS",
+        "http://localhost:5173,http://localhost:3000,http://127.0.0.1:5173,http://localhost:8000",
+    ).split(",")
+    if origin.strip()
+]
+if "*" in ALLOWED_ORIGINS:
+    ALLOWED_ORIGINS = ["*"]
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type"],
 )
 
-rag_app = build_app()
+rag_app = get_app()
 
 class ChatRequest(BaseModel):
     question: str
@@ -301,53 +312,66 @@ async def ingest(req: IngestRequest, user: UserProfile = Depends(get_current_use
         logger.error(f"Error ingesting document: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+ALLOWED_EXTENSIONS = {".pdf", ".docx", ".txt", ".md", ".pptx", ".xlsx", ".csv"}
+MAX_UPLOAD_BYTES = int(os.getenv("MAX_UPLOAD_MB", "50")) * 1024 * 1024
+
 @app.post("/upload")
+@app.post("/api/ingest/upload")
 async def upload_file(file: UploadFile = File(...), user: UserProfile = Depends(get_current_user)):
+    filename = file.filename or ""
+    _, ext = os.path.splitext(filename)
+    ext = ext.lower()
+    
+    if ext not in ALLOWED_EXTENSIONS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"File extension '{ext}' is not supported. Allowed extensions: {', '.join(sorted(ALLOWED_EXTENSIONS))}"
+        )
+    
     try:
-        suffix = ""
-        if file.filename:
-            _, suffix = os.path.splitext(file.filename)
+        content = await file.read()
+        if len(content) > MAX_UPLOAD_BYTES:
+            raise HTTPException(
+                status_code=413,
+                detail=f"File exceeds maximum upload size of {MAX_UPLOAD_BYTES // (1024 * 1024)}MB."
+            )
         
-        # Create a temp file to store the upload
-        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as temp_file:
-            shutil.copyfileobj(file.file, temp_file)
+        with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as temp_file:
+            temp_file.write(content)
             temp_path = temp_file.name
             
         try:
-            result = ingest_document(temp_path, original_filename=file.filename)
+            result = ingest_document(temp_path, original_filename=filename)
             return result
         finally:
-            # Cleanup temp file after ingestion
             if os.path.exists(temp_path):
                 os.remove(temp_path)
                 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error processing upload: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.get("/health")
 @app.get("/status")
-def status():
-    return {"status": "ok"}
+def health():
+    return {"status": "ok", "service": "Ridge RAG"}
 
 @app.get("/api/suggestions")
 def get_suggestions(force: bool = False, user: UserProfile = Depends(get_current_user)):
     """
-    Returns suggested queries from the persistent suggestions.json cache.
+    Returns suggested queries from the in-memory / persistent cache.
     Does NOT make LLM or Chroma DB calls on refresh.
     Only re-generates when force=True or during document ingestion.
     """
-    # 1. Check persistent cache file first
-    if not force and os.path.exists("suggestions.json"):
-        try:
-            with open("suggestions.json", "r") as f:
-                data = json.load(f)
-                sugs = data.get("suggestions", [])
-                if sugs:
-                    return {"suggestions": sugs, "cached": True}
-        except Exception as e:
-            logger.warning(f"Error reading suggestions.json: {e}")
+    from main import get_suggestions_cache
+    if not force:
+        sugs = get_suggestions_cache()
+        if sugs:
+            return {"suggestions": sugs, "cached": True}
 
-    # 2. Only if no cache file exists or force=True, generate from Chroma sample
+    # Only if no cached suggestions exist or force=True, generate from Chroma sample
     try:
         from main import get_vectorstore, generate_suggestions
         vectorstore = get_vectorstore()
@@ -358,15 +382,14 @@ def get_suggestions(force: bool = False, user: UserProfile = Depends(get_current
             documents = docs.get("documents", [])
             if documents:
                 sample_text = " ".join(documents)[:1500]
-                generate_suggestions(sample_text)
-                if os.path.exists("suggestions.json"):
-                    with open("suggestions.json", "r") as f:
-                        data = json.load(f)
-                        return {"suggestions": data.get("suggestions", []), "cached": False}
+                new_sugs = generate_suggestions(sample_text)
+                if new_sugs:
+                    return {"suggestions": new_sugs, "cached": False}
     except Exception as e:
         logger.warning(f"Could not generate suggestions: {e}")
 
-    return {"suggestions": [], "empty": True}
+    cached_fallback = get_suggestions_cache()
+    return {"suggestions": cached_fallback, "empty": len(cached_fallback) == 0}
 
 @app.get("/api/glossary")
 def get_glossary_terms(user: UserProfile = Depends(get_current_user)):
@@ -498,7 +521,7 @@ def delete_kb_source(req: DeleteKBRequest, user: UserProfile = Depends(get_curre
 
 @app.post("/api/kb/clear")
 def clear_kb(user: UserProfile = Depends(get_current_user)):
-    from main import get_vectorstore
+    from main import get_vectorstore, clear_suggestions_cache
     try:
         vectorstore = get_vectorstore()
         coll = vectorstore._collection
@@ -511,6 +534,7 @@ def clear_kb(user: UserProfile = Depends(get_current_user)):
     except Exception as e:
         logger.error(f"Error in clear_kb: {e}")
 
+    clear_suggestions_cache()
     if os.path.exists("suggestions.json"):
         try:
             os.remove("suggestions.json")

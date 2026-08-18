@@ -26,13 +26,46 @@ security = HTTPBearer(auto_error=False)
 DB_PATH = os.getenv("AUTH_DB_PATH", "./users.db")
 
 
+KNOWN_INSECURE_DEV_SECRETS = {
+    "e2eb3dc152cb4185a5089016c21b6fe7ee8b0325f668140991d3e7841fb8c1ab",
+    "change_me",
+    "secret",
+    "your_jwt_secret_here",
+}
+
+
+def is_production_environment() -> bool:
+    """Detect if running in a production or deployed cloud environment."""
+    env_name = (os.getenv("ENV") or os.getenv("ENVIRONMENT") or os.getenv("NODE_ENV") or "").lower().strip()
+    if env_name in ("production", "prod"):
+        return True
+    # Auto-detect common cloud platforms (Railway, Render, Fly.io, HuggingFace Spaces, Cloud Run)
+    if any(os.getenv(k) for k in ("RAILWAY_ENVIRONMENT", "RAILWAY_PROJECT_ID", "RENDER", "FLY_APP_NAME", "SPACE_ID", "K_SERVICE")):
+        return True
+    return False
+
+
 def get_auth_settings() -> dict:
     raw_enabled = os.getenv("AUTH_ENABLED", "true").lower().strip()
     enabled = raw_enabled not in ("false", "0", "no")
+    jwt_secret = os.getenv("JWT_SECRET") or os.getenv("JWT_SECRET_KEY")
+    is_prod = is_production_environment()
+
+    if is_prod:
+        if not jwt_secret or jwt_secret.strip() in KNOWN_INSECURE_DEV_SECRETS:
+            raise RuntimeError(
+                "CRITICAL SECURITY ERROR: JWT_SECRET environment variable is missing or using "
+                "an insecure default secret in production/cloud environment. Refusing to start. "
+                "Please set a strong, unique JWT_SECRET in your Railway / cloud dashboard."
+            )
+    else:
+        if not jwt_secret:
+            jwt_secret = "e2eb3dc152cb4185a5089016c21b6fe7ee8b0325f668140991d3e7841fb8c1ab"
+            logger.warning("Using default dev JWT_SECRET. Set JWT_SECRET in production.")
 
     return {
         "enabled": enabled,
-        "jwt_secret": os.getenv("JWT_SECRET", "e2eb3dc152cb4185a5089016c21b6fe7ee8b0325f668140991d3e7841fb8c1ab"),
+        "jwt_secret": jwt_secret,
         "jwt_algorithm": "HS256",
         "jwt_expires_days": int(os.getenv("JWT_EXPIRES_DAYS", "7")),
     }

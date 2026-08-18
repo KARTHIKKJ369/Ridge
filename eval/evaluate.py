@@ -139,10 +139,12 @@ def run_benchmark():
     app = build_app()
 
     results = []
-    for tc in test_cases:
+    for i, tc in enumerate(test_cases):
         res = evaluate_test_case(app, tc)
         results.append(res)
-        time.sleep(2.0)
+        if i < len(test_cases) - 1:
+            print("  [Pacing] Cooling down for 3.5s to respect Groq RPM limits...")
+            time.sleep(3.5)
 
     # Compute Summary Statistics
     total_cases = len(results)

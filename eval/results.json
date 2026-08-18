@@ -2,11 +2,11 @@
   "summary": {
     "total_cases": 5,
     "context_recall": 61.660000000000004,
-    "faithfulness": 80.0,
-    "answer_relevance": 73.34,
-    "grader_accuracy": 100.0,
-    "routing_accuracy": 100.0,
-    "avg_latency_ms": 15716.8
+    "faithfulness": 100.0,
+    "answer_relevance": 83.34,
+    "grader_accuracy": 80.0,
+    "routing_accuracy": 80.0,
+    "avg_latency_ms": 39892.0
   },
   "test_cases": [
     {
@@ -20,12 +20,12 @@
         "generate_node",
         "check_hallucination_node"
       ],
-      "total_latency_ms": 6318,
+      "total_latency_ms": 11186,
       "grader_verdict": "yes",
       "expected_grader_verdict": "yes",
       "grader_correct": true,
       "context_recall": 100.0,
-      "faithfulness": 0.0,
+      "faithfulness": 100.0,
       "answer_relevance": 100.0,
       "keyword_hits": [
         "Karthik Jayan",
@@ -39,7 +39,7 @@
       ],
       "routing_correct": true,
       "final_route": "generate_node",
-      "answer_preview": "**Direct Answer:**   Karthik Jayan is a final\u2011year B.Tech Computer Science & Engineering student at Mar Athanasius College of Engineering, known for his work in artificial intellig..."
+      "answer_preview": "Here's a thinking process:  1.  **Analyze User Input:**    - **Question:** \"who is karthik\"    - **Context:** Provided snippets from a resume/CV and an email notification for \"Kart..."
     },
     {
       "id": "tc_002",
@@ -52,7 +52,7 @@
         "generate_node",
         "check_hallucination_node"
       ],
-      "total_latency_ms": 5041,
+      "total_latency_ms": 31568,
       "grader_verdict": "yes",
       "expected_grader_verdict": "yes",
       "grader_correct": true,
@@ -69,7 +69,7 @@
       ],
       "routing_correct": true,
       "final_route": "generate_node",
-      "answer_preview": "**Direct Answer:**   The two classic heuristics that keep disjoint\u2011set trees shallow and make `Find`/`Union` operations almost constant\u2011time are **Union by Rank (or Size)** and **P..."
+      "answer_preview": "Here's a thinking process:  1.  **Analyze User Input:**    - **Question:** \"what are the heuristics to reduce tree operation time in disjoint sets\"    - **Context Provided:** Four ..."
     },
     {
       "id": "tc_003",
@@ -86,7 +86,7 @@
         "generate_node",
         "check_hallucination_node"
       ],
-      "total_latency_ms": 27678,
+      "total_latency_ms": 67916,
       "grader_verdict": "no",
       "expected_grader_verdict": "no",
       "grader_correct": true,
@@ -104,7 +104,7 @@
       ],
       "routing_correct": true,
       "final_route": "web_search_node",
-      "answer_preview": "**Executive answer:**   The Big Bang theory is the prevailing astrophysical model that explains the origin and evolution of the universe as an expansion from an extremely hot, dens..."
+      "answer_preview": "Here's a thinking process:  1.  **Analyze User Input:**    - **Question:** \"what is the big bang theory in astrophysics\"    - **Context Provided:** Three sources about the Big Bang..."
     },
     {
       "id": "tc_004",
@@ -117,25 +117,26 @@
         "rewrite_node",
         "retrieve_node",
         "grade_node",
-        "web_search_node",
         "generate_node",
         "check_hallucination_node"
       ],
-      "total_latency_ms": 29490,
-      "grader_verdict": "no",
+      "total_latency_ms": 50451,
+      "grader_verdict": "yes",
       "expected_grader_verdict": "no",
-      "grader_correct": true,
+      "grader_correct": false,
       "context_recall": 0.0,
       "faithfulness": 100.0,
-      "answer_relevance": 0.0,
-      "keyword_hits": [],
+      "answer_relevance": 50.0,
+      "keyword_hits": [
+        "unintelligible"
+      ],
       "keywords_expected": [
         "unintelligible",
         "clarification"
       ],
-      "routing_correct": true,
-      "final_route": "web_search_node",
-      "answer_preview": "**Direct Answer:**   I\u2019m sorry, but I couldn\u2019t understand your request. Could you please clarify or rephrase your question?..."
+      "routing_correct": false,
+      "final_route": "generate_node",
+      "answer_preview": "It appears your message contains unintelligible text. Could you please clarify your question? I am ready to assist with any specific technical details from the provided context, su..."
     },
     {
       "id": "tc_005",
@@ -148,7 +149,7 @@
         "generate_node",
         "check_hallucination_node"
       ],
-      "total_latency_ms": 10057,
+      "total_latency_ms": 38339,
       "grader_verdict": "yes",
       "expected_grader_verdict": "yes",
       "grader_correct": true,
@@ -169,7 +170,7 @@
       ],
       "routing_correct": true,
       "final_route": "generate_node",
-      "answer_preview": "**Direct Answer:**   The two core optimizations for a Disjoint\u2011Set Union (DSU) are **union by rank/size** and **path compression**; together they guarantee near\u2011constant amortized ..."
+      "answer_preview": "Here's a thinking process:  1.  **Analyze User Input:**    - **Question:** \"dsu optimization algorithms\"    - **Context Provided:** Four snippets about Disjoint-Set Union (DSU) / U..."
     }
   ]
 }
