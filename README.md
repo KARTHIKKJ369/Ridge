@@ -97,27 +97,27 @@
 
 ```mermaid
 flowchart TD
-    Start([User Query]) --> CacheCheck{Semantic Cache Hit?\nSim >= 0.96}
-    CacheCheck -->|Yes (<3ms)| FastReturn([Instant Verified Answer])
-    CacheCheck -->|No| Decompose[Query Decomposition Node\nSplit Multi-Hop Queries]
+    Start(["User Query"]) --> CacheCheck{"Semantic Cache Hit?<br/>Sim ≥ 0.96"}
+    CacheCheck -->|"Yes (under 3ms)"| FastReturn(["Instant Verified Answer"])
+    CacheCheck -->|No| Decompose["Query Decomposition Node<br/>Split Multi-Hop Queries"]
     
-    Decompose --> Retrieve[Hybrid Retrieval Node\nChroma HNSW + BM25 + FlashRank + S2B]
-    Retrieve --> Grade[Relevance Grading Node\nStrict LLM Veracity Evaluation]
+    Decompose --> Retrieve["Hybrid Retrieval Node<br/>Chroma HNSW + BM25 + FlashRank + S2B"]
+    Retrieve --> Grade["Relevance Grading Node<br/>Strict LLM Veracity Evaluation"]
     
-    Grade -->|Relevant Docs >= 1| ConflictAudit{Conflict Check\nDistinct Sources >= 2}
-    ConflictAudit -->|Yes| FlagConflict[Audit Contradictions & Extract Passages]
-    ConflictAudit -->|No| Generate[Answer Synthesis Node\nGroq LPU + Fail-Safe]
+    Grade -->|"Relevant Docs ≥ 1"| ConflictAudit{"Conflict Check<br/>Distinct Sources ≥ 2"}
+    ConflictAudit -->|Yes| FlagConflict["Audit Contradictions & Extract Passages"]
+    ConflictAudit -->|No| Generate["Answer Synthesis Node<br/>Groq LPU + Fail-Safe"]
     FlagConflict --> Generate
     
-    Grade -->|0 Relevant Docs| RouteCheck{Loops < Max Loops?}
-    RouteCheck -->|Yes| Rewrite[Query Reformulation Node\nAdaptive Keyword Optimizer]
+    Grade -->|"0 Relevant Docs"| RouteCheck{"Loops < Max Loops?"}
+    RouteCheck -->|Yes| Rewrite["Query Reformulation Node<br/>Adaptive Keyword Optimizer"]
     Rewrite --> Retrieve
-    RouteCheck -->|No / Web ON| WebSearch[Web Search Fallback Node\nDDGS 5s Timeout]
+    RouteCheck -->|"No / Web Search"| WebSearch["Web Search Fallback Node<br/>DDGS 5s Timeout"]
     WebSearch --> Generate
     
-    Generate --> HallucinationAudit[Hallucination Auditor Node\nFaithfulness Verification]
-    HallucinationAudit --> CacheStore[Store in Semantic Cache]
-    CacheStore --> End([Stream Verified SSE Response])
+    Generate --> HallucinationAudit["Hallucination Auditor Node<br/>Faithfulness Verification"]
+    HallucinationAudit --> CacheStore["Store in Semantic Cache"]
+    CacheStore --> End(["Stream Verified SSE Response"])
 ```
 
 ---
