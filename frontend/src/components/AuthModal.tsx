@@ -9,6 +9,10 @@ interface UserProfile {
   avatar_url?: string;
   provider?: string;
   is_guest?: boolean;
+  role?: string;
+  is_active?: boolean;
+  daily_request_limit?: number;
+  requests_today?: number;
 }
 
 interface AuthModalProps {

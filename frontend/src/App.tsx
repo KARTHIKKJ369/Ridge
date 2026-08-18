@@ -27,6 +27,12 @@ import {
   Command, 
   Zap, 
   ShieldCheck, 
+  Shield,
+  Users,
+  Sliders,
+  UserCheck,
+  UserX,
+  Crown,
   Edit3,
   Paperclip,
   ArrowUp,
@@ -520,6 +526,74 @@ type UserProfile = {
   avatar_url?: string;
   provider?: string;
   is_guest?: boolean;
+  role?: string;
+  is_active?: boolean;
+  daily_request_limit?: number;
+  requests_today?: number;
+};
+
+type AdminUser = {
+  id: string;
+  username: string;
+  email: string;
+  name: string;
+  role: string;
+  is_active: boolean;
+  daily_request_limit: number;
+  created_at: number;
+  requests_today: number;
+};
+
+type AdminStats = {
+  total_users: number;
+  active_users: number;
+  total_requests_today: number;
+  total_documents: number;
+  total_chunks: number;
+};
+
+// ---------------------------------------------------------------------------
+// Per-User Scoped Session Helpers
+// ---------------------------------------------------------------------------
+
+const getUserSessionStorageKey = (u: UserProfile | null) => {
+  if (!u || u.is_guest) return 'ridge_sessions_guest';
+  return `ridge_sessions_${u.id || u.username || 'user'}`;
+};
+
+const createFreshSession = (): ChatSession => ({
+  id: Date.now().toString(),
+  title: 'New Research Ascent',
+  createdAt: Date.now(),
+  messages: []
+});
+
+const loadUserSessions = (u: UserProfile | null): ChatSession[] => {
+  const key = getUserSessionStorageKey(u);
+  try {
+    const saved = localStorage.getItem(key);
+    if (saved) {
+      const parsed = JSON.parse(saved);
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        return parsed;
+      }
+    }
+    // Migration from legacy global key if present
+    const legacy = localStorage.getItem('recall_crag_sessions');
+    if (legacy && (!u || u.is_guest)) {
+      try {
+        const parsedLegacy = JSON.parse(legacy);
+        if (Array.isArray(parsedLegacy) && parsedLegacy.length > 0) {
+          localStorage.removeItem('recall_crag_sessions');
+          localStorage.setItem(key, JSON.stringify(parsedLegacy));
+          return parsedLegacy;
+        }
+      } catch {}
+    }
+  } catch (e) {
+    console.error('Failed to load user sessions:', e);
+  }
+  return [createFreshSession()];
 };
 
 type AuthConfig = {
@@ -1337,6 +1411,15 @@ export default function App() {
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
   const [isUserDropdownOpen, setIsUserDropdownOpen] = useState(false);
 
+  // Admin Management State
+  const [isAdminModalOpen, setIsAdminModalOpen] = useState(false);
+  const [adminUsers, setAdminUsers] = useState<AdminUser[]>([]);
+  const [adminStats, setAdminStats] = useState<AdminStats | null>(null);
+  const [isLoadingAdmin, setIsLoadingAdmin] = useState(false);
+  const [adminSearch, setAdminSearch] = useState('');
+  const [editingLimitUserId, setEditingLimitUserId] = useState<string | null>(null);
+  const [tempLimitValue, setTempLimitValue] = useState<number>(50);
+
   // Theme Management: Defaults to 'stone' (Stone & Summit)
   const [theme, setTheme] = useState<ThemeMode>(() => {
     return (localStorage.getItem('recall_theme') as ThemeMode) || 'stone';
@@ -1347,23 +1430,63 @@ export default function App() {
   const [isArtifactsOpen, setIsArtifactsOpen] = useState(false);
   const [activeArtifactTab, setActiveArtifactTab] = useState<'trace' | 'knowledge' | 'grader'>('trace');
 
-  // Multi-Session Chat State
+  // Multi-Session Chat State (User-scoped and guaranteed to open to Home view)
   const [sessions, setSessions] = useState<ChatSession[]>(() => {
-    const saved = localStorage.getItem('recall_crag_sessions');
-    if (saved) {
-      try { return JSON.parse(saved); } catch (e) {}
+    const initialUser = (() => {
+      try {
+        const saved = localStorage.getItem('ridge_user');
+        return saved ? JSON.parse(saved) : null;
+      } catch { return null; }
+    })();
+    const userSessions = loadUserSessions(initialUser);
+    const hasEmpty = userSessions.some(s => s.messages.length === 0);
+    if (!hasEmpty) {
+      return [createFreshSession(), ...userSessions];
     }
-    return [{
-      id: 'default-session',
-      title: 'Initial Ascent',
-      createdAt: Date.now(),
-      messages: []
-    }];
+    return userSessions;
   });
+
   const [activeSessionId, setActiveSessionId] = useState<string>(() => {
-    const savedActive = localStorage.getItem('recall_crag_active_session');
-    return savedActive || 'default-session';
+    const initialUser = (() => {
+      try {
+        const saved = localStorage.getItem('ridge_user');
+        return saved ? JSON.parse(saved) : null;
+      } catch { return null; }
+    })();
+    const userSessions = loadUserSessions(initialUser);
+    const emptySession = userSessions.find(s => s.messages.length === 0);
+    if (emptySession) return emptySession.id;
+    return userSessions[0]?.id || 'default-session';
   });
+
+  const currentUserIdRef = useRef<string>(user?.id || 'guest');
+
+  // Synchronize and isolate sessions when user account changes (login, logout, switch)
+  useEffect(() => {
+    const activeId = user?.id || 'guest';
+    if (currentUserIdRef.current !== activeId) {
+      currentUserIdRef.current = activeId;
+      const loaded = loadUserSessions(user);
+      const emptySession = loaded.find(s => s.messages.length === 0);
+      if (emptySession) {
+        setSessions(loaded);
+        setActiveSessionId(emptySession.id);
+      } else {
+        const fresh = createFreshSession();
+        setSessions([fresh, ...loaded]);
+        setActiveSessionId(fresh.id);
+      }
+      chatInputRef.current?.setValue('');
+    }
+  }, [user]);
+
+  // Persist sessions only for the currently active user's storage key
+  useEffect(() => {
+    const currentKey = getUserSessionStorageKey(user);
+    if (currentUserIdRef.current === (user?.id || 'guest')) {
+      localStorage.setItem(currentKey, JSON.stringify(sessions));
+    }
+  }, [sessions, user]);
 
   const activeSession = sessions.find(s => s.id === activeSessionId) || sessions[0];
   const messages = activeSession?.messages || [];
@@ -1498,15 +1621,6 @@ export default function App() {
       : 'Ridge · Corrective RAG Intelligence';
   }, [activeSession?.title]);
 
-  // Save sessions to localStorage
-  useEffect(() => {
-    localStorage.setItem('recall_crag_sessions', JSON.stringify(sessions));
-  }, [sessions]);
-
-  useEffect(() => {
-    localStorage.setItem('recall_crag_active_session', activeSessionId);
-  }, [activeSessionId]);
-
   // Apply Theme Mode
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme);
@@ -1532,6 +1646,7 @@ export default function App() {
         }
         setIsIngestOpen(false);
         setIsExportOpen(false);
+        setIsAdminModalOpen(false);
         setSelectedSourceModal(null);
         if (window.innerWidth < 768) {
           setIsSidebarOpen(false);
@@ -1607,9 +1722,115 @@ export default function App() {
     localStorage.removeItem('ridge_user');
     setUser(null);
     setIsUserDropdownOpen(false);
+    setIsAdminModalOpen(false);
     showToast('Signed out of Ridge', 'info');
     if (authConfig?.enabled) {
       setIsAuthModalOpen(true);
+    }
+  };
+
+  // Admin Management Functions
+  const fetchAdminData = async () => {
+    setIsLoadingAdmin(true);
+    try {
+      const [usersRes, statsRes] = await Promise.all([
+        fetchWithAuth('/api/admin/users'),
+        fetchWithAuth('/api/admin/stats')
+      ]);
+      if (usersRes.ok) {
+        const uData = await usersRes.json();
+        setAdminUsers(uData.users || []);
+      }
+      if (statsRes.ok) {
+        const sData = await statsRes.json();
+        setAdminStats(sData);
+      }
+    } catch (e) {
+      console.error('Failed to fetch admin data:', e);
+      showToast('Failed to load admin data', 'error');
+    } finally {
+      setIsLoadingAdmin(false);
+    }
+  };
+
+  const handleUpdateRole = async (targetId: string, currentRole: string) => {
+    const newRole = currentRole === 'admin' ? 'user' : 'admin';
+    try {
+      const res = await fetchWithAuth(`/api/admin/users/${targetId}/role`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ role: newRole })
+      });
+      if (res.ok) {
+        showToast(`User role updated to ${newRole}`, 'success');
+        setAdminUsers(prev => prev.map(u => u.id === targetId ? { ...u, role: newRole } : u));
+      } else {
+        const err = await res.json();
+        showToast(err.detail || 'Failed to update role', 'error');
+      }
+    } catch (e) {
+      showToast('Error updating role', 'error');
+    }
+  };
+
+  const handleUpdateStatus = async (targetId: string, currentStatus: boolean) => {
+    const newStatus = !currentStatus;
+    try {
+      const res = await fetchWithAuth(`/api/admin/users/${targetId}/status`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ is_active: newStatus })
+      });
+      if (res.ok) {
+        showToast(`User account ${newStatus ? 'activated' : 'suspended'}`, 'success');
+        setAdminUsers(prev => prev.map(u => u.id === targetId ? { ...u, is_active: newStatus } : u));
+      } else {
+        const err = await res.json();
+        showToast(err.detail || 'Failed to update status', 'error');
+      }
+    } catch (e) {
+      showToast('Error updating status', 'error');
+    }
+  };
+
+  const handleSaveLimit = async (targetId: string, newLimit: number) => {
+    try {
+      const res = await fetchWithAuth(`/api/admin/users/${targetId}/limit`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ limit: newLimit })
+      });
+      if (res.ok) {
+        showToast('Daily request quota updated', 'success');
+        setAdminUsers(prev => prev.map(u => u.id === targetId ? { ...u, daily_request_limit: newLimit } : u));
+        setEditingLimitUserId(null);
+      } else {
+        const err = await res.json();
+        showToast(err.detail || 'Failed to update quota', 'error');
+      }
+    } catch (e) {
+      showToast('Error updating quota', 'error');
+    }
+  };
+
+  const handleDeleteUser = async (targetId: string, username: string) => {
+    if (!window.confirm(`Are you sure you want to permanently delete user account '${username}' and all their uploaded documents?`)) {
+      return;
+    }
+    try {
+      const res = await fetchWithAuth(`/api/admin/users/${targetId}`, {
+        method: 'DELETE'
+      });
+      if (res.ok) {
+        showToast(`User '${username}' deleted`, 'success');
+        setAdminUsers(prev => prev.filter(u => u.id !== targetId));
+        fetchAdminData();
+      } else {
+        const err = await res.json();
+        showToast(err.detail || 'Failed to delete user', 'error');
+      }
+    } catch (e) {
+      showToast('Error deleting user', 'error');
     }
   };
 
@@ -1738,15 +1959,36 @@ export default function App() {
   }, [messages, isLoading]);
 
   // Session Management Helpers
+  const handleGoHome = () => {
+    if (activeSession && activeSession.messages.length === 0) {
+      if (window.innerWidth < 768) setIsSidebarOpen(false);
+      return;
+    }
+    const emptySession = sessions.find(s => s.messages.length === 0);
+    if (emptySession) {
+      setActiveSessionId(emptySession.id);
+    } else {
+      const fresh = createFreshSession();
+      setSessions(prev => [fresh, ...prev]);
+      setActiveSessionId(fresh.id);
+    }
+    chatInputRef.current?.setValue('');
+    if (window.innerWidth < 768) setIsSidebarOpen(false);
+  };
+
   const handleNewChat = () => {
-    const newSession: ChatSession = {
-      id: Date.now().toString(),
-      title: 'New Research Ascent',
-      createdAt: Date.now(),
-      messages: []
-    };
-    setSessions(prev => [newSession, ...prev]);
-    setActiveSessionId(newSession.id);
+    if (activeSession && activeSession.messages.length === 0) {
+      if (window.innerWidth < 768) setIsSidebarOpen(false);
+      return;
+    }
+    const emptySession = sessions.find(s => s.messages.length === 0);
+    if (emptySession) {
+      setActiveSessionId(emptySession.id);
+    } else {
+      const fresh = createFreshSession();
+      setSessions(prev => [fresh, ...prev]);
+      setActiveSessionId(fresh.id);
+    }
     chatInputRef.current?.setValue('');
     if (window.innerWidth < 768) setIsSidebarOpen(false);
     showToast('Started new research ascent', 'info');
@@ -2423,7 +2665,13 @@ export default function App() {
       {/* Left Navigation Sidebar */}
       <aside className={`recall-sidebar ${isSidebarOpen ? 'open' : 'collapsed'}`}>
         <div className="sidebar-header">
-          <div className="recall-brand">
+          <div 
+            className="recall-brand interactive-brand" 
+            onClick={handleGoHome} 
+            role="button" 
+            tabIndex={0}
+            title="Ridge Home - New Research Ascent"
+          >
             <div className="brand-logo-frame">
               <RidgeLogo size={26} />
             </div>
@@ -2570,13 +2818,18 @@ export default function App() {
               </button>
             )}
 
-            <div className="navbar-brand-anchor">
+            <button 
+              className="navbar-brand-anchor interactive-brand"
+              onClick={handleGoHome}
+              title="Ridge Home - Start New Ascent"
+              type="button"
+            >
               <span className="navbar-title">Ridge</span>
               <div className="engine-status-tag">
                 <span className="engine-live-dot" />
                 <span className="engine-name">Groq LLM</span>
               </div>
-            </div>
+            </button>
           </div>
 
           <div className="navbar-right">
@@ -2602,6 +2855,22 @@ export default function App() {
 
             {/* Session Action Cluster */}
             <div className="nav-group-actions">
+              {user?.role === 'admin' && (
+                <button 
+                  className={`nav-action-pill admin-pill ${isAdminModalOpen ? 'active' : ''}`}
+                  onClick={() => {
+                    setIsAdminModalOpen(true);
+                    fetchAdminData();
+                  }}
+                  title="Open Ridge Administrator Portal"
+                  aria-label="Admin console"
+                  type="button"
+                >
+                  <ShieldCheck size={15} />
+                  <span>Admin</span>
+                </button>
+              )}
+
               <button 
                 className="nav-action-pill glossary-pill"
                 onClick={() => {
@@ -2679,12 +2948,47 @@ export default function App() {
                         <div className="dropdown-user-name">{user.name || user.username}</div>
                         <div className="dropdown-user-email">{user.email}</div>
                         <div className="dropdown-user-provider">
-                          <span className={`provider-badge ${user.provider || 'local'}`}>
-                            {user.provider === 'local' ? 'Local Account' : user.provider}
+                          <span className={`provider-badge ${user.role === 'admin' ? 'admin' : (user.provider || 'local')}`}>
+                            {user.role === 'admin' ? 'Administrator' : (user.provider === 'local' ? 'Local Account' : user.provider)}
                           </span>
                         </div>
                       </div>
+
+                      {/* Daily Request Quota Tracker */}
+                      <div className="dropdown-quota-box">
+                        <div className="quota-row-label">
+                          <span className="quota-title">Daily Ascent Quota</span>
+                          <span className="quota-count">
+                            {user.role === 'admin' ? 'Unlimited' : `${user.requests_today || 0} / ${user.daily_request_limit || 50}`}
+                          </span>
+                        </div>
+                        {user.role !== 'admin' && (
+                          <div className="quota-track">
+                            <div 
+                              className={`quota-fill ${((user.requests_today || 0) / (user.daily_request_limit || 50)) >= 0.85 ? 'warning' : ''}`} 
+                              style={{ width: `${Math.min(100, (((user.requests_today || 0) / (user.daily_request_limit || 50)) * 100))}%` }}
+                            />
+                          </div>
+                        )}
+                      </div>
+
                       <div className="dropdown-divider" />
+
+                      {user.role === 'admin' && (
+                        <button 
+                          className="dropdown-action-btn admin-menu-btn" 
+                          onClick={() => {
+                            setIsUserDropdownOpen(false);
+                            setIsAdminModalOpen(true);
+                            fetchAdminData();
+                          }} 
+                          type="button"
+                        >
+                          <Shield size={14} />
+                          <span>Admin Console</span>
+                        </button>
+                      )}
+
                       <button className="dropdown-action-btn logout-btn" onClick={handleLogout} type="button">
                         <LogOut size={14} />
                         <span>Sign Out</span>
@@ -3546,6 +3850,219 @@ export default function App() {
           </div>
           <div className="cit-popover-body">
             {hoveredCitation.target?.text ? hoveredCitation.target.text.slice(0, 200) + '...' : 'Referenced document passage evaluated and verified by the CRAG pipeline.'}
+          </div>
+        </div>
+      )}
+
+      {/* Admin Management Console Modal */}
+      {isAdminModalOpen && (
+        <div className="recall-modal-backdrop" onClick={() => setIsAdminModalOpen(false)}>
+          <div className="recall-modal-card admin-modal-card" onClick={e => e.stopPropagation()}>
+            <div className="modal-header">
+              <div className="modal-title-wrap">
+                <div className="admin-summit-badge">
+                  <ShieldCheck size={18} />
+                </div>
+                <div>
+                  <h3>Ridge Command & User Management</h3>
+                  <p className="modal-subtitle-text">Manage climbers, permission roles, and daily inference quotas</p>
+                </div>
+              </div>
+              <button className="modal-close-btn" onClick={() => setIsAdminModalOpen(false)} aria-label="Close">
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="admin-modal-body">
+              {/* Aggregate System Metrics */}
+              {adminStats && (
+                <div className="admin-metrics-grid">
+                  <div className="admin-metric-card">
+                    <div className="metric-icon-wrap text-teal">
+                      <Users size={18} />
+                    </div>
+                    <div className="metric-info">
+                      <span className="metric-value">{adminStats.total_users}</span>
+                      <span className="metric-label">{adminStats.active_users} Active Climbers</span>
+                    </div>
+                  </div>
+
+                  <div className="admin-metric-card">
+                    <div className="metric-icon-wrap text-moss">
+                      <Activity size={18} />
+                    </div>
+                    <div className="metric-info">
+                      <span className="metric-value">{adminStats.total_requests_today}</span>
+                      <span className="metric-label">System Requests Today</span>
+                    </div>
+                  </div>
+
+                  <div className="admin-metric-card">
+                    <div className="metric-icon-wrap text-rust">
+                      <Database size={18} />
+                    </div>
+                    <div className="metric-info">
+                      <span className="metric-value">{adminStats.total_documents}</span>
+                      <span className="metric-label">{adminStats.total_chunks} Anchored Chunks</span>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Controls bar: Search & Refresh */}
+              <div className="admin-controls-bar">
+                <div className="admin-search-wrap">
+                  <Search size={15} className="search-icon" />
+                  <input
+                    type="text"
+                    placeholder="Filter by username, email, or role..."
+                    value={adminSearch}
+                    onChange={e => setAdminSearch(e.target.value)}
+                    className="admin-search-input"
+                  />
+                  {adminSearch && (
+                    <button className="clear-search-btn" onClick={() => setAdminSearch('')}>
+                      <X size={13} />
+                    </button>
+                  )}
+                </div>
+                <button className="admin-refresh-btn" onClick={fetchAdminData} disabled={isLoadingAdmin} title="Refresh User List">
+                  <RotateCw size={14} className={isLoadingAdmin ? 'spin-slow' : ''} />
+                  <span>Refresh</span>
+                </button>
+              </div>
+
+              {/* Users Table */}
+              <div className="admin-table-container">
+                {isLoadingAdmin && adminUsers.length === 0 ? (
+                  <div className="admin-loading-state">
+                    <RotateCw size={24} className="spin-slow text-teal" />
+                    <span>Loading climber accounts...</span>
+                  </div>
+                ) : (
+                  <table className="admin-users-table">
+                    <thead>
+                      <tr>
+                        <th>Climber</th>
+                        <th>Email</th>
+                        <th>Role</th>
+                        <th>Status</th>
+                        <th>Daily Quota</th>
+                        <th>Usage Today</th>
+                        <th>Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {adminUsers
+                        .filter(u => {
+                          const query = adminSearch.toLowerCase();
+                          return (
+                            u.username.toLowerCase().includes(query) ||
+                            u.email.toLowerCase().includes(query) ||
+                            (u.name && u.name.toLowerCase().includes(query)) ||
+                            u.role.toLowerCase().includes(query)
+                          );
+                        })
+                        .map(u => (
+                          <tr key={u.id} className={!u.is_active ? 'user-row-inactive' : ''}>
+                            <td className="user-profile-cell">
+                              <div className="user-table-avatar">
+                                {u.username.charAt(0).toUpperCase()}
+                              </div>
+                              <div className="user-name-stack">
+                                <span className="u-name">{u.name || u.username}</span>
+                                <span className="u-id">@{u.username}</span>
+                              </div>
+                            </td>
+
+                            <td className="user-email-cell">{u.email}</td>
+
+                            <td>
+                              <button
+                                className={`role-chip-btn ${u.role === 'admin' ? 'admin' : 'user'}`}
+                                onClick={() => handleUpdateRole(u.id, u.role)}
+                                title={`Click to switch role to ${u.role === 'admin' ? 'user' : 'admin'}`}
+                              >
+                                {u.role === 'admin' ? <Crown size={12} /> : <User size={12} />}
+                                <span>{u.role === 'admin' ? 'Admin' : 'Climber'}</span>
+                              </button>
+                            </td>
+
+                            <td>
+                              <button
+                                className={`status-chip-btn ${u.is_active ? 'active' : 'suspended'}`}
+                                onClick={() => handleUpdateStatus(u.id, u.is_active)}
+                                title={`Click to ${u.is_active ? 'suspend' : 'activate'} account`}
+                              >
+                                {u.is_active ? <UserCheck size={12} /> : <UserX size={12} />}
+                                <span>{u.is_active ? 'Active' : 'Suspended'}</span>
+                              </button>
+                            </td>
+
+                            <td>
+                              {editingLimitUserId === u.id ? (
+                                <div className="quota-edit-form">
+                                  <input
+                                    type="number"
+                                    value={tempLimitValue}
+                                    onChange={e => setTempLimitValue(Math.max(1, parseInt(e.target.value) || 1))}
+                                    min={1}
+                                    max={10000}
+                                    className="quota-edit-input"
+                                    autoFocus
+                                  />
+                                  <button
+                                    className="quota-save-btn"
+                                    onClick={() => handleSaveLimit(u.id, tempLimitValue)}
+                                    title="Save quota limit"
+                                  >
+                                    <Check size={13} />
+                                  </button>
+                                  <button
+                                    className="quota-cancel-btn"
+                                    onClick={() => setEditingLimitUserId(null)}
+                                    title="Cancel"
+                                  >
+                                    <X size={13} />
+                                  </button>
+                                </div>
+                              ) : (
+                                <div
+                                  className="quota-display-badge"
+                                  onClick={() => {
+                                    setEditingLimitUserId(u.id);
+                                    setTempLimitValue(u.daily_request_limit || 50);
+                                  }}
+                                  title="Click to change daily quota limit"
+                                >
+                                  <span>{u.role === 'admin' ? 'Unlimited' : `${u.daily_request_limit} / day`}</span>
+                                  <Sliders size={12} className="quota-edit-icon" />
+                                </div>
+                              )}
+                            </td>
+
+                            <td className="usage-cell">
+                              <span className="usage-number">{u.requests_today}</span>
+                              <span className="usage-sub">requests</span>
+                            </td>
+
+                            <td className="actions-cell">
+                              <button
+                                className="user-delete-action-btn"
+                                onClick={() => handleDeleteUser(u.id, u.username)}
+                                disabled={u.id === user?.id}
+                                title={u.id === user?.id ? 'Cannot delete active account' : 'Delete user and purge data'}
+                              >
+                                <Trash2 size={14} />
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+            </div>
           </div>
         </div>
       )}
