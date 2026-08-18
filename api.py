@@ -426,9 +426,37 @@ def get_suggestions(force: bool = False, user: UserProfile = Depends(get_current
 def get_glossary_terms(user: UserProfile = Depends(get_current_user)):
     """Returns the list of indexed acronyms and domain entity definitions."""
     try:
-        from glossary import load_glossary
-        terms_dict = load_glossary()
-        terms_list = list(terms_dict.values())
+        from glossary import get_glossary_for_user, sync_glossary_with_active_sources
+        from main import get_vectorstore
+        from pathlib import Path
+
+        is_admin = user.role == "admin"
+        vectorstore = get_vectorstore()
+        coll = vectorstore._collection
+        count = coll.count()
+        active_sources = set()
+
+        if count > 0:
+            data = coll.get(limit=count + 500, include=["metadatas"])
+            metas = data.get("metadatas", []) or []
+            for m in metas:
+                if not m:
+                    continue
+                m_user = m.get("user_id")
+                if is_admin or m_user in (user.id, "default", None):
+                    src = m.get("source", "")
+                    if src:
+                        active_sources.add(src)
+                        active_sources.add(Path(src).name)
+
+        # Prune any stale entries from deleted documents if admin
+        if is_admin and active_sources:
+            sync_glossary_with_active_sources(active_sources)
+
+        terms_list = get_glossary_for_user(
+            user_id=None if is_admin else user.id,
+            active_sources=active_sources if active_sources else set()
+        )
         return {"total": len(terms_list), "glossary": terms_list}
     except Exception as e:
         logger.error(f"Error loading glossary: {e}")
@@ -580,6 +608,13 @@ def delete_kb_source(req: DeleteKBRequest, user: UserProfile = Depends(get_curre
                     coll.delete(ids=matching_ids)
                     invalidate_bm25()
 
+                # Also remove deleted source acronyms from glossary
+                try:
+                    from glossary import remove_source_from_glossary
+                    remove_source_from_glossary(req.source, user_id=None if is_admin else user.id)
+                except Exception as ge:
+                    logger.warning(f"Error removing source from glossary: {ge}")
+
             remaining_chunks = coll.count()
             return {"status": "deleted", "remaining_chunks": remaining_chunks}
 
@@ -614,6 +649,13 @@ def clear_kb(user: UserProfile = Depends(get_current_user)):
             invalidate_bm25()
     except Exception as e:
         logger.error(f"Error in clear_kb: {e}")
+
+    # Clear glossary for this user
+    try:
+        from glossary import clear_glossary
+        clear_glossary(user_id=None if user.role == "admin" else user.id)
+    except Exception as ge:
+        logger.warning(f"Error clearing glossary: {ge}")
 
     clear_suggestions_cache()
     if os.path.exists("suggestions.json"):

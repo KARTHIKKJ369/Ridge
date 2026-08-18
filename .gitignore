@@ -28,17 +28,30 @@ venv.bak/
 !.env.example
 
 # ==============================================================================
-# Databases & Persistence
+# Databases, Vector Store & Persistence Artifacts
 # ==============================================================================
 chroma_db/
 users.db
+users.db-wal
+users.db-shm
 *.db
+*.db-wal
+*.db-shm
 *.sqlite3
 *.sqlite
 data/*.db
+data/*.db-wal
+data/*.db-shm
 data/parent_store.db
 data/parent_store.json
+data/glossary.json
+data/query_cache.json
 suggestions.json
+
+# ==============================================================================
+# Evaluation & Benchmark Outputs
+# ==============================================================================
+eval/results.json
 
 # ==============================================================================
 # Model Cache & Inference Artifacts

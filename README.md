@@ -10,7 +10,7 @@
 ![React](https://img.shields.io/badge/Frontend-React_19_·_Vite-61DAFB?style=for-the-badge&logo=react&logoColor=black)
 ![License](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)
 
-**Ridge** is a high-performance, self-correcting Corrective Retrieval-Augmented Generation (CRAG) platform. It transforms raw technical documents, resumes, slide decks, codebases, spreadsheets, and web sources into an audited, hallucination-resistant LangGraph state machine with multi-hop decomposition, small-to-big retrieval, semantic gradient chunking, vector caching, conflict auditing, and real-time observability.
+**Ridge** is an enterprise-grade, self-correcting Corrective Retrieval-Augmented Generation (CRAG) platform. It transforms raw technical documents, resumes, slide decks, codebases, spreadsheets, and web sources into an audited, hallucination-resistant LangGraph state machine with compound query decomposition, small-to-big parent retrieval, corpus-aware domain glossary indexing, semantic vector caching, conflict auditing, and real-time observability.
 
 </div>
 
@@ -19,47 +19,62 @@
 ## 🌟 Key Architecture & Capabilities
 
 ### 1. 🔀 Compound Question Decomposition (Multi-Hop CRAG)
-* **Automatic Multi-Part Detection**: Detects complex multi-hop queries (e.g., *"Compare PEAS with DECIDE and also explain BFS"*).
+* **Automatic Multi-Part Detection**: Identifies complex multi-hop queries (e.g., *"Compare PEAS with DECIDE and also explain BFS"*).
 * **Parallel Hybrid Retrieval**: Splits queries into 2–4 focused sub-queries, executes parallel dense (Chroma HNSW) and sparse (BM25) searches, and fuses candidates using **Reciprocal Rank Fusion (RRF, $K=60$)**.
 * **Coverage Safety Valve**: If relevant document count is less than sub-queries, the router automatically triggers web search to fill the missing sub-query gaps.
 
 ---
 
-### 2. 🔍 Small-to-Big Retrieval (Parent-Document Expansion)
+### 2. 🔍 Small-to-Big Retrieval (SQLite Parent Document Expansion)
 * **High-Precision Indexing**: Indexes compact child chunks (400 chars, 60 overlap) into ChromaDB for high-accuracy embedding cosine retrieval.
-* **Persistent Parent Section Store**: Saves complete parent sections (1500 chars) into a persistent SHA-256 keyed JSON registry (`data/parent_store.json`).
+* **ACID SQLite Section Store**: Stores complete parent sections (1500 chars) in a persistent SQLite database with Write-Ahead Logging (WAL mode, `data/parent_store.db`) keyed by SHA-256 digests.
 * **Generation-Time Expansion**: Automatically swaps retrieved child chunks for full parent sections with automatic de-duplication before LLM synthesis.
 
 ---
 
-### 3. 🧠 Semantic Chunking by Embedding Gradient
+### 3. 📖 Corpus-Aware Domain Glossary & Acronym Engine
+* **Automated Initialism & Entity Extraction**: Scans ingested documents for domain acronyms and full expansions (e.g. `HNSW`, `PEAS`, `CRAG`, `AZTM`) with heuristic prefix-stripping and validation.
+* **Dynamic Query Expansion**: Enriches reformulated queries with contextual acronym expansions from the active document corpus during multi-hop retrieval.
+* **Lifecycle & Multi-Tenant Sync**: Automatically prunes orphaned glossary entries when documents are deleted or cleared, ensuring clean per-user knowledge bases.
+* **Interactive Glossary Inspector**: Inspect indexed domain terminology directly from the frontend via the top navigation bar.
+
+---
+
+### 4. 🧠 Semantic Chunking by Embedding Gradient
 * **Embedding Gradient Detector**: Tokenizes document sentences and measures cosine similarity between consecutive sliding windows ($W=3$).
 * **Self-Calibrating Percentile Boundaries**: Identifies topic shifts at the bottom 25th percentile of cosine similarity scores, eliminating arbitrary character-count cuts.
 * **Coherence Optimizer**: Merges micro-chunks ($<200$ chars) and applies heading inheritance (`ensure_chunk_has_headings`) to maintain document context.
 
 ---
 
-### 4. 📁 Source-Scoped Metadata-Filtered Retrieval
+### 5. 📁 Source-Scoped Metadata-Filtered Retrieval
 * **Scoped Search**: Choose to query across **"All Sources"** or scope strictly to specific indexed documents (e.g. `resume.pdf` or `AI Module 2.pptx`).
 * **Dynamic Toolbar Selector**: Input bar dropdown automatically populated from `/api/kb/sources`.
 * **Metadata WHERE Clauses**: Applies metadata filters across both Chroma dense vector search and BM25 tokenized corpora.
 
 ---
 
-### 5. ⚡ Semantic Vector Query Cache
+### 6. ⚡ Semantic Vector Query Cache
 * **Vector Sub-Millisecond Short-Circuit**: Hashes and embeds incoming queries; if cosine similarity to a previously verified answer is $\ge 0.96$, returns the answer in $<3\text{ms}$.
 * **Persistent Storage**: Verified high-confidence answers ($\text{Score} \ge 60$) are stored asynchronously in `data/query_cache.json`.
 * **Visual Telemetry**: Displays `⚡ Semantic Query Cache` in the real-time ascent timeline.
 
 ---
 
-### 6. ⚔️ Document Conflict Detection & Side-by-Side Diff Viewer
+### 7. ⚔️ Document Conflict Detection & Side-by-Side Diff Viewer
 * **Contradiction Auditor**: When $\ge 2$ documents contain conflicting policies, dates, or numbers, audits discrepancies and surfaces both perspectives.
 * **Interactive Diff Modal**: Clicking **"Compare Sources"** on the amber Conflict Alert Banner opens a side-by-side split comparison modal displaying source cards, text excerpts, and evaluator notes.
 
 ---
 
-### 7. 📊 Automated RAG Triad Evaluation Harness
+### 8. 🛡️ Multi-Tenant Authentication & Role-Based Access Control
+* **Secure JWT Sessions**: Multi-tenant authentication with signed HS256 tokens and Argon2 password hashing.
+* **Isolated Vector Namespaces**: Every ingested document and chunk is tagged with `user_id`, enforcing strict tenant isolation across retrieval, glossary, and document management.
+* **Admin Governance**: Admin dashboard for user role promotion, system telemetry, and tenant management.
+
+---
+
+### 9. 📊 Automated RAG Triad Evaluation Harness
 * **Automated Benchmark Suite**: [`eval/evaluate.py`](eval/evaluate.py) benchmarks test cases from [`eval/gold_dataset.json`](eval/gold_dataset.json).
 * **RAG Triad Metrics**:
   1. **Context Recall**: % of gold ground-truth concepts present in retrieved documents.
@@ -69,7 +84,7 @@
 
 ---
 
-### 8. 📊 Theme-Adaptive Interactive Mermaid Diagrams & KaTeX Math
+### 10. 📊 Theme-Adaptive Interactive Mermaid Diagrams & KaTeX Math
 * **Adaptive Mermaid SVG Diagrams**: Detects ````mermaid ... ```` code blocks in answers and dynamically renders SVG diagrams matching the active UI theme (*Stone & Summit*, *Chalk & Void*, *Rust & Ridge*).
 * **Anti-Flicker In-Memory SVG Cache**: Instantaneous rendering from memory cache on re-renders, with smooth loading states and zero code flashing.
 * **1-Click Visual/Source Toggle & Copy**: Inspect clean diagram source code or copy directly to clipboard.
@@ -78,13 +93,7 @@
 
 ---
 
-### 9. 🚀 Async Multi-File Upload Queue
-* **Batch Ingestion**: Drag-and-drop or select multiple documents simultaneously.
-* **Live Progress Bar**: Shows per-file status badges (`Waiting`, `Indexing...`, `✓ Anchored`, `✕ Error`) and real-time percentage progress.
-
----
-
-### 10. 📂 Universal Multi-Format Parsers & OCR
+### 11. 📂 Universal Multi-Format Parsers & OCR
 * **Images & OCR**: Direct parsing for `.png`, `.jpg`, `.jpeg`, `.webp`, `.bmp`, `.tiff` via ONNX RapidOCR.
 * **Scanned PDFs**: Automatic page-image extraction and OCR fallback for flat scans.
 * **Enterprise Documents**: Native support for PDF, Word (`.docx`), PowerPoint (`.pptx`), Excel (`.xlsx`), CSV/TSV, and Markdown.
@@ -110,7 +119,7 @@ flowchart TD
     FlagConflict --> Generate
     
     Grade -->|"0 Relevant Docs"| RouteCheck{"Loops < Max Loops?"}
-    RouteCheck -->|Yes| Rewrite["Query Reformulation Node<br/>Adaptive Keyword Optimizer"]
+    RouteCheck -->|Yes| Rewrite["Query Reformulation Node<br/>Glossary Acronym Enrichment"]
     Rewrite --> Retrieve
     RouteCheck -->|"No / Web Search"| WebSearch["Web Search Fallback Node<br/>DDGS 5s Timeout"]
     WebSearch --> Generate
@@ -178,7 +187,7 @@ python eval/evaluate.py
 This executes the gold benchmark suite and generates:
 * Terminal Scorecard with Context Recall, Faithfulness, Relevance, and Latency
 * Markdown report: [`eval/benchmark_report.md`](eval/benchmark_report.md)
-* JSON results: [`eval/results.json`](eval/results.json)
+* JSON results: `eval/results.json`
 
 ---
 
@@ -187,13 +196,17 @@ This executes the gold benchmark suite and generates:
 | Variable | Description | Default |
 |---|---|---|
 | `GROQ_API_KEY` | **Required**: Groq Cloud API Key | — |
-| `GROQ_MODEL` | Primary synthesis model | `groq/compound` |
-| `GROQ_FAST_MODEL` | Ultra-fast model for grading & decomposition | `groq/compound-mini` |
-| `EMBEDDING_MODEL` | Local HuggingFace sentence transformer | `BAAI/bge-large-en-v1.5` |
-| `RETRIEVER_K` | Number of top documents to keep after re-ranking | `4` |
-| `MAX_LOOPS` | Max query reformulation attempts | `1` |
-| `AUTH_ENABLED` | Toggle local user registration & password login | `false` |
+| `GROQ_MODEL` | Primary synthesis model | `openai/gpt-oss-120b` |
+| `GROQ_FAST_MODEL` | Ultra-fast model for grading & decomposition | `openai/gpt-oss-20b` |
+| `EMBEDDING_MODEL` | Local HuggingFace sentence transformer | `sentence-transformers/all-MiniLM-L6-v2` |
+| `CHROMA_DIR` | Directory for local ChromaDB persistence | `./chroma_db` |
+| `RETRIEVER_K` | Number of top documents to keep after re-ranking | `6` |
+| `RETRIEVER_FETCH_K` | Candidates fetched before re-ranking | `60` |
+| `RERANK_MODEL` | FlashRank re-ranking cross-encoder model | `ms-marco-MiniLM-L-12-v2` |
+| `MAX_REWRITE_LOOPS` | Max query reformulation attempts | `1` |
+| `AUTH_ENABLED` | Toggle user authentication and tenant isolation | `false` |
 | `JWT_SECRET_KEY` | Secret key for signed JWT session tokens | `ridge_crag_secret_key` |
+| `DATA_DIR` | Directory for parent SQLite store and query cache | `./data` |
 
 ---
 
@@ -203,20 +216,26 @@ This executes the gold benchmark suite and generates:
 Ridge/
 ├── main.py                # Core LangGraph state machine & CRAG pipeline
 ├── api.py                 # FastAPI backend & SSE streaming endpoints
+├── auth.py                # JWT authentication, Argon2 hashing & user DB
 ├── rag_ingest.py          # Document parsers, OCR, & semantic gradient chunking
-├── parent_store.py        # Small-to-Big parent section JSON registry
+├── parent_store.py        # Small-to-Big SQLite WAL parent section registry
 ├── query_cache.py         # Semantic vector query cache (cosine sim >= 0.96)
 ├── glossary.py            # Corpus-aware acronym & entity glossary engine
+├── retriever.py           # Hybrid dense + sparse search wrappers
 ├── requirements.txt       # Python backend dependencies
 ├── pyproject.toml         # Project metadata & dependencies
 ├── eval/
 │   ├── evaluate.py        # Automated RAG Triad evaluation harness
 │   ├── gold_dataset.json  # Benchmark ground-truth test cases
 │   └── benchmark_report.md# Latest benchmark run scorecard
-├── data/
-│   ├── parent_store.json  # Persistent parent section text store
-│   ├── query_cache.json   # Persistent semantic vector query cache
+├── data/                  # Runtime persistence directory (git-ignored)
+│   ├── parent_store.db    # SQLite parent section database
+│   ├── query_cache.json   # Semantic vector query cache
 │   └── glossary.json      # Indexed domain terminology & acronyms
+├── scripts/               # Administrative & diagnostic CLI utilities
+│   ├── create_admin.py    # Admin user creation helper
+│   ├── inspect_chroma.py  # ChromaDB inspection utility
+│   └── inspect_chunking.py# Chunk boundary diagnostic tool
 └── frontend/              # Alpine 2026 React 19 + TypeScript + Vite UI
     ├── src/
     │   ├── App.tsx        # Main application component & state machine

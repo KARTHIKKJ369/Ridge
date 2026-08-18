@@ -369,7 +369,7 @@ def ingest_document(text_or_url: str, original_filename: str | None = None, user
         from glossary import index_text_glossary
         full_text = " ".join(d.page_content for d in doc_splits)
         source_name = original_filename or text_or_url
-        index_text_glossary(full_text, source_name)
+        index_text_glossary(full_text, source_name, user_id=user_id)
     except Exception as ge:
         print(f"Glossary indexing note: {ge}")
     
@@ -915,7 +915,10 @@ def build_app():
         # Enrich query with domain acronym expansions from glossary
         try:
             from glossary import enrich_query_with_glossary
-            new_query = enrich_query_with_glossary(new_query)
+            source_filter = state.get("source_filter")
+            active_srcs = {source_filter} if source_filter else None
+            user_id = state.get("user_id")
+            new_query = enrich_query_with_glossary(new_query, active_sources=active_srcs, user_id=user_id)
         except Exception as ge:
             print(f"Glossary query enrichment note: {ge}")
 
