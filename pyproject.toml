@@ -3,6 +3,7 @@ name = "ridge-crag"
 version = "1.0.0"
 description = "Ridge: Corrective RAG (CRAG) intelligence platform powered by LangGraph, ChromaDB, FlashRank, and Groq"
 readme = "README.md"
+license = "MIT"
 requires-python = ">=3.11"
 dependencies = [
     "beautifulsoup4>=4.15.0",
