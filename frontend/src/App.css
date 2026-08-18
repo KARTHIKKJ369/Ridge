@@ -1070,6 +1070,33 @@ textarea:focus-visible,
   padding: 0;
 }
 
+/* KaTeX Math Rendering — dark theme overrides */
+.recall-markdown-body .katex {
+  font-size: 1em;
+  color: var(--recall-text-primary);
+}
+
+.recall-markdown-body .katex-display {
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 10px 0;
+  margin: 12px 0;
+  background: rgba(99, 102, 241, 0.05);
+  border: 1px solid rgba(99, 102, 241, 0.15);
+  border-radius: var(--radius-sm);
+  padding: 12px 16px;
+}
+
+.recall-markdown-body .katex-display > .katex {
+  text-align: left;
+}
+
+/* Fix KaTeX default black color on dark background */
+.recall-markdown-body .katex * {
+  color: inherit;
+}
+
+
 /* ==========================================================================
    5. State Machine Thinking Accordion
    ========================================================================== */
@@ -1216,6 +1243,64 @@ textarea:focus-visible,
   color: var(--recall-text-secondary);
   line-height: 1.4;
 }
+
+/* Sub-query pills (Multi-hop Decomposition) */
+.sub-query-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 7px;
+}
+
+.sub-query-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background: rgba(99, 102, 241, 0.1);
+  border: 1px solid rgba(99, 102, 241, 0.25);
+  border-radius: 999px;
+  padding: 2px 9px 2px 4px;
+  font-size: 0.72rem;
+  color: #a5b4fc;
+  line-height: 1.4;
+}
+
+.sub-query-pill-num {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: rgba(99, 102, 241, 0.3);
+  color: #e0e7ff;
+  font-size: 0.65rem;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+/* Indigo node color for decompose_node */
+.node-tag.color-indigo { background: rgba(99, 102, 241, 0.12); border-color: rgba(99, 102, 241, 0.28); }
+.node-tag.color-indigo .node-icon-inline { color: #818cf8; }
+.node-tag.color-indigo .node-tag-name { color: #a5b4fc; }
+.node-tag.color-indigo .node-lat { color: #818cf8; }
+
+/* Small-to-Big expansion badge */
+.s2b-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  background: rgba(16, 185, 129, 0.1);
+  border: 1px solid rgba(16, 185, 129, 0.25);
+  border-radius: 999px;
+  padding: 1px 7px;
+  font-size: 0.67rem;
+  font-weight: 600;
+  color: #6ee7b7;
+  white-space: nowrap;
+  margin-left: 4px;
+}
+
 
 /* High Contrast Node Output Status Box */
 .node-output-box {
@@ -1472,6 +1557,146 @@ textarea:focus-visible,
 
 .toolbar-btn:active {
   transform: scale(0.96);
+}
+
+/* Source Scoped Filter Chip & Dropdown */
+.source-scope-filter-container {
+  position: relative;
+  display: inline-flex;
+}
+
+.source-scope-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  opacity: 0.85;
+  background-color: var(--recall-surface-subtle);
+  border: 1px solid var(--recall-border);
+  border-radius: var(--radius-xs);
+  padding: 4px 9px;
+  font-size: 0.74rem;
+  color: var(--recall-text-secondary);
+  transition: all var(--transition-fast);
+  cursor: pointer;
+  max-width: 180px;
+}
+
+.source-scope-btn:hover {
+  opacity: 1;
+  border-color: var(--recall-border-strong);
+  color: var(--recall-text-primary);
+}
+
+.source-scope-btn.active {
+  background-color: rgba(99, 102, 241, 0.12);
+  border-color: rgba(99, 102, 241, 0.35);
+  color: #a5b4fc;
+  font-weight: 600;
+  opacity: 1;
+}
+
+.source-scope-icon {
+  color: inherit;
+  flex-shrink: 0;
+}
+
+.source-scope-label {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.source-scope-chevron {
+  opacity: 0.6;
+  flex-shrink: 0;
+}
+
+.source-scope-menu-dropdown {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 0;
+  min-width: 240px;
+  max-width: 320px;
+  max-height: 280px;
+  overflow-y: auto;
+  background-color: var(--recall-surface);
+  border: 1px solid var(--recall-border-strong);
+  border-radius: var(--radius-sm);
+  box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.5), 0 8px 10px -6px rgba(0, 0, 0, 0.4);
+  padding: 6px;
+  z-index: 100;
+  animation: fadeIn 0.15s ease-out;
+}
+
+.source-scope-menu-header {
+  font-size: 0.68rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--recall-text-muted);
+  padding: 6px 8px 4px;
+}
+
+.source-scope-menu-divider {
+  height: 1px;
+  background-color: var(--recall-border);
+  margin: 4px 0;
+}
+
+.source-scope-menu-item {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: var(--radius-xs);
+  border: none;
+  background: transparent;
+  color: var(--recall-text-secondary);
+  font-size: 0.76rem;
+  text-align: left;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.source-scope-menu-item:hover {
+  background-color: var(--recall-surface-subtle);
+  color: var(--recall-text-primary);
+}
+
+.source-scope-menu-item.selected {
+  background-color: rgba(99, 102, 241, 0.12);
+  color: #a5b4fc;
+  font-weight: 600;
+}
+
+.source-scope-radio-check {
+  width: 14px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: #818cf8;
+  flex-shrink: 0;
+}
+
+.source-scope-item-title {
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.source-scope-item-meta {
+  font-size: 0.68rem;
+  color: var(--recall-text-muted);
+  flex-shrink: 0;
+}
+
+.source-scope-menu-empty {
+  font-size: 0.74rem;
+  color: var(--recall-text-muted);
+  padding: 12px 8px;
+  text-align: center;
+  font-style: italic;
 }
 
 .fallback-toggle-chip {
@@ -2497,8 +2722,188 @@ textarea:focus-visible,
   background-color: var(--recall-accent-subtle);
 }
 
-.recall-dropzone.has-file {
-  border-color: var(--recall-success);
+.recall-dropzone.has-file,
+.recall-dropzone.has-queue {
+  border-color: var(--recall-accent);
+  padding: 20px 16px;
+}
+
+/* Multi-File Upload Queue Card & Progress */
+.multi-file-ingest-container {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.upload-queue-card {
+  background: var(--recall-surface);
+  border: 1px solid var(--recall-border);
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.upload-queue-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.queue-title-count {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--recall-text-primary);
+}
+
+.queue-progress-tag {
+  font-size: 0.72rem;
+  color: #818cf8;
+  font-weight: 500;
+}
+
+.queue-clear-btn {
+  background: transparent;
+  border: none;
+  font-size: 0.7rem;
+  color: var(--recall-text-muted);
+  cursor: pointer;
+  padding: 2px 4px;
+}
+
+.queue-clear-btn:hover {
+  color: #ef4444;
+}
+
+.queue-progress-bar-track {
+  width: 100%;
+  height: 4px;
+  background: var(--recall-surface-subtle);
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.queue-progress-bar-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #6366f1, #10b981);
+  transition: width 0.3s ease;
+}
+
+.upload-queue-items-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 180px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.upload-queue-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 6px 8px;
+  background: var(--recall-surface-subtle);
+  border: 1px solid var(--recall-border);
+  border-radius: var(--radius-xs);
+  font-size: 0.76rem;
+  transition: border-color var(--transition-fast);
+}
+
+.upload-queue-row.uploading {
+  border-color: #818cf8;
+  background: rgba(99, 102, 241, 0.08);
+}
+
+.upload-queue-row.completed {
+  border-color: rgba(16, 185, 129, 0.4);
+}
+
+.upload-queue-row.error {
+  border-color: rgba(239, 68, 68, 0.4);
+}
+
+.queue-item-main {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.queue-item-name {
+  font-weight: 500;
+  color: var(--recall-text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.queue-item-size {
+  font-size: 0.68rem;
+  color: var(--recall-text-muted);
+}
+
+.queue-item-status-col {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.queue-badge {
+  font-size: 0.68rem;
+  font-weight: 600;
+  padding: 2px 6px;
+  border-radius: var(--radius-xs);
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.queue-badge.waiting {
+  background: var(--recall-surface);
+  color: var(--recall-text-muted);
+  border: 1px solid var(--recall-border);
+}
+
+.queue-badge.uploading {
+  background: rgba(99, 102, 241, 0.15);
+  color: #a5b4fc;
+  border: 1px solid rgba(99, 102, 241, 0.3);
+}
+
+.queue-badge.completed {
+  background: rgba(16, 185, 129, 0.12);
+  color: #6ee7b7;
+  border: 1px solid rgba(16, 185, 129, 0.3);
+}
+
+.queue-badge.error {
+  background: rgba(239, 68, 68, 0.12);
+  color: #fca5a5;
+  border: 1px solid rgba(239, 68, 68, 0.3);
+}
+
+.queue-remove-btn {
+  background: transparent;
+  border: none;
+  color: var(--recall-text-muted);
+  cursor: pointer;
+  padding: 2px;
+  display: flex;
+  align-items: center;
+}
+
+.queue-remove-btn:hover {
+  color: #ef4444;
 }
 
 .dropzone-empty-prompt {
@@ -3502,6 +3907,7 @@ textarea:focus-visible,
 .conflict-banner-header {
   display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: 8px;
   font-size: 0.82rem;
   font-weight: 700;
@@ -3509,6 +3915,124 @@ textarea:focus-visible,
   text-transform: uppercase;
   letter-spacing: 0.04em;
   margin-bottom: 4px;
+}
+
+.conflict-banner-title-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.conflict-compare-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background: rgba(217, 119, 6, 0.18);
+  border: 1px solid rgba(217, 119, 6, 0.4);
+  color: #F59E0B;
+  border-radius: var(--radius-xs);
+  padding: 3px 8px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: none;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.conflict-compare-btn:hover {
+  background: rgba(217, 119, 6, 0.28);
+  border-color: #F59E0B;
+  color: #FBBF24;
+}
+
+/* Side-by-Side Conflict Diff Viewer Modal */
+.conflict-diff-modal {
+  max-width: 860px !important;
+  width: 95%;
+}
+
+.conflict-diff-split-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 14px;
+  max-height: 480px;
+  overflow-y: auto;
+  padding-right: 4px;
+  margin-top: 10px;
+}
+
+.conflict-diff-column {
+  background: var(--recall-surface-subtle);
+  border: 1px solid var(--recall-border);
+  border-radius: var(--radius-sm);
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.conflict-diff-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  border-bottom: 1px solid var(--recall-border);
+  padding-bottom: 8px;
+}
+
+.conflict-diff-source-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+  font-size: 0.8rem;
+  color: var(--recall-text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.conflict-diff-copy-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: var(--recall-surface);
+  border: 1px solid var(--recall-border);
+  border-radius: var(--radius-xs);
+  padding: 2px 7px;
+  font-size: 0.7rem;
+  color: var(--recall-text-muted);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  flex-shrink: 0;
+}
+
+.conflict-diff-copy-btn:hover {
+  border-color: var(--recall-accent);
+  color: var(--recall-text-primary);
+}
+
+.conflict-diff-text-box {
+  background: var(--recall-surface);
+  border: 1px solid var(--recall-border);
+  border-radius: var(--radius-xs);
+  padding: 10px 12px;
+  font-size: 0.8rem;
+  line-height: 1.5;
+  color: var(--recall-text-secondary);
+  max-height: 260px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+}
+
+.conflict-diff-rationale {
+  font-size: 0.72rem;
+  color: var(--recall-text-muted);
+  line-height: 1.4;
+  background: rgba(217, 119, 6, 0.08);
+  border: 1px solid rgba(217, 119, 6, 0.2);
+  border-radius: var(--radius-xs);
+  padding: 6px 8px;
 }
 
 .conflict-banner-desc {
@@ -3590,5 +4114,296 @@ textarea:focus-visible,
   font-size: 0.72rem;
   color: var(--recall-text-muted);
   font-style: italic;
+}
+
+/* ==========================================================================
+   Mermaid Interactive Diagram Rendering (Alpine / Summit Adaptive Design)
+   ========================================================================== */
+
+.mermaid-diagram-card {
+  background: var(--recall-surface, #ffffff) !important;
+  border: 1px solid var(--recall-border, rgba(30, 41, 59, 0.12)) !important;
+  border-radius: var(--radius-md, 14px) !important;
+  padding: 16px 20px 20px 20px !important;
+  margin: 20px 0 !important;
+  overflow: hidden !important;
+  box-shadow: var(--shadow-md, 0 4px 16px -2px rgba(30, 41, 59, 0.08)), 0 1px 3px rgba(30, 41, 59, 0.04) !important;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease !important;
+}
+
+.mermaid-diagram-card:hover {
+  border-color: var(--recall-border-strong, rgba(2, 132, 199, 0.28)) !important;
+  box-shadow: var(--shadow-lg, 0 12px 32px -4px rgba(30, 41, 59, 0.12)) !important;
+}
+
+.mermaid-diagram-header {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: space-between !important;
+  padding-bottom: 12px !important;
+  margin-bottom: 16px !important;
+  border-bottom: 1px solid var(--recall-border, rgba(30, 41, 59, 0.08)) !important;
+}
+
+.mermaid-header-left {
+  display: flex !important;
+  align-items: center !important;
+  gap: 8px !important;
+}
+
+.mermaid-diagram-badge {
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 6px !important;
+  font-size: 0.72rem !important;
+  font-weight: 600 !important;
+  letter-spacing: 0.03em !important;
+  color: var(--recall-accent, #0284c7) !important;
+  background: var(--recall-accent-subtle, rgba(2, 132, 199, 0.10)) !important;
+  border: 1px solid var(--recall-border-strong, rgba(2, 132, 199, 0.25)) !important;
+  padding: 3px 10px !important;
+  border-radius: var(--radius-full, 9999px) !important;
+}
+
+.mermaid-render-error-badge {
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 4px !important;
+  font-size: 0.68rem !important;
+  font-weight: 600 !important;
+  letter-spacing: 0.03em !important;
+  color: var(--recall-warning, #d97706) !important;
+  background: var(--recall-warning-subtle, rgba(217, 119, 6, 0.10)) !important;
+  border: 1px solid rgba(217, 119, 6, 0.25) !important;
+  padding: 3px 8px !important;
+  border-radius: var(--radius-full, 9999px) !important;
+  cursor: help !important;
+}
+
+.mermaid-header-right {
+  display: flex !important;
+  align-items: center !important;
+  gap: 8px !important;
+}
+
+.mermaid-tool-btn {
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 5px !important;
+  font-size: 0.73rem !important;
+  font-weight: 500 !important;
+  color: var(--recall-text-secondary, #475569) !important;
+  background: var(--recall-surface-elevated, #f8fafc) !important;
+  border: 1px solid var(--recall-border, rgba(30, 41, 59, 0.12)) !important;
+  padding: 4px 10px !important;
+  border-radius: var(--radius-xs, 6px) !important;
+  cursor: pointer !important;
+  transition: all 0.15s cubic-bezier(0.4, 0, 0.2, 1) !important;
+}
+
+.mermaid-tool-btn:hover {
+  color: var(--recall-text-primary, #1e293b) !important;
+  background: var(--recall-surface-hover, #e8e3d7) !important;
+  border-color: var(--recall-border-focus, #0284c7) !important;
+  transform: translateY(-1px) !important;
+}
+
+.mermaid-diagram-canvas {
+  display: flex !important;
+  justify-content: center !important;
+  align-items: center !important;
+  width: 100% !important;
+  overflow-x: auto !important;
+  padding: 12px 6px !important;
+}
+
+.mermaid-diagram-canvas svg {
+  max-width: 100% !important;
+  height: auto !important;
+  min-height: 120px !important;
+  display: block !important;
+}
+
+/* Polished SVG Node & Edge Aesthetics */
+.mermaid-diagram-canvas .node rect,
+.mermaid-diagram-canvas .node circle,
+.mermaid-diagram-canvas .node polygon,
+.mermaid-diagram-canvas .node path {
+  fill: var(--recall-surface-elevated, #fbf9f4) !important;
+  stroke: var(--recall-accent, #0284c7) !important;
+  stroke-width: 1.6px !important;
+  rx: 8px !important;
+  ry: 8px !important;
+  filter: drop-shadow(0 2px 5px rgba(30, 41, 59, 0.06)) !important;
+  transition: all 0.2s ease !important;
+}
+
+.mermaid-diagram-canvas .node:hover rect,
+.mermaid-diagram-canvas .node:hover circle,
+.mermaid-diagram-canvas .node:hover polygon {
+  stroke-width: 2.2px !important;
+  filter: drop-shadow(0 4px 10px rgba(2, 132, 199, 0.2)) !important;
+}
+
+.mermaid-diagram-canvas .cluster rect {
+  fill: var(--recall-surface-subtle, rgba(2, 132, 199, 0.03)) !important;
+  stroke: var(--recall-border-strong, rgba(2, 132, 199, 0.25)) !important;
+  stroke-width: 1.2px !important;
+  stroke-dasharray: 4 4 !important;
+  rx: 12px !important;
+  ry: 12px !important;
+}
+
+/* Comprehensive text styling covering SVG text, tspans, and foreignObject HTML elements */
+.mermaid-diagram-canvas text,
+.mermaid-diagram-canvas tspan,
+.mermaid-diagram-canvas .node .label,
+.mermaid-diagram-canvas .node .label *,
+.mermaid-diagram-canvas .node foreignObject,
+.mermaid-diagram-canvas .node foreignObject *,
+.mermaid-diagram-canvas .nodeLabel,
+.mermaid-diagram-canvas .nodeLabel *,
+.mermaid-diagram-canvas span.nodeLabel,
+.mermaid-diagram-canvas .edgeLabel,
+.mermaid-diagram-canvas .edgeLabel *,
+.mermaid-diagram-canvas .edgeLabel foreignObject *,
+.mermaid-diagram-canvas .edgeLabel span,
+.mermaid-diagram-canvas .cluster-label,
+.mermaid-diagram-canvas .cluster-label *,
+.mermaid-diagram-canvas .cluster text,
+.mermaid-diagram-canvas .cluster span,
+.mermaid-diagram-canvas .statediagram-state .state-title,
+.mermaid-diagram-canvas .statediagram-state .state-title *,
+.mermaid-diagram-canvas .statediagram-note text,
+.mermaid-diagram-canvas .statediagram-note * {
+  fill: var(--recall-text-primary) !important;
+  color: var(--recall-text-primary) !important;
+  font-family: var(--font-sans, sans-serif) !important;
+  font-weight: 600 !important;
+  font-size: 13px !important;
+  letter-spacing: -0.01em !important;
+}
+
+/* Explicit Dark Theme: Void (Basalt Granite / Cyan) */
+[data-theme="void"] .mermaid-diagram-card {
+  background: #1a1f26 !important;
+  border-color: rgba(255, 255, 255, 0.1) !important;
+  box-shadow: 0 10px 30px -5px rgba(0, 0, 0, 0.6) !important;
+}
+
+[data-theme="void"] .mermaid-diagram-canvas .node rect,
+[data-theme="void"] .mermaid-diagram-canvas .node circle,
+[data-theme="void"] .mermaid-diagram-canvas .node polygon,
+[data-theme="void"] .mermaid-diagram-canvas .node path {
+  fill: #242b35 !important;
+  stroke: #22d3ee !important;
+  filter: drop-shadow(0 2px 8px rgba(0, 0, 0, 0.5)) !important;
+}
+
+[data-theme="void"] .mermaid-diagram-canvas text,
+[data-theme="void"] .mermaid-diagram-canvas tspan,
+[data-theme="void"] .mermaid-diagram-canvas .node .label *,
+[data-theme="void"] .mermaid-diagram-canvas .node foreignObject *,
+[data-theme="void"] .mermaid-diagram-canvas .nodeLabel,
+[data-theme="void"] .mermaid-diagram-canvas .nodeLabel *,
+[data-theme="void"] .mermaid-diagram-canvas span.nodeLabel,
+[data-theme="void"] .mermaid-diagram-canvas .edgeLabel *,
+[data-theme="void"] .mermaid-diagram-canvas .cluster text {
+  fill: #f5f7fa !important;
+  color: #f5f7fa !important;
+}
+
+[data-theme="void"] .mermaid-diagram-canvas .edgePath .path,
+[data-theme="void"] .mermaid-diagram-canvas .marker {
+  stroke: #94a3b8 !important;
+  fill: #94a3b8 !important;
+}
+
+[data-theme="void"] .mermaid-diagram-canvas .cluster rect {
+  fill: rgba(34, 211, 238, 0.04) !important;
+  stroke: rgba(34, 211, 238, 0.25) !important;
+}
+
+[data-theme="void"] .mermaid-code-preview {
+  background: #111418 !important;
+  border-color: rgba(255, 255, 255, 0.08) !important;
+  color: #67e8f9 !important;
+}
+
+/* Explicit Dark Theme: Rust & Ridge (Desert Crag / Terracotta) */
+[data-theme="rust"] .mermaid-diagram-card {
+  background: #201915 !important;
+  border-color: rgba(249, 115, 22, 0.2) !important;
+  box-shadow: 0 10px 30px -5px rgba(0, 0, 0, 0.7) !important;
+}
+
+[data-theme="rust"] .mermaid-diagram-canvas .node rect,
+[data-theme="rust"] .mermaid-diagram-canvas .node circle,
+[data-theme="rust"] .mermaid-diagram-canvas .node polygon,
+[data-theme="rust"] .mermaid-diagram-canvas .node path {
+  fill: #2c231e !important;
+  stroke: #f97316 !important;
+  filter: drop-shadow(0 2px 8px rgba(0, 0, 0, 0.5)) !important;
+}
+
+[data-theme="rust"] .mermaid-diagram-canvas text,
+[data-theme="rust"] .mermaid-diagram-canvas tspan,
+[data-theme="rust"] .mermaid-diagram-canvas .node .label *,
+[data-theme="rust"] .mermaid-diagram-canvas .node foreignObject *,
+[data-theme="rust"] .mermaid-diagram-canvas .nodeLabel,
+[data-theme="rust"] .mermaid-diagram-canvas .nodeLabel *,
+[data-theme="rust"] .mermaid-diagram-canvas span.nodeLabel,
+[data-theme="rust"] .mermaid-diagram-canvas .edgeLabel *,
+[data-theme="rust"] .mermaid-diagram-canvas .cluster text {
+  fill: #faf5f0 !important;
+  color: #faf5f0 !important;
+}
+
+[data-theme="rust"] .mermaid-diagram-canvas .edgePath .path,
+[data-theme="rust"] .mermaid-diagram-canvas .marker {
+  stroke: #d7c4b7 !important;
+  fill: #d7c4b7 !important;
+}
+
+[data-theme="rust"] .mermaid-diagram-canvas .cluster rect {
+  fill: rgba(249, 115, 22, 0.05) !important;
+  stroke: rgba(249, 115, 22, 0.3) !important;
+}
+
+[data-theme="rust"] .mermaid-code-preview {
+  background: #14100E !important;
+  border-color: rgba(249, 115, 22, 0.15) !important;
+  color: #fb923c !important;
+}
+
+.mermaid-diagram-canvas .edgePath .path {
+  stroke: var(--recall-text-muted, #64748b) !important;
+  stroke-width: 1.6px !important;
+  stroke-linecap: round !important;
+}
+
+.mermaid-diagram-canvas .marker {
+  fill: var(--recall-text-muted, #64748b) !important;
+  stroke: var(--recall-text-muted, #64748b) !important;
+}
+
+.mermaid-code-preview {
+  background: var(--recall-surface-elevated, #fbf9f4) !important;
+  border: 1px solid var(--recall-border, rgba(30, 41, 59, 0.12)) !important;
+  border-radius: var(--radius-sm, 8px) !important;
+  padding: 14px 16px !important;
+  margin: 0 !important;
+  font-family: var(--font-mono, monospace) !important;
+  font-size: 0.82rem !important;
+  line-height: 1.6 !important;
+  color: var(--recall-text-primary, #1e293b) !important;
+  overflow-x: auto !important;
+}
+
+/* Suppress standalone Mermaid error icons injected to body */
+svg[aria-roledescription="error"],
+.mermaid-error,
+svg.error-icon {
+  display: none !important;
 }
 

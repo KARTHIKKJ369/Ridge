@@ -34,6 +34,8 @@ class GraphState(TypedDict):
     question: str
     original_question: str
     web_search_enabled: bool
+    source_filter: str | None       # Scoped retrieval to specific document/source
+    sub_queries: list[str]          # populated by decompose_node for multi-hop
     documents: list[str]
     documents_metadata: list[dict]
     generation: str
@@ -194,11 +196,11 @@ def get_vectorstore():
 def ingest_document(text_or_url: str, original_filename: str | None = None) -> dict:
     import urllib.parse
     import os
-    from rag_ingest import load_and_split_source, _sub_chunk
+    from rag_ingest import load_and_split_source, _sub_chunk, semantic_split_documents
     from langchain_core.documents import Document
-    
+
     print(f"\n=== INGESTING ===\nInput: {text_or_url[:100]}...")
-    
+
     # Check if URL
     is_url = False
     try:
@@ -207,27 +209,70 @@ def ingest_document(text_or_url: str, original_filename: str | None = None) -> d
     except Exception:
         pass
 
-    doc_splits = []
+    raw_splits = []
     if is_url:
         print("Detected URL, using rag_ingest...")
-        doc_splits = load_and_split_source(text_or_url)
+        raw_splits = load_and_split_source(text_or_url)
     elif os.path.exists(text_or_url):
         print("Detected local file, using rag_ingest...")
-        doc_splits = load_and_split_source(text_or_url)
+        raw_splits = load_and_split_source(text_or_url)
     else:
         print("Detected raw text, processing...")
         doc = Document(page_content=text_or_url, metadata={"source": original_filename or "user_input"})
-        doc_splits = _sub_chunk([doc], 1500, 200)
+        raw_splits = _sub_chunk([doc], 1500, 200)
 
     # Attach original filename if provided (e.g. for uploads)
     if original_filename:
-        for d in doc_splits:
+        for d in raw_splits:
             d.metadata["source"] = original_filename
             d.metadata["h1"] = original_filename
-        
+
+    # --- Semantic Chunking: re-split by embedding gradient for topic-aware boundaries ---
+    try:
+        embedder = get_embeddings()
+        doc_splits = semantic_split_documents(raw_splits, embedder, percentile=25.0, max_chars=1800)
+        print(f"  Semantic chunking: {len(raw_splits)} raw -> {len(doc_splits)} semantic parent chunks.")
+    except Exception as sc_err:
+        print(f"  Semantic chunking fallback (char-split): {sc_err}")
+        doc_splits = raw_splits
+
     print(f"Created {len(doc_splits)} chunks. Storing in Chroma...")
     vectorstore = get_vectorstore()
-    vectorstore.add_documents(doc_splits)
+
+    # --- Small-to-Big: create child chunks for indexing, keep parents in store ---
+    from parent_store import make_parent_id, save_parents
+    from langchain_text_splitters import RecursiveCharacterTextSplitter
+
+    child_splitter = RecursiveCharacterTextSplitter(
+        chunk_size=400,
+        chunk_overlap=60,
+        separators=["\n\n", "\n", ".", " ", ""],
+    )
+
+    parent_records = []
+    child_docs = []
+
+    for parent_doc in doc_splits:
+        source = parent_doc.metadata.get("source", "unknown")
+        pid = make_parent_id(parent_doc.page_content, source)
+        parent_records.append({"id": pid, "text": parent_doc.page_content, "metadata": parent_doc.metadata})
+
+        # Split parent into child chunks
+        children = child_splitter.split_documents([parent_doc])
+        for child in children:
+            child.metadata = {**parent_doc.metadata, "parent_id": pid}
+            child_docs.append(child)
+
+    # Save parents to persistent JSON store
+    try:
+        save_parents(parent_records)
+    except Exception as ps_err:
+        print(f"  ParentStore note: {ps_err}")
+
+    # Index child chunks (fine-grained) into Chroma
+    docs_to_index = child_docs if child_docs else doc_splits
+    print(f"  Small-to-Big: {len(doc_splits)} parent chunks -> {len(docs_to_index)} child chunks indexed.")
+    vectorstore.add_documents(docs_to_index)
     print("Ingestion complete.")
 
     # Extract & Index domain acronyms into glossary
@@ -332,19 +377,41 @@ def build_app():
         t0 = time.time()
         print("\n--- NODE: HYBRID RETRIEVE (BM25 + Chroma HNSW + RRF) ---")
         q = state["question"]
+        src_filter = state.get("source_filter")
+        is_filtered = bool(src_filter and src_filter.strip().lower() not in ("", "all", "all sources", "none"))
+        if is_filtered:
+            print(f"  [Source Scope Filter Active]: '{src_filter}'")
 
-        # 1. Dense MMR Vector Search from Chroma
-        dense_docs = retriever.invoke(q)
+        # 1. Dense MMR Vector Search from Chroma (with optional metadata filter)
+        if is_filtered:
+            try:
+                dense_docs = vectorstore.similarity_search(q, k=50, filter={"source": src_filter})
+            except Exception:
+                dense_docs = retriever.invoke(q)
+                dense_docs = [d for d in dense_docs if d.metadata.get("source") == src_filter or src_filter.lower() in str(d.metadata.get("source", "")).lower()]
+        else:
+            dense_docs = retriever.invoke(q)
+
         dense_texts = [d.page_content for d in dense_docs]
         dense_metas = [d.metadata for d in dense_docs]
 
-        # 2. Sparse BM25 Search over Chroma Collection
+        # 2. Sparse BM25 Search over Chroma Collection (filtered)
         sparse_candidates = []
         try:
             from rank_bm25 import BM25Okapi
             all_chroma = vectorstore.get()
             raw_docs = all_chroma.get("documents", []) or []
             raw_metas = all_chroma.get("metadatas", []) or [{}] * len(raw_docs)
+
+            if is_filtered:
+                filtered_docs = []
+                filtered_metas = []
+                for d, m in zip(raw_docs, raw_metas):
+                    m_src = str(m.get("source", "")) if m else ""
+                    if m_src == src_filter or src_filter.lower() in m_src.lower():
+                        filtered_docs.append(d)
+                        filtered_metas.append(m)
+                raw_docs, raw_metas = filtered_docs, filtered_metas
 
             if raw_docs:
                 tokenized_corpus = [re.findall(r"\w+", doc.lower()) for doc in raw_docs]
@@ -403,8 +470,25 @@ def build_app():
         else:
             final_texts = fused_texts
             final_metas = fused_metas
-            
-        return {"documents": final_texts, "documents_metadata": final_metas, "latency_ms": int((time.time() - t0) * 1000)}
+
+        # --- Small-to-Big Expansion: swap child chunks for their parent sections ---
+        expanded_count = 0
+        try:
+            from parent_store import expand_documents
+            exp_texts, exp_metas = expand_documents(final_texts, final_metas)
+            expanded_count = sum(1 for m in exp_metas if m.get("expanded_from_child"))
+            if expanded_count:
+                print(f"  Small-to-Big: expanded {expanded_count}/{len(exp_texts)} child chunks to parent sections.")
+            final_texts, final_metas = exp_texts, exp_metas
+        except Exception as s2b_err:
+            print(f"  Small-to-Big expansion note: {s2b_err}")
+
+        return {
+            "documents": final_texts,
+            "documents_metadata": final_metas,
+            "expanded_count": expanded_count,
+            "latency_ms": int((time.time() - t0) * 1000)
+        }
 
     def grade_documents(state: GraphState) -> dict:
         t0 = time.time()
@@ -605,6 +689,16 @@ def build_app():
                     if c_json.get("conflict") is True and c_json.get("summary"):
                         conflict_data["detected"] = True
                         conflict_data["summary"] = c_json.get("summary")
+                        conflict_data["passages"] = [
+                            {
+                                "source": g.get("source", f"Doc #{i+1}"),
+                                "name": g.get("source", f"Doc #{i+1}").split("/")[-1],
+                                "text": g.get("text", docs[i] if i < len(docs) else ""),
+                                "rationale": g.get("rationale", "")
+                            }
+                            for i, g in enumerate(doc_grades)
+                            if g.get("score") == "yes" and g.get("source") and g.get("breadcrumb") != "Web Search Fallback"
+                        ]
                         print(f"  ⚠️ Document Conflict Detected: {conflict_data['summary']}")
                         conflict_instruction = (
                             f"\nIMPORTANT - DOCUMENT CONFLICT DETECTED: The knowledge base contains differing perspectives across documents:\n"
@@ -629,7 +723,12 @@ def build_app():
             "3. TABLES: If presenting comparative or source-level data, format as a valid Markdown table with proper newlines between every row.\n"
             "4. CLEAN CITATIONS & NO RAW HTML: Never output raw HTML tags (<br>, <div>) or internal citation tags like 【1†L1-L4】. When referencing sources, use clean inline bracketed references like [1].\n"
             "5. ACCURACY & EVIDENCE: Base factual assertions directly on the verified context findings. If the context is unrelated to the question, state that clearly and provide a grounded explanation.\n"
-            "6. NO GIBBERISH: If the question is unintelligible keyboard mash, politely ask for clarification."
+            "6. NO GIBBERISH: If the question is unintelligible keyboard mash, politely ask for clarification.\n"
+            "7. MATHEMATICAL EQUATIONS & LATEX: Format all mathematical formulas and variables using standard LaTeX syntax. Use inline `$ ... $` for inline variables and terms (e.g., `$p_c$`, `$\\alpha$`, `$p^s_{T,c}$`), and block `$$ ... $$` on separate lines for display equations. Never output bracketed formulas like `[ p_c := ... ]` or `(\\alpha)` without dollar signs.\n"
+            "8. INTERACTIVE MERMAID DIAGRAMS: When the user asks for a diagram or when explaining multi-step workflows, architectures, decision cycles, algorithm traversals, or state transitions, ALWAYS include a valid ```mermaid\nflowchart TD\n...``` code block diagram. CRITICAL SYNTAX RULES:\n"
+            "   - Use ONLY standard ASCII arrows: `-->`, `-.->`, `==>`. NEVER use Unicode em-dashes or box characters (`─`, `—`, `–`, `→`).\n"
+            "   - Wrap all node and subgraph text in double quotes: `A[\"Node Label\"]`, `subgraph ID [\"Group Name\"]`.\n"
+            "   - Never use raw HTML tags (`<b>`, `<span>`) inside Mermaid diagrams."
         )
 
         # Primary Model with instant fast model fallback on rate-limit
@@ -755,19 +854,31 @@ def build_app():
     def decide_to_generate(state: GraphState) -> str:
         print("--- ROUTER: EVALUATING NEXT STEP ---")
 
-        if state.get("generation") == "yes":
-            print("-> Document matches. Route to: GENERATE")
-            return "generate"
-
         allow_web = state.get("web_search_enabled", True)
         loops = state.get("loop_count", 0)
         max_loops = int(settings.get("max_rewrite_loops", 1))
+
+        if state.get("generation") == "yes":
+            # Multi-hop coverage check: if we have fewer relevant docs than sub-queries
+            # and web is enabled, supplement with web search
+            sub_queries = state.get("sub_queries", [])
+            doc_grades = state.get("doc_grades", [])
+            relevant_count = sum(1 for g in doc_grades if g.get("score") == "yes")
+            if len(sub_queries) > 1 and allow_web and relevant_count < len(sub_queries):
+                print(
+                    f"-> Multi-hop coverage gap: {relevant_count} relevant docs for {len(sub_queries)} sub-queries."
+                    " Route to: WEB SEARCH (gap fill)."
+                )
+                return "web_search"
+            print("-> Document matches. Route to: GENERATE")
+            return "generate"
+
         if loops >= max_loops:
             if allow_web:
                 print(f"-> Safety valve tripped after {loops} rewrite attempts. Route to: WEB SEARCH.")
                 return "web_search"
             else:
-                print(f"-> Safety valve tripped after {loops} rewrite attempts. Web fallback disabled by user -> Route to: GENERATE (Direct Local KB).")
+                print(f"-> Safety valve tripped after {loops} rewrite attempts. Web fallback disabled -> Route to: GENERATE (Direct Local KB).")
                 return "generate"
 
         print("-> Document irrelevant. Route to: REWRITE")
@@ -823,7 +934,134 @@ def build_app():
             "latency_ms": int((time.time() - t0) * 1000)
         }
 
+    # ---------------------------------------------------------------------------
+    # MULTI-HOP DECOMPOSITION NODE
+    # ---------------------------------------------------------------------------
+    def decompose(state: GraphState) -> dict:
+        """Detect compound/multi-part questions, split into focused sub-queries,
+        run parallel hybrid retrieval for each, and merge results via RRF."""
+        t0 = time.time()
+        question = state["question"]
+        print("\n--- NODE: QUERY DECOMPOSITION ---")
+
+        # --- Step 1: Detect if question is compound ---
+        detect_prompt = (
+            "You are a query analysis assistant.\n"
+            f"User question: {question}\n\n"
+            "Determine if this question contains MULTIPLE distinct parts or asks about MULTIPLE"
+            " separate topics that each require independent retrieval.\n"
+            "Examples of compound: 'Compare PEAS and DECIDE frameworks, and also explain BFS vs DFS'\n"
+            "Examples of simple: 'What is PEAS?', 'How does BFS work?'\n\n"
+            "If compound, decompose into 2-4 concise, focused sub-queries.\n"
+            "If simple, return the original question as the only sub-query.\n"
+            "Return ONLY valid JSON: {\"compound\": true|false, \"sub_queries\": [\"q1\", ...]}"
+        )
+        sub_queries = [question]  # default: no decomposition
+        try:
+            resp = llm_fast.invoke(detect_prompt)
+            cleaned = clean_llm_response(resp.content)
+            m = re.search(r"\{.*\}", cleaned, re.DOTALL)
+            if m:
+                data = json.loads(m.group(0))
+                if data.get("compound") and data.get("sub_queries"):
+                    candidates = [str(q).strip() for q in data["sub_queries"] if q and len(str(q).strip()) > 3]
+                    if len(candidates) >= 2:
+                        sub_queries = candidates[:4]
+                        print(f"  Compound question detected. Sub-queries: {sub_queries}")
+                    else:
+                        print("  Simple question detected. No decomposition needed.")
+                else:
+                    print("  Simple question detected. No decomposition needed.")
+        except Exception as e:
+            print(f"  Decomposition note: {e}")
+
+        if len(sub_queries) == 1:
+            # No-op: standard single retrieve path, set sub_queries but keep question
+            return {"sub_queries": sub_queries, "latency_ms": int((time.time() - t0) * 1000)}
+
+        # --- Step 2: Parallel hybrid retrieval per sub-query ---
+        from rank_bm25 import BM25Okapi
+        all_chroma = vectorstore.get()
+        raw_docs = all_chroma.get("documents", []) or []
+        raw_metas = all_chroma.get("metadatas", []) or [{}] * len(raw_docs)
+        
+        src_filter = state.get("source_filter")
+        is_filtered = bool(src_filter and src_filter.strip().lower() not in ("", "all", "all sources", "none"))
+        if is_filtered:
+            filtered_docs = []
+            filtered_metas = []
+            for d, m in zip(raw_docs, raw_metas):
+                m_src = str(m.get("source", "")) if m else ""
+                if m_src == src_filter or src_filter.lower() in m_src.lower():
+                    filtered_docs.append(d)
+                    filtered_metas.append(m)
+            raw_docs, raw_metas = filtered_docs, filtered_metas
+
+        tokenized_corpus = [re.findall(r"\w+", doc.lower()) for doc in raw_docs] if raw_docs else []
+        bm25 = BM25Okapi(tokenized_corpus) if tokenized_corpus else None
+
+        # RRF registry across all sub-queries
+        rrf_scores: dict[str, float] = {}
+        doc_registry: dict[str, tuple[str, dict]] = {}
+        K = 60  # RRF constant
+
+        for sq in sub_queries:
+            # Dense retrieval (with optional source filter)
+            if is_filtered:
+                try:
+                    dense = vectorstore.similarity_search(sq, k=50, filter={"source": src_filter})
+                except Exception:
+                    dense = retriever.invoke(sq)
+                    dense = [d for d in dense if d.metadata.get("source") == src_filter or src_filter.lower() in str(d.metadata.get("source", "")).lower()]
+            else:
+                dense = retriever.invoke(sq)
+
+            for rank, d in enumerate(dense):
+                did = d.page_content.strip()[:180]
+                doc_registry[did] = (d.page_content, d.metadata)
+                rrf_scores[did] = rrf_scores.get(did, 0.0) + 1.0 / (K + rank + 1)
+
+            # BM25 sparse retrieval
+            if bm25 and raw_docs:
+                tokens = re.findall(r"\w+", sq.lower())
+                if tokens:
+                    scores = bm25.get_scores(tokens)
+                    top_idx = sorted(range(len(scores)), key=lambda i: scores[i], reverse=True)[:20]
+                    for rank, idx in enumerate(top_idx):
+                        if scores[idx] > 0.0:
+                            did = raw_docs[idx].strip()[:180]
+                            doc_registry[did] = (raw_docs[idx], raw_metas[idx] if idx < len(raw_metas) else {})
+                            rrf_scores[did] = rrf_scores.get(did, 0.0) + 1.0 / (K + rank + 1)
+
+        # --- Step 3: Sort + FlashRank re-rank merged pool ---
+        sorted_fused = sorted(rrf_scores.keys(), key=lambda k: rrf_scores[k], reverse=True)[:40]
+        fused_texts = [doc_registry[k][0] for k in sorted_fused]
+        fused_metas = [doc_registry[k][1] for k in sorted_fused]
+        print(f"  Multi-hop merged pool: {len(fused_texts)} candidates from {len(sub_queries)} sub-queries.")
+
+        final_texts, final_metas = fused_texts, fused_metas
+        if fused_texts:
+            from flashrank import RerankRequest
+            passages = [{"id": i, "text": t, "meta": fused_metas[i]} for i, t in enumerate(fused_texts)]
+            rr = RerankRequest(query=question, passages=passages)
+            results = sorted(ranker.rerank(rr), key=lambda x: x["score"], reverse=True)
+            final_texts = [r["text"] for r in results[:settings["retriever_k"]]]
+            final_metas = []
+            for r in results[:settings["retriever_k"]]:
+                m = r["meta"]
+                m["score"] = float(r["score"])
+                final_metas.append(m)
+            print(f"  Re-ranked to top {len(final_texts)} documents.")
+
+        return {
+            "sub_queries": sub_queries,
+            "documents": final_texts,
+            "documents_metadata": final_metas,
+            "latency_ms": int((time.time() - t0) * 1000),
+        }
+
     workflow = StateGraph(GraphState)
+    workflow.add_node("decompose_node", decompose)
     workflow.add_node("retrieve_node", retrieve)
     workflow.add_node("web_search_node", web_search)
     workflow.add_node("grade_node", grade_documents)
@@ -831,7 +1069,20 @@ def build_app():
     workflow.add_node("check_hallucination_node", check_hallucination)
     workflow.add_node("rewrite_node", rewrite)
 
-    workflow.set_entry_point("retrieve_node")
+    # Decompose → if multi-hop docs already loaded, skip retrieve and go straight to grade
+    workflow.set_entry_point("decompose_node")
+
+    def route_after_decompose(state: GraphState) -> str:
+        """If decompose_node already populated documents (multi-hop), skip retrieve_node."""
+        if state.get("documents"):
+            return "grade"
+        return "retrieve"
+
+    workflow.add_conditional_edges(
+        "decompose_node",
+        route_after_decompose,
+        {"grade": "grade_node", "retrieve": "retrieve_node"},
+    )
     workflow.add_edge("retrieve_node", "grade_node")
     workflow.add_conditional_edges(
         "grade_node",
@@ -850,13 +1101,15 @@ def build_app():
     return workflow.compile()
 
 
-def run_question(question: str, web_search_enabled: bool = True) -> dict:
+def run_question(question: str, web_search_enabled: bool = True, source_filter: str | None = None) -> dict:
     app = build_app()
     result = app.invoke(
         {
             "question": question,
             "original_question": question,
             "web_search_enabled": web_search_enabled,
+            "source_filter": source_filter,
+            "sub_queries": [],
             "documents": [],
             "documents_metadata": [],
             "generation": "",

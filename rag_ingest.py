@@ -94,6 +94,180 @@ def _sub_chunk(sections: list[Document], size: int, overlap: int) -> list[Docume
     return [ensure_chunk_has_headings(chunk) for chunk in text_splitter.split_documents(sections)]
 
 
+# ---------------------------------------------------------------------------
+# Semantic Chunking by Embedding Gradient
+# ---------------------------------------------------------------------------
+
+def _cosine_sim(a: list[float], b: list[float]) -> float:
+    """Fast cosine similarity between two embedding vectors."""
+    dot = sum(x * y for x, y in zip(a, b))
+    na = sum(x * x for x in a) ** 0.5
+    nb = sum(x * x for x in b) ** 0.5
+    return dot / (na * nb + 1e-9)
+
+
+def semantic_chunk(
+    text: str,
+    embedder,
+    window: int = 3,
+    percentile: float = 25.0,
+    min_chars: int = 200,
+    max_chars: int = 1800,
+) -> list[str]:
+    """
+    Split text into semantically coherent chunks using a self-calibrating
+    embedding-gradient detector.
+
+    Algorithm:
+    1. Sentence-tokenise the text.
+    2. For each candidate boundary i, compute cosine sim between the `window`
+       sentences BEFORE and AFTER it.
+    3. Treat the bottom `percentile` of those sim scores as topic-shift breakpoints.
+       (self-calibrating: no fixed threshold needed)
+    4. Merge micro-chunks < min_chars; hard cap at max_chars.
+
+    Returns a list of chunk strings (no metadata).
+    """
+    import re
+
+    # ── 1. Sentence tokenise ──────────────────────────────────────────────────
+    sentences = [s.strip() for s in re.split(r"(?<=[.!?])\s+", text) if s.strip()]
+    if len(sentences) <= 2 * window + 1:
+        # Too short to find meaningful boundaries
+        return [text] if text.strip() else []
+
+    # ── 2. Compute before/after cosine sims at each candidate boundary ────────
+    sims: list[tuple[int, float]] = []   # (sentence_index, cosine_sim)
+    for i in range(window, len(sentences) - window):
+        before = " ".join(sentences[max(0, i - window): i])
+        after  = " ".join(sentences[i: i + window])
+        try:
+            sim = _cosine_sim(embedder.embed_query(before), embedder.embed_query(after))
+        except Exception:
+            continue
+        sims.append((i, sim))
+
+    if not sims:
+        return [text]
+
+    # ── 3. Percentile-based breakpoint detection ──────────────────────────────
+    sim_values = sorted(s for _, s in sims)
+    n = len(sim_values)
+    cutoff_idx = max(0, int(n * percentile / 100.0) - 1)
+    cutoff = sim_values[cutoff_idx]
+
+    breakpoints = [i for i, s in sims if s <= cutoff]
+
+    # Deduplicate: among adjacent breakpoints, keep the one with lowest sim (sharpest boundary)
+    sim_lookup = dict(sims)
+    clean_bps: list[int] = []
+    cluster: list[int] = []
+    for bp in sorted(set(breakpoints)):
+        if cluster and bp - cluster[-1] <= window:
+            cluster.append(bp)
+        else:
+            if cluster:
+                # Keep the sharpest boundary in this cluster
+                best = min(cluster, key=lambda x: sim_lookup.get(x, 1.0))
+                clean_bps.append(best)
+            cluster = [bp]
+    if cluster:
+        best = min(cluster, key=lambda x: sim_lookup.get(x, 1.0))
+        clean_bps.append(best)
+    clean_bps.sort()
+
+    if not clean_bps:
+        return [text]
+
+    # ── 4. Build chunk strings ────────────────────────────────────────────────
+    chunks: list[str] = []
+    prev = 0
+    for bp in clean_bps:
+        chunk_text = " ".join(sentences[prev:bp]).strip()
+        if chunk_text:
+            chunks.append(chunk_text)
+        prev = bp
+    tail = " ".join(sentences[prev:]).strip()
+    if tail:
+        chunks.append(tail)
+
+    if not chunks:
+        return [text]
+
+    # ── 5. Merge only micro-chunks / hard-cap giant chunks ────────────────────
+    merged: list[str] = []
+    buf = ""
+    for chunk in chunks:
+        if not buf:
+            buf = chunk
+            continue
+        # Only merge if the current buffer is a micro-chunk (below min threshold)
+        if len(buf) < min_chars:
+            candidate = (buf + " " + chunk).strip()
+            if len(candidate) <= max_chars:
+                buf = candidate
+            else:
+                merged.append(buf)
+                buf = chunk
+        else:
+            # buf is a proper-sized chunk — emit it
+            merged.append(buf)
+            buf = chunk
+    if buf:
+        # Hard-cap: if final buf exceeds max, character-split it
+        if len(buf) > max_chars:
+            from langchain_text_splitters import RecursiveCharacterTextSplitter
+            splitter = RecursiveCharacterTextSplitter(chunk_size=max_chars, chunk_overlap=80)
+            merged.extend([c.page_content if hasattr(c, 'page_content') else c
+                           for c in splitter.create_documents([buf])])
+        else:
+            merged.append(buf)
+
+    return merged if merged else [text]
+
+
+def semantic_split_documents(
+    sections: list[Document],
+    embedder,
+    window: int = 3,
+    percentile: float = 25.0,
+    min_chars: int = 200,
+    max_chars: int = 1800,
+) -> list[Document]:
+    """
+    Apply semantic_chunk to each Document section, returning Document objects
+    with metadata preserved (breadcrumb, headings, source).
+    Falls back gracefully if fewer than (2*window+1) sentences detected.
+    """
+    result: list[Document] = []
+    for section in sections:
+        text = section.page_content.strip()
+        if not text:
+            continue
+
+        # Sections shorter than min_chars go straight through
+        if len(text) < min_chars:
+            result.append(ensure_chunk_has_headings(section))
+            continue
+
+        try:
+            chunk_texts = semantic_chunk(
+                text, embedder,
+                window=window, percentile=percentile,
+                min_chars=min_chars, max_chars=max_chars,
+            )
+        except Exception:
+            # Graceful degradation
+            chunk_texts = [text]
+
+        for ct in chunk_texts:
+            doc = Document(page_content=ct, metadata=dict(section.metadata))
+            result.append(ensure_chunk_has_headings(doc))
+
+    return result
+
+
+
 def is_url(source: str) -> bool:
     return urlparse(source).scheme in ("http", "https")
 

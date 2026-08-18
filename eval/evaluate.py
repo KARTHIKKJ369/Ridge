@@ -33,6 +33,9 @@ def evaluate_test_case(app, test_case: dict) -> dict:
     initial_state = {
         "question": q,
         "original_question": q,
+        "web_search_enabled": True,
+        "source_filter": None,
+        "sub_queries": [],
         "documents": [],
         "documents_metadata": [],
         "doc_grades": [],
@@ -56,31 +59,46 @@ def evaluate_test_case(app, test_case: dict) -> dict:
 
     total_latency_ms = int((time.time() - t0) * 1000)
 
-    # Metrics evaluation
+    # ── RAG Triad Metrics Evaluation ──────────────────────────────────────────
     grader_verdict = latest_grade_verdict
     final_answer = accumulated_state.get("generation", "")
-    
-    # 1. Grader Verdict Match
-    grader_correct = (grader_verdict == test_case["expected_grader_verdict"])
+    retrieved_docs = accumulated_state.get("documents", [])
+    context_text = " ".join(retrieved_docs).lower()
+    hallucination_grade = accumulated_state.get("hallucination_grade", {})
 
-    # 2. Keyword Recall in Answer
     keywords = test_case.get("ground_truth_keywords", [])
     ans_clean = final_answer.lower().replace("-", " ")
     ans_compact = ans_clean.replace(" ", "")
+
+    # 1. Context Recall: were gold keywords found in retrieved documents?
+    context_hits = [
+        kw for kw in keywords
+        if kw.lower() in context_text
+        or kw.lower().replace("-", " ") in context_text
+    ]
+    context_recall = (len(context_hits) / len(keywords)) * 100 if keywords else 100.0
+
+    # 2. Faithfulness: was hallucination audit grounded ('yes')?
+    is_grounded = hallucination_grade.get("grounded", "yes") == "yes"
+    faithfulness_score = 100.0 if is_grounded else 0.0
+
+    # 3. Answer Relevance: keyword recall in synthesized answer
     keyword_hits = [
         kw for kw in keywords
         if kw.lower() in final_answer.lower()
         or kw.lower().replace("-", " ") in ans_clean
         or kw.lower().replace(" ", "") in ans_compact
     ]
-    keyword_recall = len(keyword_hits) / len(keywords) if keywords else 1.0
+    answer_relevance = (len(keyword_hits) / len(keywords)) * 100 if keywords else 100.0
 
-    # 3. Routing Match (checks if web search was triggered when expected, or direct generate)
+    # Routing Match
     expected_route = test_case.get("expected_final_route", "generate_node")
     if expected_route == "web_search_node":
         routing_correct = "web_search_node" in steps_executed
     else:
         routing_correct = "web_search_node" not in steps_executed and "generate_node" in steps_executed
+
+    grader_correct = (grader_verdict == test_case["expected_grader_verdict"])
 
     result = {
         "id": test_case["id"],
@@ -91,17 +109,19 @@ def evaluate_test_case(app, test_case: dict) -> dict:
         "grader_verdict": grader_verdict,
         "expected_grader_verdict": test_case["expected_grader_verdict"],
         "grader_correct": grader_correct,
-        "keyword_recall": round(keyword_recall * 100, 1),
+        "context_recall": round(context_recall, 1),
+        "faithfulness": round(faithfulness_score, 1),
+        "answer_relevance": round(answer_relevance, 1),
         "keyword_hits": keyword_hits,
         "keywords_expected": keywords,
         "routing_correct": routing_correct,
         "final_route": "web_search_node" if "web_search_node" in steps_executed else "generate_node",
-        "answer_preview": final_answer[:200].replace("\n", " ") + "...",
+        "answer_preview": final_answer[:180].replace("\n", " ") + "...",
     }
 
-    print(f"  -> Total Latency: {total_latency_ms}ms | Steps: {' -> '.join(steps_executed)}")
-    print(f"  -> Grader Accuracy: {'PASSED' if grader_correct else 'FAILED'} (Got '{grader_verdict}', Expected '{test_case['expected_grader_verdict']}')")
-    print(f"  -> Keyword Recall: {result['keyword_recall']}% ({len(keyword_hits)}/{len(keywords)} hits)")
+    print(f"  -> Latency: {total_latency_ms}ms | Steps: {' -> '.join(steps_executed)}")
+    print(f"  -> RAG Triad: Context Recall: {result['context_recall']}% | Faithfulness: {result['faithfulness']}% | Answer Relevance: {result['answer_relevance']}%")
+    print(f"  -> Grader Verdict: {'PASSED' if grader_correct else 'FAILED'} (Got '{grader_verdict}', Expected '{test_case['expected_grader_verdict']}')")
 
     return result
 
@@ -122,23 +142,27 @@ def run_benchmark():
     for tc in test_cases:
         res = evaluate_test_case(app, tc)
         results.append(res)
-        time.sleep(2.5)
+        time.sleep(2.0)
 
     # Compute Summary Statistics
     total_cases = len(results)
     grader_accuracy = sum(1 for r in results if r["grader_correct"]) / total_cases * 100
-    avg_keyword_recall = sum(r["keyword_recall"] for r in results) / total_cases
+    avg_context_recall = sum(r["context_recall"] for r in results) / total_cases
+    avg_faithfulness = sum(r["faithfulness"] for r in results) / total_cases
+    avg_answer_relevance = sum(r["answer_relevance"] for r in results) / total_cases
     avg_latency = sum(r["total_latency_ms"] for r in results) / total_cases
     routing_accuracy = sum(1 for r in results if r["routing_correct"]) / total_cases * 100
 
     print("\n" + "=" * 70)
-    print("📊 BENCHMARK SUMMARY SCORECARD")
+    print("📊 RAG TRIAD & BENCHMARK SUMMARY SCORECARD")
     print("=" * 70)
     print(f"• Total Test Cases Evaluated : {total_cases}")
-    print(f"• Grader Decision Accuracy  : {grader_accuracy:.1f}%")
-    print(f"• Average Keyword Recall     : {avg_keyword_recall:.1f}%")
-    print(f"• State Routing Accuracy     : {routing_accuracy:.1f}%")
-    print(f"• Average Pipeline Latency   : {avg_latency:.0f} ms")
+    print(f"• [RAG Triad] Context Recall : {avg_context_recall:.1f}%")
+    print(f"• [RAG Triad] Faithfulness   : {avg_faithfulness:.1f}%")
+    print(f"• [RAG Triad] Answer Relevance: {avg_answer_relevance:.1f}%")
+    print(f"• Grader Decision Accuracy   : {grader_accuracy:.1f}%")
+    print(f"• State Routing Accuracy      : {routing_accuracy:.1f}%")
+    print(f"• Average Pipeline Latency    : {avg_latency:.0f} ms")
     print("=" * 70)
 
     # Write Markdown Report
@@ -150,12 +174,14 @@ def run_benchmark():
 
 ---
 
-## 📊 Summary Scorecard
+## 📊 RAG Triad & Performance Scorecard
 
 | Metric | Score | Target Standard | Status |
 | :--- | :---: | :---: | :---: |
+| **Context Recall** | **{avg_context_recall:.1f}%** | > 80% | {'✅ Pass' if avg_context_recall >= 75 else '⚠️ Needs Review'} |
+| **Faithfulness (Audit)** | **{avg_faithfulness:.1f}%** | > 85% | {'✅ Pass' if avg_faithfulness >= 80 else '⚠️ Needs Review'} |
+| **Answer Relevance** | **{avg_answer_relevance:.1f}%** | > 80% | {'✅ Pass' if avg_answer_relevance >= 75 else '⚠️ Needs Review'} |
 | **Grader Decision Accuracy** | **{grader_accuracy:.1f}%** | > 90% | {'✅ Pass' if grader_accuracy >= 90 else '⚠️ Needs Review'} |
-| **Average Grounded Recall** | **{avg_keyword_recall:.1f}%** | > 80% | {'✅ Pass' if avg_keyword_recall >= 80 else '⚠️ Needs Review'} |
 | **Graph Routing Correctness** | **{routing_accuracy:.1f}%** | 100% | {'✅ Pass' if routing_accuracy >= 80 else '⚠️ Needs Review'} |
 | **Average End-to-End Latency** | **{avg_latency:.0f} ms** | < 4000 ms | {'✅ Optimal' if avg_latency <= 4000 else '⚡ Accelerated'} |
 
@@ -163,14 +189,13 @@ def run_benchmark():
 
 ## 🔍 Detailed Test Case Results
 
-| ID | Category | Question | Steps Executed | Grader Verdict | Keyword Recall | Latency | Status |
-| :--- | :--- | :--- | :--- | :---: | :---: | :---: | :---: |
+| ID | Category | Question | Context Recall | Faithfulness | Relevance | Latency | Status |
+| :--- | :--- | :--- | :---: | :---: | :---: | :---: | :---: |
 """
 
     for r in results:
-        status_icon = "✅" if r["grader_correct"] and r["keyword_recall"] >= 50 else "⚠️"
-        steps_str = " &rarr; ".join(r["steps"])
-        report_md += f"| `{r['id']}` | **{r['category']}** | *\"{r['question']}\"* | {steps_str} | `{r['grader_verdict']}` | {r['keyword_recall']}% | {r['total_latency_ms']}ms | {status_icon} |\n"
+        status_icon = "✅" if r["grader_correct"] and r["answer_relevance"] >= 50 else "⚠️"
+        report_md += f"| `{r['id']}` | **{r['category']}** | *\"{r['question']}\"* | {r['context_recall']}% | {r['faithfulness']}% | {r['answer_relevance']}% | {r['total_latency_ms']}ms | {status_icon} |\n"
 
     report_md += "\n---\n\n*Report automatically generated by `eval/evaluate.py`.*"
 
@@ -183,14 +208,15 @@ def run_benchmark():
         json.dump({
             "summary": {
                 "total_cases": total_cases,
+                "context_recall": avg_context_recall,
+                "faithfulness": avg_faithfulness,
+                "answer_relevance": avg_answer_relevance,
                 "grader_accuracy": grader_accuracy,
-                "avg_keyword_recall": avg_keyword_recall,
-                "avg_latency_ms": avg_latency,
                 "routing_accuracy": routing_accuracy,
+                "avg_latency_ms": avg_latency,
             },
             "test_cases": results
         }, f, indent=2)
-
 
 if __name__ == "__main__":
     run_benchmark()

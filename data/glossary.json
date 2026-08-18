@@ -8,5 +8,120 @@
     "term": "PEAS",
     "expansion": "Performance, Environment, Actuators, Sensors",
     "source": "sample_doc.md"
+  },
+  "VGRF": {
+    "term": "VGRF",
+    "expansion": "The Vertical Ground Reaction Force",
+    "source": "A_Global-Local_Dynamic_Directed_Graph_Neural_Network_for_Parkinsons_Disease_Detection.pdf"
+  },
+  "DGL": {
+    "term": "DGL",
+    "expansion": "The\nDynamic Graph Learning",
+    "source": "A_Global-Local_Dynamic_Directed_Graph_Neural_Network_for_Parkinsons_Disease_Detection.pdf"
+  },
+  "TCN": {
+    "term": "TCN",
+    "expansion": "Temporal Convolutional Network",
+    "source": "A_Global-Local_Dynamic_Directed_Graph_Neural_Network_for_Parkinsons_Disease_Detection.pdf"
+  },
+  "ML": {
+    "term": "ML",
+    "expansion": "Machine Learning",
+    "source": "A_Global-Local_Dynamic_Directed_Graph_Neural_Network_for_Parkinsons_Disease_Detection.pdf"
+  },
+  "VGRNN": {
+    "term": "VGRNN",
+    "expansion": "Variational Graph Recurrent Neural Network",
+    "source": "A_Global-Local_Dynamic_Directed_Graph_Neural_Network_for_Parkinsons_Disease_Detection.pdf"
+  },
+  "RAG": {
+    "term": "RAG",
+    "expansion": "List CA-RAG",
+    "source": "Context-Aware_Retrieval_Augmented_Generation_Using_Similarity_Validation_to_Handle_Context_Inconsistencies_in_Large_Language_Models.pdf"
+  },
+  "MMR": {
+    "term": "MMR",
+    "expansion": "Maximal\nMarginal Relevance",
+    "source": "Context-Aware_Retrieval_Augmented_Generation_Using_Similarity_Validation_to_Handle_Context_Inconsistencies_in_Large_Language_Models.pdf"
+  },
+  "QA": {
+    "term": "QA",
+    "expansion": "Question Answer",
+    "source": "Context-Aware_Retrieval_Augmented_Generation_Using_Similarity_Validation_to_Handle_Context_Inconsistencies_in_Large_Language_Models.pdf"
+  },
+  "NDCG": {
+    "term": "NDCG",
+    "expansion": "Normalized Discounted\nCumulative Gain",
+    "source": "Context-Aware_Retrieval_Augmented_Generation_Using_Similarity_Validation_to_Handle_Context_Inconsistencies_in_Large_Language_Models.pdf"
+  },
+  "PPO": {
+    "term": "PPO",
+    "expansion": "Using Proximal Policy\nOptimization",
+    "source": "Context-Aware_Retrieval_Augmented_Generation_Using_Similarity_Validation_to_Handle_Context_Inconsistencies_in_Large_Language_Models.pdf"
+  },
+  "DPR": {
+    "term": "DPR",
+    "expansion": "Dense Passage Retrieval",
+    "source": "Context-Aware_Retrieval_Augmented_Generation_Using_Similarity_Validation_to_Handle_Context_Inconsistencies_in_Large_Language_Models.pdf"
+  },
+  "TP": {
+    "term": "TP",
+    "expansion": "True\nPositive",
+    "source": "Context-Aware_Retrieval_Augmented_Generation_Using_Similarity_Validation_to_Handle_Context_Inconsistencies_in_Large_Language_Models.pdf"
+  },
+  "FP": {
+    "term": "FP",
+    "expansion": "False Positives",
+    "source": "Context-Aware_Retrieval_Augmented_Generation_Using_Similarity_Validation_to_Handle_Context_Inconsistencies_in_Large_Language_Models.pdf"
+  },
+  "TN": {
+    "term": "TN",
+    "expansion": "True\nNegatives",
+    "source": "Context-Aware_Retrieval_Augmented_Generation_Using_Similarity_Validation_to_Handle_Context_Inconsistencies_in_Large_Language_Models.pdf"
+  },
+  "FN": {
+    "term": "FN",
+    "expansion": "False\nNegative",
+    "source": "Context-Aware_Retrieval_Augmented_Generation_Using_Similarity_Validation_to_Handle_Context_Inconsistencies_in_Large_Language_Models.pdf"
+  },
+  "NESI": {
+    "term": "NESI",
+    "expansion": "Life Member, IEEE",
+    "source": "Context-Aware_Retrieval_Augmented_Generation_Using_Similarity_Validation_to_Handle_Context_Inconsistencies_in_Large_Language_Models.pdf"
+  },
+  "DT": {
+    "term": "DT",
+    "expansion": "Digital Twin",
+    "source": "A_UAV-Aided_Digital_Twin_Framework_for_IoT_Networks_With_High_Accuracy_and_Synchronization.pdf"
+  },
+  "MDP": {
+    "term": "MDP",
+    "expansion": "Markov Decision Process",
+    "source": "A_UAV-Aided_Digital_Twin_Framework_for_IoT_Networks_With_High_Accuracy_and_Synchronization.pdf"
+  },
+  "TD3": {
+    "term": "TD3",
+    "expansion": "Twin\nDelayed Deep Deterministic Policy Gradient",
+    "source": "A_UAV-Aided_Digital_Twin_Framework_for_IoT_Networks_With_High_Accuracy_and_Synchronization.pdf"
+  },
+  "G2A": {
+    "term": "G2A",
+    "expansion": "Communication Channel Model\nGround-to-air",
+    "source": "A_UAV-Aided_Digital_Twin_Framework_for_IoT_Networks_With_High_Accuracy_and_Synchronization.pdf"
+  },
+  "BAU": {
+    "term": "BAU",
+    "expansion": "Beirut Arab University",
+    "source": "A_UAV-Aided_Digital_Twin_Framework_for_IoT_Networks_With_High_Accuracy_and_Synchronization.pdf"
+  },
+  "CAC": {
+    "term": "CAC",
+    "expansion": "Computing Accreditation Commission",
+    "source": "A_UAV-Aided_Digital_Twin_Framework_for_IoT_Networks_With_High_Accuracy_and_Synchronization.pdf"
+  },
+  "AZTM": {
+    "term": "AZTM",
+    "expansion": "Adaptive Zero Trust Manager",
+    "source": "Adaptive_Trust_Architecture_for_Secure_IoT_Communication_in_6G.pdf"
   }
 }

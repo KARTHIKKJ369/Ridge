@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useImperativeHandle } from 'react';
 import { 
   User, 
   Activity, 
@@ -36,20 +36,249 @@ import {
   Video,
   Image,
   Code,
-  AlertTriangle
+  AlertTriangle,
+  Layers
 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import remarkMath from 'remark-math';
 import rehypeRaw from 'rehype-raw';
+import rehypeKatex from 'rehype-katex';
+import 'katex/dist/katex.min.css';
+import mermaid from 'mermaid';
 import { AuthModal } from './components/AuthModal';
 import './App.css';
 
+mermaid.initialize({
+  startOnLoad: false,
+  suppressErrorRendering: true,
+  theme: 'base',
+  securityLevel: 'loose',
+  themeVariables: {
+    fontFamily: "'Plus Jakarta Sans', 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif",
+    fontSize: '13px',
+    lineColor: '#64748b',
+    primaryColor: '#ffffff',
+    primaryTextColor: '#1e293b',
+    primaryBorderColor: '#0284c7',
+    secondaryColor: '#f1f5f9',
+    tertiaryColor: '#f8fafc',
+    mainBkg: '#ffffff',
+    nodeBorder: '#0284c7',
+    clusterBkg: 'rgba(2, 132, 199, 0.03)',
+    clusterBorder: 'rgba(2, 132, 199, 0.25)',
+    titleColor: '#1e293b',
+    edgeLabelBackground: '#ffffff',
+  }
+});
+
+const isMermaidComplete = (text: string): boolean => {
+  if (!text || !text.trim()) return false;
+  const trimmed = text.trim();
+  const lines = trimmed.split('\n');
+  if (lines.length < 2) return false;
+
+  // Check for unclosed quotes
+  const quotesCount = (trimmed.match(/"/g) || []).length;
+  if (quotesCount % 2 !== 0) return false;
+
+  // Check for trailing incomplete arrow or open bracket at the end
+  if (/(-->|->|==>|-\.->|--|\(|\[|\{)\s*$/.test(trimmed)) return false;
+
+  // Count subgraphs vs ends
+  const subgraphCount = (trimmed.match(/\bsubgraph\b/gi) || []).length;
+  const endCount = (trimmed.match(/\bend\b/gi) || []).length;
+  if (subgraphCount > endCount) return false;
+
+  return true;
+};
+
+const sanitizeMermaidChart = (raw: string): string => {
+  if (!raw) return '';
+  let text = raw.trim();
+  text = text.replace(/^```(mermaid)?\n?/i, '').replace(/```$/i, '').trim();
+
+  // 1. Normalize Unicode hyphens/dashes to ASCII hyphen
+  text = text.replace(/[\u2011\u2012\u00AD\u2013\u2014\u2212]/g, '-');
+
+  // 2. Convert Unicode arrows & box-drawing characters to standard ASCII Mermaid arrows
+  text = text.replace(/[\u2192\u27F6]/g, '-->');
+  text = text.replace(/[\u21D2\u27F9]/g, '==>');
+  text = text.replace(/\u2500{2,}>/g, '-->');
+  text = text.replace(/\u2500>/g, '-->');
+  text = text.replace(/\u2500{2,}/g, '--');
+  text = text.replace(/-{3,}>/g, '-->');
+  text = text.replace(/-\s*\.\s*->|-\.\s*->/g, '-.->');
+
+  // 3. Strip HTML tags (e.g. <b>Text</b> -> Text)
+  text = text.replace(/<[^>]+>/g, '');
+
+  // 4. Fix subgraph syntax: subgraph ID[Title] -> subgraph ID ["Title"]
+  text = text.replace(/subgraph\s+([a-zA-Z0-9_-]+)\s*\[\s*(.*?)\s*\]/g, (_, id, label) => {
+    const cleanLabel = label.replace(/^"|"$/g, '').replace(/"/g, "'").trim();
+    return `subgraph ${id} ["${cleanLabel}"]`;
+  });
+
+  // 5. Fix stadium shapes ([...])
+  text = text.replace(/\b([A-Za-z0-9_]+)\(\[\s*([^"\[\]\n]+?)\s*\]\)/g, (_, nodeId, label) => {
+    return `${nodeId}(["${label.replace(/"/g, "'").trim()}"])`;
+  });
+
+  // 6. Fix subroutine shapes [[...]]
+  text = text.replace(/\b([A-Za-z0-9_]+)\[\[\s*([^"\[\]\n]+?)\s*\]\]/g, (_, nodeId, label) => {
+    return `${nodeId}[["${label.replace(/"/g, "'").trim()}"]]`;
+  });
+
+  // 7. Auto-quote unquoted node labels in [] brackets: nodeId[some text] -> nodeId["some text"]
+  text = text.replace(/\b([A-Za-z0-9_]+)\[([^"\[\]\n]+)\]/g, (_, nodeId, label) => {
+    return `${nodeId}["${label.replace(/"/g, "'").trim()}"]`;
+  });
+
+  // 8. Auto-quote unquoted node labels in () rounded shapes: nodeId(some text) -> nodeId("some text")
+  text = text.replace(/\b([A-Za-z0-9_]+)\((?!\()([^"()\n]+)\)(?!\))/g, (_, nodeId, label) => {
+    return `${nodeId}("${label.replace(/"/g, "'").trim()}")`;
+  });
+
+  // 9. Auto-quote unquoted node labels in {} diamond shapes: nodeId{some text} -> nodeId{"some text"}
+  text = text.replace(/\b([A-Za-z0-9_]+)\{([^"\{\}\n]+)\}/g, (_, nodeId, label) => {
+    return `${nodeId}{"${label.replace(/"/g, "'").trim()}"}`;
+  });
+
+  // 10. Clean edge labels inside |...|: remove quotes & parens that crash Dagre positioning
+  text = text.replace(/([=-]>|--)\s*\|([^|\n]+)\|\s*([A-Za-z0-9_]+)/g, (_, arrow, label, target) => {
+    const cleanLabel = label.replace(/["'\[\]()]/g, '').trim();
+    return `${arrow}|${cleanLabel}| ${target}`;
+  });
+
+  return text;
+};
+
+const MermaidDiagram = ({ chart }: { chart: string }) => {
+  const [svg, setSvg] = useState<string>('');
+  const [isRendered, setIsRendered] = useState<boolean>(false);
+  const [showCode, setShowCode] = useState<boolean>(false);
+  const [copied, setCopied] = useState<boolean>(false);
+  const [renderError, setRenderError] = useState<string>('');
+  const [cleanChart, setCleanChart] = useState<string>('');
+
+  useEffect(() => {
+    let isMounted = true;
+    if (!chart || !chart.trim()) return;
+
+    const sanitized = sanitizeMermaidChart(chart);
+    if (isMounted) setCleanChart(sanitized);
+
+    // If diagram is still being streamed or incomplete, wait before calling mermaid.render
+    if (!isMermaidComplete(sanitized)) {
+      return;
+    }
+
+    const renderChart = async () => {
+      try {
+        const id = `mermaid_${Math.random().toString(36).substring(2, 9)}_${Date.now()}`;
+        const { svg: renderedSvg } = await mermaid.render(id, sanitized);
+        if (isMounted && renderedSvg) {
+          setSvg(renderedSvg);
+          setIsRendered(true);
+          setRenderError('');
+        }
+      } catch (err: unknown) {
+        console.error('[MermaidDiagram] render failed:', err);
+        const msg = err instanceof Error ? err.message : String(err);
+        if (isMounted) setRenderError(msg);
+        // Post-error DOM cleanup of error artifacts only
+        setTimeout(() => {
+          const strayError = document.querySelectorAll('svg[aria-roledescription="error"]');
+          strayError.forEach(el => el.remove());
+        }, 100);
+      }
+    };
+
+    const timer = setTimeout(renderChart, 100);
+    return () => {
+      isMounted = false;
+      clearTimeout(timer);
+    };
+  }, [chart]);
+
+  const handleCopyCode = () => {
+    navigator.clipboard.writeText((cleanChart || chart).trim());
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  return (
+    <div className="mermaid-diagram-card">
+      <div className="mermaid-diagram-header">
+        <div className="mermaid-header-left">
+          <span className="mermaid-diagram-badge">
+            <Activity size={12} />
+            <span>Interactive Diagram</span>
+          </span>
+          {renderError && (
+            <span className="mermaid-render-error-badge" title={renderError}>
+              ⚠ Render Error
+            </span>
+          )}
+        </div>
+        <div className="mermaid-header-right">
+          {isRendered && (
+            <button 
+              type="button"
+              className="mermaid-tool-btn"
+              onClick={() => setShowCode(!showCode)}
+              title={showCode ? "Show visual diagram" : "View diagram source code"}
+            >
+              <Code size={12} />
+              <span>{showCode ? "Visual" : "Source"}</span>
+            </button>
+          )}
+          <button 
+            type="button"
+            className="mermaid-tool-btn"
+            onClick={handleCopyCode}
+            title="Copy Mermaid code"
+          >
+            {copied ? <Check size={12} className="text-moss" /> : <Copy size={12} />}
+            <span>{copied ? "Copied" : "Copy"}</span>
+          </button>
+        </div>
+      </div>
+
+      {showCode || !isRendered ? (
+        <pre className="mermaid-code-preview">{(cleanChart || chart).trim()}</pre>
+      ) : (
+        <div 
+          className="mermaid-diagram-canvas"
+          dangerouslySetInnerHTML={{ __html: svg }}
+        />
+      )}
+    </div>
+  );
+};
+
 const cleanMarkdownContent = (content: string) => {
   if (!content) return '';
-  return content
+  // 0. Normalize exotic Unicode whitespace characters (e.g. \u202F, \u00A0, \u2000-\u200B) to standard ASCII space
+  let text = content.replace(/[\u202F\u00A0\u2000-\u200B\u2028\u2029\uFEFF]/g, ' ');
+
+  // 1. Convert standard LaTeX block \[ ... \] to $$ ... $$
+  text = text.replace(/\\\[([\s\S]*?)\\\]/g, '\n\n$$\n$1\n$$\n\n');
+
+  // 2. Convert standard LaTeX inline \( ... \) to $ ... $
+  text = text.replace(/\\\(([\s\S]*?)\\\)/g, '$$$1$$');
+
+  // 3. Convert bracketed math blocks containing LaTeX like [ p_c := \alpha ... ] to $$ ... $$
+  text = text.replace(/(?:^|\n)\s*\[\s*([^[\]\n]*\\[a-zA-Z]+[^[\]\n]*|[a-zA-Z0-9_^{}]+\s*(?:[:=+\-*/]=?)\s*[^[\]\n]*\\[a-zA-Z]+[^[\]\n]*)\s*\]\s*(?=\n|$)/g, '\n\n$$\n$1\n$$\n\n');
+
+  // 4. Convert inline parenthesized math with LaTeX backslashes like (\alpha) or (\alpha \le 1) or (p^{s}_{T,c}) to $ ... $
+  text = text.replace(/\(([^()\n]*\\[a-zA-Z]+[^()\n]*)\)/g, '$$$1$$');
+
+  // 5. Citations and cleanups
+  return text
     .replace(/【(\d+)†[^】]*】/g, ' [$1](#cit-$1)')
     .replace(/【(\d+)】/g, ' [$1](#cit-$1)')
-    .replace(/\[(\d+)\](?!\()/g, '[$1](#cit-$1)')
+    .replace(/(?<!\$|\$\$)\b\[(\d+)\](?!\()/g, '[$1](#cit-$1)')
     .replace(/【[^】]*】/g, '')
     .replace(/<br\s*\/?>\s*•/gi, '\n- ')
     .replace(/<br\s*\/?>\s*\*/gi, '\n* ')
@@ -194,10 +423,26 @@ type ConfidenceMetric = {
   };
 };
 
+type ConflictPassage = {
+  source: string;
+  name: string;
+  text: string;
+  rationale?: string;
+};
+
 type ConflictData = {
   detected: boolean;
   summary: string;
   sources: string[];
+  passages?: ConflictPassage[];
+};
+
+type UploadQueueItem = {
+  file: File;
+  id: string;
+  status: 'waiting' | 'uploading' | 'completed' | 'error';
+  error?: string;
+  chunksAdded?: number;
 };
 
 type TraceEvent = {
@@ -210,6 +455,8 @@ type TraceEvent = {
   confidence?: ConfidenceMetric;
   conflict_data?: ConflictData;
   latency_ms?: number;
+  sub_queries?: string[];
+  expanded_count?: number;
 };
 
 type Message = {
@@ -257,11 +504,798 @@ type AuthConfig = {
   };
 };
 
+export interface KBSource {
+  source: string;
+  name: string;
+  type: string;
+  h1: string;
+  chunk_count: number;
+  sample: string;
+  ids: string[];
+}
+
 const DEFAULT_SUGGESTIONS = [
   "Summarize the key findings and core concepts across the indexed documents.",
   "What are the main methodologies and step-by-step implementations described?",
   "Audit the knowledge base for contradictory claims or edge cases."
 ];
+
+const getNodeDetails = (nodeName: string): { title: string; desc: string; icon: React.ReactNode; color: string } => {
+  switch (nodeName) {
+    case 'cache_hit_node':
+      return {
+        title: 'Semantic Query Cache',
+        desc: 'Direct sub-millisecond retrieval from verified vector cache',
+        icon: <Zap size={13} />,
+        color: 'moss'
+      };
+    case 'decompose_node':
+      return {
+        title: 'Query Decomposition',
+        desc: 'Multi-hop compound question splitter with parallel retrieval',
+        icon: <Layers size={13} />,
+        color: 'indigo'
+      };
+    case 'retrieve_node':
+      return { 
+        title: 'Hybrid Retrieval', 
+        desc: 'Dense Chroma HNSW + Sparse BM25 with RRF & FlashRank', 
+        icon: <Search size={13} />, 
+        color: 'teal' 
+      };
+    case 'grade_node':
+      return { 
+        title: 'Relevance Grading', 
+        desc: 'Strict Groq LLM hallucination and veracity evaluation', 
+        icon: <ShieldCheck size={13} />, 
+        color: 'rust' 
+      };
+    case 'web_search_node':
+      return { 
+        title: 'Web Search Fallback', 
+        desc: 'DuckDuckGo knowledge search and retrieval', 
+        icon: <Globe size={13} />, 
+        color: 'amber' 
+      };
+    case 'rewrite_node':
+      return { 
+        title: 'Query Reformulation', 
+        desc: 'Adaptive query rewriting for high-precision recall', 
+        icon: <Edit3 size={13} />, 
+        color: 'moss' 
+      };
+    case 'generate_node':
+      return { 
+        title: 'Answer Synthesis', 
+        desc: 'Grounded generation from verified context', 
+        icon: <Sparkles size={13} />, 
+        color: 'summit' 
+      };
+    case 'check_hallucination_node':
+      return { 
+        title: 'Hallucination Auditor', 
+        desc: 'Post-generation grounding and veracity verification', 
+        icon: <ShieldCheck size={13} />, 
+        color: 'moss' 
+      };
+    default:
+      return { 
+        title: nodeName, 
+        desc: 'Pipeline state executed', 
+        icon: <Zap size={13} />, 
+        color: 'slate' 
+      };
+  }
+};
+
+interface ChatMessageItemProps {
+  msg: Message;
+  isExpanded: boolean;
+  activeCitationHighlight: string | null;
+  copiedId: string | null;
+  onToggleThinking: (id: string) => void;
+  onSelectConflict: (conflict: ConflictData) => void;
+  onSelectSource: (source: any) => void;
+  onCopy: (content: string, id: string) => void;
+  onReaction: (id: string, liked: boolean) => void;
+  onHoverCitation: (hover: { msgId: string; index: number; target?: any; rect: DOMRect } | null) => void;
+  onHighlightCitation: (highlight: string | null) => void;
+  onFileClick: (path: string) => void;
+}
+
+const ChatMessageItem = React.memo(({
+  msg,
+  isExpanded,
+  activeCitationHighlight,
+  copiedId,
+  onToggleThinking,
+  onSelectConflict,
+  onSelectSource,
+  onCopy,
+  onReaction,
+  onHoverCitation,
+  onHighlightCitation,
+  onFileClick,
+}: ChatMessageItemProps) => {
+  const isAssistant = msg.role === 'assistant';
+  const msgTraces = msg.traces || [];
+  const webSearchTrace = msgTraces.find(t => t.node === 'web_search_node' && t.doc_grades && t.doc_grades.length > 0);
+  const gradeTrace = [...msgTraces].reverse().find(t => t.node === 'grade_node' && t.doc_grades && t.doc_grades.length > 0);
+  const msgGrades: any[] = webSearchTrace?.doc_grades || gradeTrace?.doc_grades || [];
+  const totalPipelineLatency = msgTraces.reduce((sum, t) => sum + (t.latency_ms || 0), 0);
+
+  return (
+    <div className={`message-container ${msg.role}`}>
+      <div className="message-inner">
+        {/* Avatar */}
+        <div className="message-avatar-wrap">
+          {isAssistant ? (
+            <div className={`assistant-avatar ${msg.isStreaming ? 'streaming-spin' : ''}`}>
+              <RidgeLogo size={22} />
+            </div>
+          ) : (
+            <div className="user-avatar">
+              <User size={16} />
+            </div>
+          )}
+        </div>
+
+        {/* Content Body */}
+        <div className="message-content-box">
+          <div className="message-meta-row">
+            <span className="author-name">{isAssistant ? 'Ridge' : 'You'}</span>
+            {msg.timestamp && <span className="message-time">{msg.timestamp}</span>}
+          </div>
+
+          {/* State Machine Thinking Accordion */}
+          {isAssistant && msgTraces.length > 0 && (
+            <div className="recall-thinking-block">
+              <button 
+                className="thinking-toggle-bar"
+                onClick={() => onToggleThinking(msg.id)}
+                aria-expanded={isExpanded}
+              >
+                <div className="thinking-left">
+                  <RotateCw size={13} className={msg.isStreaming ? 'spin-slow text-teal' : 'text-muted'} />
+                  <span className="thinking-title">
+                    {msg.isStreaming ? 'Synthesizing with CRAG state machine...' : `Pipeline Ascent (${msgTraces.length} steps executed)`}
+                  </span>
+                </div>
+                <div className="thinking-right">
+                  {totalPipelineLatency > 0 && !msg.isStreaming && (
+                    <span className="latency-badge">{totalPipelineLatency}ms</span>
+                  )}
+                  {isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                </div>
+              </button>
+
+              {isExpanded && (
+                <div className="thinking-content-tree">
+                  {msgTraces.map((trace, idx) => {
+                    const nodeDetails = getNodeDetails(trace.node);
+                    return (
+                      <div key={idx} className="thinking-node-item">
+                        <div className="node-marker-col">
+                          <div className={`node-dot ${nodeDetails.color}`} />
+                          {idx < msgTraces.length - 1 && <div className="node-connector-line" />}
+                        </div>
+                        <div className="node-info-col">
+                          <div className="node-header-line">
+                            <span className="node-tag-name">
+                              <span className="node-icon-inline">{nodeDetails.icon}</span>
+                              {nodeDetails.title}
+                            </span>
+                            {trace.latency_ms != null && (
+                              <span className="node-lat">{trace.latency_ms}ms</span>
+                            )}
+                          </div>
+                          <p className="node-msg-text">{trace.message}</p>
+                          {trace.node === 'decompose_node' && trace.sub_queries && trace.sub_queries.length > 1 && (
+                            <div className="sub-query-pills">
+                              {trace.sub_queries.map((sq: string, qi: number) => (
+                                <span key={qi} className="sub-query-pill">
+                                  <span className="sub-query-pill-num">{qi + 1}</span>
+                                  {sq}
+                                </span>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Multi-Document Conflict Alert Banner */}
+          {isAssistant && msg.conflict_data?.detected && (
+            <div className="conflict-alert-banner">
+              <div className="conflict-banner-header">
+                <div className="conflict-banner-title-group">
+                  <AlertTriangle size={15} className="text-rust" />
+                  <span className="conflict-banner-title">Document Conflict Detected</span>
+                </div>
+                <button
+                  type="button"
+                  className="conflict-compare-btn"
+                  onClick={() => onSelectConflict(msg.conflict_data!)}
+                >
+                  <Layers size={13} />
+                  <span>Compare Sources</span>
+                </button>
+              </div>
+              <p className="conflict-banner-desc">
+                {msg.conflict_data.summary || 'Multiple indexed documents present conflicting statements or policies on this question.'}
+              </p>
+              {msg.conflict_data.sources && msg.conflict_data.sources.length > 0 && (
+                <div className="conflict-sources-row">
+                  <span className="conflict-sources-label">Conflicting Sources:</span>
+                  {msg.conflict_data.sources.map((src, i) => (
+                    <span key={i} className="conflict-source-tag">{src}</span>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Markdown Text */}
+          {msg.content ? (
+            <div className="recall-markdown-body">
+              <ReactMarkdown
+                remarkPlugins={[remarkGfm, remarkMath]}
+                rehypePlugins={[rehypeRaw, [rehypeKatex, { throwOnError: false, errorColor: '#f87171', strict: 'ignore' }]]}
+                components={{
+                  table: ({ children, ...props }) => (
+                    <div className="markdown-table-wrapper">
+                      <table {...props}>{children}</table>
+                    </div>
+                  ),
+                  a: ({ href, children, ...props }) => {
+                    if (href?.startsWith('#cit-')) {
+                      const citIdx = parseInt(href.replace('#cit-', ''), 10);
+                      const targetGrade = msgGrades[citIdx - 1];
+                      return (
+                        <span
+                          className="interactive-cit-wrapper"
+                          onMouseEnter={(e) => {
+                            const rect = e.currentTarget.getBoundingClientRect();
+                            onHoverCitation({
+                              msgId: msg.id,
+                              index: citIdx,
+                              target: targetGrade,
+                              rect,
+                            });
+                          }}
+                          onMouseLeave={() => onHoverCitation(null)}
+                        >
+                          <button
+                            type="button"
+                            className="inline-citation-badge"
+                            onClick={(e) => {
+                              e.preventDefault();
+                              const elem = document.getElementById(`doc-card-${msg.id}-${citIdx}`);
+                              if (elem) {
+                                elem.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                                onHighlightCitation(`${msg.id}-${citIdx}`);
+                                setTimeout(() => onHighlightCitation(null), 2500);
+                              } else if (targetGrade) {
+                                onSelectSource(targetGrade);
+                              }
+                            }}
+                            title={`Source [${citIdx}]: Click to jump to verified card`}
+                          >
+                            {citIdx}
+                          </button>
+                        </span>
+                      );
+                    }
+                    if (href?.startsWith('file://')) {
+                      const path = href.replace('file://', '');
+                      return (
+                        <span
+                          className="inline-file-link"
+                          title={`Local path: ${path} (Click to copy)`}
+                          onClick={(e) => {
+                            e.preventDefault();
+                            onFileClick(path);
+                          }}
+                          style={{
+                            cursor: 'pointer',
+                            textDecoration: 'underline',
+                            color: 'var(--color-5)',
+                            fontFamily: 'var(--font-mono)',
+                            fontSize: '0.9em'
+                          }}
+                        >
+                          {children}
+                        </span>
+                      );
+                    }
+                    return (
+                      <a href={href} target="_blank" rel="noopener noreferrer" {...props}>
+                        {children}
+                      </a>
+                    );
+                  },
+                  code: ({ inline, className, children, ...props }: any) => {
+                    const match = /language-(\w+)/.exec(className || '');
+                    const lang = match ? match[1] : '';
+                    const content = String(children).replace(/\n$/, '');
+                    const isMermaid = !inline && (
+                      lang === 'mermaid' || 
+                      content.startsWith('graph ') || 
+                      content.startsWith('graph TD') ||
+                      content.startsWith('graph LR') ||
+                      content.startsWith('flowchart ') || 
+                      content.startsWith('sequenceDiagram') || 
+                      content.startsWith('classDiagram') || 
+                      content.startsWith('stateDiagram') ||
+                      content.startsWith('erDiagram') ||
+                      content.startsWith('gantt') ||
+                      content.startsWith('pie')
+                    );
+                    if (isMermaid) {
+                      return <MermaidDiagram chart={content} />;
+                    }
+                    return (
+                      <code className={className} {...props}>
+                        {children}
+                      </code>
+                    );
+                  }
+                }}
+              >
+                {cleanMarkdownContent(msg.content)}
+              </ReactMarkdown>
+            </div>
+          ) : (
+            msg.isStreaming && (
+              <div className="recall-shimmer-loader">
+                <div className="shimmer-pulse-dot" />
+                <div className="shimmer-pulse-dot" />
+                <div className="shimmer-pulse-dot" />
+                <span>Evaluating context and generating verified answer...</span>
+              </div>
+            )
+          )}
+
+          {/* Embedded Citations & Veracity Cards */}
+          {isAssistant && msgGrades.length > 0 && (
+            <div className="recall-citations-section">
+              <div className="citations-header">
+                {msgGrades.some((g: any) => g.breadcrumb === 'Web Search Fallback' || g.source?.startsWith('http')) ? (
+                  <Globe size={13} className="text-amber" />
+                ) : (
+                  <BookOpen size={13} className="text-teal" />
+                )}
+                <span>
+                  {msgGrades.some((g: any) => g.breadcrumb === 'Web Search Fallback' || g.source?.startsWith('http'))
+                    ? `Live Web Sources (${msgGrades.length} retrieved)`
+                    : `Anchored Topo & Grader Verdicts (${msgGrades.length} chunks evaluated)`}
+                </span>
+              </div>
+              <div className="citations-flex">
+                {msgGrades.map((g: any, idx: number) => {
+                  const citNum = idx + 1;
+                  const cardId = `doc-card-${msg.id}-${citNum}`;
+                  const isHighlighted = activeCitationHighlight === `${msg.id}-${citNum}`;
+                  const isWeb = g.breadcrumb === 'Web Search Fallback' || g.source?.startsWith('http') || g.source?.includes('(');
+                  const fname = g.source ? (g.source.split('/').pop() || g.source) : `Chunk #${citNum}`;
+                  const isRelevant = g.score === 'yes';
+                  const displayTitle = isWeb 
+                    ? (g.source ? g.source.split('(')[0]?.trim() : `Web Source #${citNum}`)
+                    : (g.breadcrumb ? (g.breadcrumb.split('>').pop()?.trim() || fname) : fname);
+                  return (
+                    <button 
+                      id={cardId}
+                      key={idx} 
+                      className={`citation-pill ${isRelevant ? 'relevant' : 'filtered'} ${isHighlighted ? 'pulse-highlight' : ''}`}
+                      onClick={() => onSelectSource(g)}
+                      title={isWeb ? "Inspect live web source URL and snippet" : "Inspect grader rationale and chunk excerpt"}
+                    >
+                      <span className="cit-icon">
+                        {isRelevant ? <Check size={12} className="text-moss" /> : <X size={12} className="text-rust" />}
+                      </span>
+                      <span className="cit-name">[{citNum}] {displayTitle}</span>
+                      <span className={`cit-verdict ${isRelevant ? 'pass' : 'fail'}`}>
+                        {isRelevant ? (isWeb ? 'Web Verified' : 'Verified') : 'Filtered Crux'}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* Grounded Confidence Scorecard & Badge */}
+          {isAssistant && msg.confidence && (
+            <div className="confidence-metric-container">
+              <div className={`confidence-badge-pill ${msg.confidence.level.toLowerCase()}`}>
+                <span className="confidence-dot" />
+                <span className="confidence-percent">{msg.confidence.score}%</span>
+                <span className="confidence-text">
+                  {msg.confidence.level === 'HIGH' ? 'High Grounded Confidence' : (msg.confidence.level === 'MEDIUM' ? 'Moderate Confidence' : 'Low Context Confidence')}
+                </span>
+              </div>
+              <div className="confidence-meta-chips">
+                <span className="meta-chip">
+                  <span className="chip-label">Source:</span> {msg.confidence.breakdown.source_trust}
+                </span>
+                <span className="meta-chip">
+                  <span className="chip-label">Grader Pass:</span> {msg.confidence.breakdown.grader_consensus}%
+                </span>
+                {msg.confidence.breakdown.faithfulness && (
+                  <span className="meta-chip">
+                    <span className="chip-label">Faithfulness:</span> {msg.confidence.breakdown.faithfulness}
+                  </span>
+                )}
+                {msg.confidence.breakdown.reformulation_loops > 0 && (
+                  <span className="meta-chip">
+                    <span className="chip-label">Query Rewrites:</span> {msg.confidence.breakdown.reformulation_loops}
+                  </span>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* Assistant Message Action Bar in Grouped Pill Container */}
+          {isAssistant && msg.content && (
+            <div className="message-action-footer">
+              <div className="action-pill-container">
+                <button 
+                  className="msg-action-btn"
+                  onClick={() => onCopy(msg.content, msg.id)}
+                  title="Copy response"
+                  aria-label="Copy response"
+                >
+                  {copiedId === msg.id ? <Check size={14} className="text-moss" /> : <Copy size={14} />}
+                  <span>{copiedId === msg.id ? 'Copied' : 'Copy'}</span>
+                </button>
+
+                <button 
+                  className={`msg-action-btn ${msg.liked === true ? 'active-like' : ''}`}
+                  onClick={() => onReaction(msg.id, true)}
+                  title="Helpful ascent"
+                  aria-label="Helpful response"
+                >
+                  <ThumbsUp size={14} />
+                </button>
+
+                <button 
+                  className={`msg-action-btn ${msg.liked === false ? 'active-dislike' : ''}`}
+                  onClick={() => onReaction(msg.id, false)}
+                  title="Crux encountered"
+                  aria-label="Crux encountered"
+                >
+                  <ThumbsDown size={14} />
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+});
+
+export interface ChatInputDeckRef {
+  setValue: (val: string) => void;
+  focus: () => void;
+}
+
+interface ChatInputDeckProps {
+  isLoading: boolean;
+  onSend: (query: string) => void;
+  onStop: () => void;
+  onAttachFile: (e: React.ChangeEvent<HTMLInputElement>) => void;
+  selectedSourceFilter: string;
+  onSelectSourceFilter: (source: string) => void;
+  kbSources: KBSource[];
+  onFetchKBSources: () => void;
+  webSearchEnabled: boolean;
+  onToggleWebSearch: () => void;
+}
+
+const ChatInputDeck = React.forwardRef<ChatInputDeckRef, ChatInputDeckProps>(({
+  isLoading,
+  onSend,
+  onStop,
+  onAttachFile,
+  selectedSourceFilter,
+  onSelectSourceFilter,
+  kbSources,
+  onFetchKBSources,
+  webSearchEnabled,
+  onToggleWebSearch,
+}, ref) => {
+  const [localInput, setLocalInput] = useState('');
+  const [showSlashMenu, setShowSlashMenu] = useState(false);
+  const [showSourceFilterMenu, setShowSourceFilterMenu] = useState(false);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const chatAttachRef = useRef<HTMLInputElement>(null);
+
+  useImperativeHandle(ref, () => ({
+    setValue: (val: string) => {
+      setLocalInput(val);
+      if (textareaRef.current) {
+        textareaRef.current.style.height = 'auto';
+        if (val) {
+          textareaRef.current.style.height = `${Math.min(textareaRef.current.scrollHeight, 180)}px`;
+        }
+      }
+    },
+    focus: () => {
+      textareaRef.current?.focus();
+    }
+  }), []);
+
+  // Click-outside listener for menus inside deck
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      const target = e.target as HTMLElement;
+      if (!target.closest('.source-scope-filter-container')) {
+        setShowSourceFilterMenu(false);
+      }
+      if (!target.closest('.prompts-trigger-btn') && !target.closest('.slash-menu-popover')) {
+        setShowSlashMenu(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    const val = e.target.value;
+    setLocalInput(val);
+    const target = e.target;
+    target.style.height = 'auto';
+    target.style.height = `${Math.min(target.scrollHeight, 180)}px`;
+    if (val.startsWith('/')) {
+      setShowSlashMenu(true);
+    } else if (showSlashMenu) {
+      setShowSlashMenu(false);
+    }
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      if (localInput.trim() && !isLoading) {
+        const query = localInput.trim();
+        setLocalInput('');
+        if (textareaRef.current) {
+          textareaRef.current.style.height = 'auto';
+        }
+        setShowSlashMenu(false);
+        onSend(query);
+      }
+    }
+  };
+
+  const handleSendClick = () => {
+    if (localInput.trim() && !isLoading) {
+      const query = localInput.trim();
+      setLocalInput('');
+      if (textareaRef.current) {
+        textareaRef.current.style.height = 'auto';
+      }
+      setShowSlashMenu(false);
+      onSend(query);
+    }
+  };
+
+  return (
+    <div className="recall-input-deck">
+      {/* Slash Commands Dropup */}
+      {showSlashMenu && (
+        <div className="slash-menu-popover">
+          <div className="slash-menu-header">
+            <Command size={13} />
+            <span>Quick Inquiries and Actions</span>
+          </div>
+          <button 
+            type="button"
+            className="slash-menu-item"
+            onClick={() => {
+              setLocalInput("Summarize the key findings across all indexed documents.");
+              setShowSlashMenu(false);
+              textareaRef.current?.focus();
+            }}
+          >
+            <Sparkles size={14} className="text-teal" />
+            <div className="slash-item-meta">
+              <span className="slash-label">/summarize</span>
+              <span className="slash-desc">Generate comprehensive summary across indexed chunks</span>
+            </div>
+          </button>
+
+          <button 
+            type="button"
+            className="slash-menu-item"
+            onClick={() => {
+              setLocalInput("Audit all sources for contradictory claims or hallucinations.");
+              setShowSlashMenu(false);
+              textareaRef.current?.focus();
+            }}
+          >
+            <ShieldCheck size={14} className="text-moss" />
+            <div className="slash-item-meta">
+              <span className="slash-label">/verify</span>
+              <span className="slash-desc">Check veracity and contrast retrieved documents</span>
+            </div>
+          </button>
+
+          <button 
+            type="button"
+            className="slash-menu-item"
+            onClick={() => {
+              setLocalInput("Extract all step-by-step methodologies mentioned in the knowledge base.");
+              setShowSlashMenu(false);
+              textareaRef.current?.focus();
+            }}
+          >
+            <BookOpen size={14} className="text-rust" />
+            <div className="slash-item-meta">
+              <span className="slash-label">/methodology</span>
+              <span className="slash-desc">Synthesize actionable implementation steps</span>
+            </div>
+          </button>
+        </div>
+      )}
+
+      <div className={`recall-input-card ${isLoading ? 'is-loading' : ''}`}>
+        <textarea
+          ref={textareaRef}
+          className="recall-textarea"
+          placeholder="Ask anything about your documents, or type / for prompts..."
+          value={localInput}
+          onChange={handleInputChange}
+          onKeyDown={handleKeyDown}
+          rows={1}
+          disabled={isLoading}
+        />
+
+        <div className="input-toolbar-row">
+          <div className="toolbar-left">
+            {/* File Attachment Button */}
+            <input 
+              type="file" 
+              ref={chatAttachRef} 
+              onChange={onAttachFile}
+              accept=".pdf,.png,.jpg,.jpeg,.webp,.docx,.pptx,.xlsx,.csv,.md,.txt,.py,.js,.ts,.json"
+              style={{ display: 'none' }}
+            />
+            <button 
+              type="button"
+              className="toolbar-btn attach-btn"
+              onClick={() => chatAttachRef.current?.click()}
+              title="Attach document or media to index into Crag"
+              aria-label="Attach file"
+            >
+              <Paperclip size={14} />
+              <span>Attach</span>
+            </button>
+
+            {/* Source Scoped Metadata Filter Dropdown */}
+            <div className="source-scope-filter-container">
+              <button
+                type="button"
+                className={`toolbar-btn source-scope-btn ${selectedSourceFilter !== 'all' ? 'active' : ''}`}
+                onClick={() => {
+                  setShowSourceFilterMenu(!showSourceFilterMenu);
+                  if (kbSources.length === 0) onFetchKBSources();
+                }}
+                title={selectedSourceFilter === 'all' ? "Filtering across all indexed documents (click to scope to a specific document)" : `Scoped strictly to: ${selectedSourceFilter}`}
+                aria-label="Scope retrieval to specific document"
+              >
+                <Database size={13} className="source-scope-icon" />
+                <span className="source-scope-label">
+                  {selectedSourceFilter === 'all'
+                    ? 'All Sources'
+                    : (kbSources.find(s => s.source === selectedSourceFilter)?.name || selectedSourceFilter.split('/').pop())}
+                </span>
+                <ChevronDown size={11} className="source-scope-chevron" />
+              </button>
+
+              {showSourceFilterMenu && (
+                <div className="source-scope-menu-dropdown">
+                  <div className="source-scope-menu-header">Scope Retrieval</div>
+                  <button
+                    type="button"
+                    className={`source-scope-menu-item ${selectedSourceFilter === 'all' ? 'selected' : ''}`}
+                    onClick={() => {
+                      onSelectSourceFilter('all');
+                      setShowSourceFilterMenu(false);
+                    }}
+                  >
+                    <span className="source-scope-radio-check">{selectedSourceFilter === 'all' ? '✓' : ''}</span>
+                    <span className="source-scope-item-title">All Sources (Global Corpus)</span>
+                    <span className="source-scope-item-meta">{kbSources.reduce((sum, s) => sum + s.chunk_count, 0)} chunks</span>
+                  </button>
+
+                  <div className="source-scope-menu-divider" />
+
+                  {kbSources.length === 0 ? (
+                    <div className="source-scope-menu-empty">No indexed documents found</div>
+                  ) : (
+                    kbSources.map((s, idx) => (
+                      <button
+                        key={idx}
+                        type="button"
+                        className={`source-scope-menu-item ${selectedSourceFilter === s.source ? 'selected' : ''}`}
+                        onClick={() => {
+                          onSelectSourceFilter(s.source);
+                          setShowSourceFilterMenu(false);
+                        }}
+                      >
+                        <span className="source-scope-radio-check">{selectedSourceFilter === s.source ? '✓' : ''}</span>
+                        <span className="source-scope-item-title" title={s.source}>{s.name}</span>
+                        <span className="source-scope-item-meta">{s.chunk_count} chunks</span>
+                      </button>
+                    ))
+                  )}
+                </div>
+              )}
+            </div>
+
+            {/* Web Search Fallback Mode Toggle */}
+            <button 
+              type="button"
+              className={`toolbar-btn fallback-toggle-chip ${webSearchEnabled ? 'active' : ''}`}
+              onClick={onToggleWebSearch}
+              title={webSearchEnabled ? "Web fallback enabled when knowledge base recall is low (click to disable)" : "Web fallback disabled — queries will strictly stay within local documents (click to enable)"}
+              aria-label="Toggle web search fallback"
+            >
+              <Globe size={13} className="fallback-chip-icon" />
+              <span>Web Search</span>
+              <span className={`fallback-status-dot ${webSearchEnabled ? 'on' : 'off'}`} />
+            </button>
+
+            {/* Quick Inquiries Popover Trigger */}
+            <button 
+              type="button"
+              className="toolbar-btn prompts-trigger-btn"
+              onClick={() => setShowSlashMenu(!showSlashMenu)}
+              title="Quick Prompts and Inquiries (Type / to open)"
+              aria-label="Quick prompts menu"
+            >
+              <Sparkles size={13} />
+              <span>Prompts</span>
+            </button>
+          </div>
+
+          {/* Right Action: Send Button or Stop Button */}
+          <div className="toolbar-right">
+            {isLoading ? (
+              <button 
+                type="button"
+                className="recall-send-btn stop-active"
+                onClick={onStop}
+                title="Stop Ascent Generation (Esc)"
+                aria-label="Stop generation"
+              >
+                <Square size={13} className="stop-square-icon" />
+              </button>
+            ) : (
+              <button 
+                type="button"
+                className={`recall-send-btn ${localInput.trim() ? 'can-send' : ''}`}
+                onClick={handleSendClick}
+                disabled={!localInput.trim()}
+                title="Send query (Enter)"
+                aria-label="Send query"
+              >
+                <ArrowUp size={16} />
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+});
 
 export default function App() {
   // Authentication & User State
@@ -309,11 +1343,10 @@ export default function App() {
   const messages = activeSession?.messages || [];
 
   // Input & Streaming States
-  const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [expandedThinking, setExpandedThinking] = useState<{ [msgId: string]: boolean }>({});
-  const [showSlashMenu, setShowSlashMenu] = useState(false);
   const [webSearchEnabled, setWebSearchEnabled] = useState(true);
+  const [selectedSourceFilter, setSelectedSourceFilter] = useState<string>('all');
 
   // Modals & Tools
   const [isIngestOpen, setIsIngestOpen] = useState(false);
@@ -321,6 +1354,7 @@ export default function App() {
   const [isGlossaryOpen, setIsGlossaryOpen] = useState(false);
   const [isGlossaryLoading, setIsGlossaryLoading] = useState(false);
   const [glossary, setGlossary] = useState<GlossaryItem[]>([]);
+  const [selectedConflictDiff, setSelectedConflictDiff] = useState<ConflictData | null>(null);
   const [selectedSourceModal, setSelectedSourceModal] = useState<any | null>(null);
   const [activeCitationHighlight, setActiveCitationHighlight] = useState<string | null>(null);
   const [hoveredCitation, setHoveredCitation] = useState<{
@@ -352,7 +1386,8 @@ export default function App() {
   const [ingestInput, setIngestInput] = useState('');
   const [isIngesting, setIsIngesting] = useState(false);
   const [isIngestSuccess, setIsIngestSuccess] = useState(false);
-  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [uploadQueue, setUploadQueue] = useState<UploadQueueItem[]>([]);
+  const [uploadProgress, setUploadProgress] = useState<{ current: number; total: number } | null>(null);
   const [isDragging, setIsDragging] = useState(false);
 
   // Knowledge Stats & Grounded Suggestions (Instant 0ms hydration)
@@ -376,15 +1411,6 @@ export default function App() {
   });
 
   // Knowledge Base State
-  interface KBSource {
-    source: string;
-    name: string;
-    type: string;
-    h1: string;
-    chunk_count: number;
-    sample: string;
-    ids: string[];
-  }
   const [kbSources, setKbSources] = useState<KBSource[]>([]);
   const [isLoadingKBSources, setIsLoadingKBSources] = useState(false);
   const [deletingSource, setDeletingSource] = useState<string | null>(null);
@@ -392,9 +1418,8 @@ export default function App() {
   const [searchDocFilter, setSearchDocFilter] = useState('');
 
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const chatAttachRef = useRef<HTMLInputElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const chatInputRef = useRef<ChatInputDeckRef>(null);
   const userDropdownRef = useRef<HTMLDivElement>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
 
@@ -482,7 +1507,6 @@ export default function App() {
         setIsIngestOpen(false);
         setIsExportOpen(false);
         setSelectedSourceModal(null);
-        setShowSlashMenu(false);
         if (window.innerWidth < 768) {
           setIsSidebarOpen(false);
           setIsArtifactsOpen(false);
@@ -493,13 +1517,6 @@ export default function App() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [sessions, isLoading]);
 
-  // Auto-resize textarea
-  useEffect(() => {
-    if (textareaRef.current) {
-      textareaRef.current.style.height = 'auto';
-      textareaRef.current.style.height = `${Math.min(textareaRef.current.scrollHeight, 180)}px`;
-    }
-  }, [input]);
 
   // Authenticated API request wrapper
   const fetchWithAuth = async (url: string, options: RequestInit = {}) => {
@@ -685,8 +1702,13 @@ export default function App() {
     }
   }, [isArtifactsOpen, activeArtifactTab]);
 
+  // Auto-scroll handler: instant auto during live streaming, smooth when completed
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    if (isLoading) {
+      messagesEndRef.current?.scrollIntoView({ behavior: 'auto' });
+    } else {
+      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }
   }, [messages, isLoading]);
 
   // Session Management Helpers
@@ -699,7 +1721,7 @@ export default function App() {
     };
     setSessions(prev => [newSession, ...prev]);
     setActiveSessionId(newSession.id);
-    setInput('');
+    chatInputRef.current?.setValue('');
     if (window.innerWidth < 768) setIsSidebarOpen(false);
     showToast('Started new research ascent', 'info');
   };
@@ -741,13 +1763,12 @@ export default function App() {
 
   // Chat Execution Stream
   const handleSend = async (customQuery?: string) => {
-    const queryToSend = customQuery || input;
-    if (!queryToSend.trim() || isLoading) return;
+    if (!customQuery || !customQuery.trim() || isLoading) return;
 
     const userMessage: Message = {
       id: Date.now().toString(),
       role: 'user',
-      content: queryToSend.trim(),
+      content: customQuery.trim(),
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
     };
 
@@ -762,8 +1783,6 @@ export default function App() {
     };
 
     updateCurrentMessages(prev => [...prev, userMessage, assistantMessage]);
-    setInput('');
-    setShowSlashMenu(false);
     setIsLoading(true);
     setExpandedThinking(prev => ({ ...prev, [assistantId]: true }));
 
@@ -776,7 +1795,8 @@ export default function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ 
           question: userMessage.content,
-          web_search_enabled: webSearchEnabled 
+          web_search_enabled: webSearchEnabled,
+          source_filter: selectedSourceFilter !== 'all' ? selectedSourceFilter : undefined
         }),
         signal: abortController.signal,
       });
@@ -861,60 +1881,109 @@ export default function App() {
     }
   };
 
-  // Ingestion Handler
+  // Multi-File Ingestion Queue Handlers
+  const handleAddFilesToQueue = (files: FileList | File[]) => {
+    const newItems: UploadQueueItem[] = Array.from(files).map(f => ({
+      file: f,
+      id: `${f.name}-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+      status: 'waiting'
+    }));
+    setUploadQueue(prev => [...prev, ...newItems]);
+    setIngestInput('');
+  };
+
+  const handleRemoveQueueItem = (id: string) => {
+    setUploadQueue(prev => prev.filter(item => item.id !== id));
+  };
+
+  const handleClearQueue = () => {
+    setUploadQueue([]);
+  };
+
   const handleIngest = async () => {
-    if (!ingestInput.trim() && !selectedFile) return;
-    setIsIngesting(true);
-    try {
-      let response;
-
-      if (selectedFile) {
-        const formData = new FormData();
-        formData.append('file', selectedFile);
-
-        response = await fetchWithAuth('/upload', {
-          method: 'POST',
-          body: formData
-        });
-      } else {
-        response = await fetchWithAuth('/ingest', {
+    if (ingestMode === 'url') {
+      if (!ingestInput.trim()) return;
+      setIsIngesting(true);
+      try {
+        const response = await fetchWithAuth('/ingest', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ text_or_url: ingestInput.trim() })
         });
+        if (!response.ok) throw new Error('Server returned an error');
+        const data = await response.json();
+        showToast(`Anchored ${data.chunks_added} chunks into knowledge crag`);
+        setIsIngestSuccess(true);
+        setTimeout(() => {
+          setIsIngestSuccess(false);
+          setIsIngestOpen(false);
+          setIngestInput('');
+        }, 1200);
+      } catch (e: any) {
+        showToast('Ingestion failed: ' + (e.message || 'Unknown error'), 'error');
+      } finally {
+        setIsIngesting(false);
+        fetchSuggestionsAndStats(true);
+        fetchKBSources();
       }
-
-      if (!response.ok) throw new Error('Server returned an error');
-      const data = await response.json();
-      showToast(`Anchored ${data.chunks_added} chunks into knowledge crag`);
-      setIsIngestSuccess(true);
-      setTimeout(() => {
-        setIsIngestSuccess(false);
-        setIsIngestOpen(false);
-        setIngestInput('');
-        setSelectedFile(null);
-      }, 1200);
-    } catch (e: any) {
-      console.error(e);
-      showToast('Ingestion failed: ' + (e.message || 'Unknown error'), 'error');
-    } finally {
-      setIsIngesting(false);
-      fetchSuggestionsAndStats(true);
+      return;
     }
+
+    // Batch File Ingestion Queue
+    if (uploadQueue.length === 0) return;
+    setIsIngesting(true);
+    let totalAdded = 0;
+    setUploadProgress({ current: 0, total: uploadQueue.length });
+
+    for (let i = 0; i < uploadQueue.length; i++) {
+      const item = uploadQueue[i];
+      if (item.status === 'completed') continue;
+
+      setUploadQueue(prev => prev.map((q, idx) => idx === i ? { ...q, status: 'uploading' } : q));
+      setUploadProgress({ current: i + 1, total: uploadQueue.length });
+
+      try {
+        const formData = new FormData();
+        formData.append('file', item.file);
+        const res = await fetchWithAuth('/upload', {
+          method: 'POST',
+          body: formData
+        });
+        if (!res.ok) throw new Error('Server returned an error');
+        const data = await res.json();
+        const added = data.chunks_added || 0;
+        totalAdded += added;
+        setUploadQueue(prev => prev.map((q, idx) => idx === i ? { ...q, status: 'completed', chunksAdded: added } : q));
+      } catch (err: any) {
+        setUploadQueue(prev => prev.map((q, idx) => idx === i ? { ...q, status: 'error', error: err.message || 'Upload failed' } : q));
+      }
+    }
+
+    setIsIngesting(false);
+    setUploadProgress(null);
+    showToast(`Batch complete: indexed ${totalAdded} chunks across ${uploadQueue.length} files`, 'success');
+    setIsIngestSuccess(true);
+    fetchSuggestionsAndStats(true);
+    fetchKBSources();
+
+    setTimeout(() => {
+      setIsIngestSuccess(false);
+      setIsIngestOpen(false);
+      setUploadQueue([]);
+    }, 1400);
   };
 
   const handleFileDrop = (e: React.DragEvent) => {
     e.preventDefault();
     setIsDragging(false);
     if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-      setSelectedFile(e.dataTransfer.files[0]);
-      setIngestInput('');
+      handleAddFilesToQueue(e.dataTransfer.files);
     }
   };
 
   const handleChatFileAttach = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files.length > 0) {
-      setSelectedFile(e.target.files[0]);
+      handleAddFilesToQueue(e.target.files);
       setIsIngestOpen(true);
     }
   };
@@ -1298,61 +2367,6 @@ export default function App() {
     showToast(`Exported as .${ext}`);
   };
 
-  // Node details mapped with rock climbing difficulty color hierarchy
-  const getNodeDetails = (nodeName: string): { title: string; desc: string; icon: React.ReactNode; color: string } => {
-    switch (nodeName) {
-      case 'retrieve_node':
-        return { 
-          title: 'Hybrid Retrieval', 
-          desc: 'Dense Chroma HNSW + Sparse BM25 with RRF & FlashRank', 
-          icon: <Search size={13} />, 
-          color: 'teal' 
-        };
-      case 'grade_node':
-        return { 
-          title: 'Relevance Grading', 
-          desc: 'Strict Groq LLM hallucination and veracity evaluation', 
-          icon: <ShieldCheck size={13} />, 
-          color: 'rust' 
-        };
-      case 'web_search_node':
-        return { 
-          title: 'Web Search Fallback', 
-          desc: 'DuckDuckGo knowledge search and retrieval', 
-          icon: <Globe size={13} />, 
-          color: 'amber' 
-        };
-      case 'rewrite_node':
-        return { 
-          title: 'Query Reformulation', 
-          desc: 'Adaptive query rewriting for high-precision recall', 
-          icon: <Edit3 size={13} />, 
-          color: 'moss' 
-        };
-      case 'generate_node':
-        return { 
-          title: 'Answer Synthesis', 
-          desc: 'Grounded generation from verified context', 
-          icon: <Sparkles size={13} />, 
-          color: 'summit' 
-        };
-      case 'check_hallucination_node':
-        return { 
-          title: 'Hallucination Auditor', 
-          desc: 'Post-generation grounding and veracity verification', 
-          icon: <ShieldCheck size={13} />, 
-          color: 'moss' 
-        };
-      default:
-        return { 
-          title: nodeName, 
-          desc: 'Pipeline state executed', 
-          icon: <Zap size={13} />, 
-          color: 'muted' 
-        };
-    }
-  };
-
   // Last assistant traces for Stepper & Artifacts
   const lastAssistantMessage = messages.filter(m => m.role === 'assistant').pop();
   const activeTraces = lastAssistantMessage?.traces || [];
@@ -1690,10 +2704,7 @@ export default function App() {
                       <button 
                         key={i} 
                         className={`recall-prompt-card ${i === 0 ? 'featured' : ''}`}
-                        onClick={() => {
-                          setInput(sug);
-                          handleSend(sug);
-                        }}
+                        onClick={() => handleSend(sug)}
                       >
                         <div className="prompt-content-wrap">
                           <span className="prompt-text">{sug}</span>
@@ -1705,11 +2716,7 @@ export default function App() {
                     <>
                       <button 
                         className="recall-prompt-card featured"
-                        onClick={() => {
-                          const q = "Summarize the primary topo knowledge anchored in the crag.";
-                          setInput(q);
-                          handleSend(q);
-                        }}
+                        onClick={() => handleSend("Summarize the primary topo knowledge anchored in the crag.")}
                       >
                         <div className="prompt-content-wrap">
                           <span className="prompt-title">Summarize Topo Sources</span>
@@ -1720,11 +2727,7 @@ export default function App() {
 
                       <button 
                         className="recall-prompt-card"
-                        onClick={() => {
-                          const q = "Explain the architectural components and state machine graph.";
-                          setInput(q);
-                          handleSend(q);
-                        }}
+                        onClick={() => handleSend("Explain the architectural components and state machine graph.")}
                       >
                         <div className="prompt-content-wrap">
                           <span className="prompt-title">Architectural Route Synthesis</span>
@@ -1755,495 +2758,55 @@ export default function App() {
             </div>
           ) : (
             <div className="messages-thread">
-              {messages.map((msg) => {
-                const isAssistant = msg.role === 'assistant';
-                const msgTraces = msg.traces || [];
-                const webSearchTrace = msgTraces.find(t => t.node === 'web_search_node' && t.doc_grades && t.doc_grades.length > 0);
-                const gradeTrace = [...msgTraces].reverse().find(t => t.node === 'grade_node' && t.doc_grades && t.doc_grades.length > 0);
-                const msgGrades: any[] = webSearchTrace?.doc_grades || gradeTrace?.doc_grades || [];
-                const isExpanded = expandedThinking[msg.id] ?? false;
-
-                return (
-                  <div key={msg.id} className={`message-container ${msg.role}`}>
-                    <div className="message-inner">
-                      {/* Avatar */}
-                      <div className="message-avatar-wrap">
-                        {isAssistant ? (
-                          <div className={`assistant-avatar ${msg.isStreaming ? 'streaming-spin' : ''}`}>
-                            <RidgeLogo size={22} />
-                          </div>
-                        ) : (
-                          <div className="user-avatar">
-                            <User size={16} />
-                          </div>
-                        )}
-                      </div>
-
-                      {/* Content Body */}
-                      <div className="message-content-box">
-                        <div className="message-meta-row">
-                          <span className="author-name">
-                            {isAssistant ? 'Ridge' : 'You'}
-                          </span>
-                          {msg.timestamp && (
-                            <span className="message-time">{msg.timestamp}</span>
-                          )}
-                        </div>
-
-                        {/* State Machine Thinking Accordion */}
-                        {isAssistant && msgTraces.length > 0 && (
-                          <div className="recall-thinking-block">
-                            <button 
-                              className="thinking-toggle-bar"
-                              onClick={() => setExpandedThinking(prev => ({ ...prev, [msg.id]: !isExpanded }))}
-                              aria-expanded={isExpanded}
-                            >
-                              <div className="thinking-left">
-                                <RotateCw size={13} className={msg.isStreaming ? 'spin-slow text-teal' : 'text-muted'} />
-                                <span className="thinking-title">
-                                  {msg.isStreaming ? 'Synthesizing with CRAG state machine...' : `Pipeline Ascent (${msgTraces.length} steps executed)`}
-                                </span>
-                              </div>
-                              <div className="thinking-right">
-                                {totalPipelineLatency > 0 && !msg.isStreaming && (
-                                  <span className="latency-badge">{totalPipelineLatency}ms</span>
-                                )}
-                                {isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-                              </div>
-                            </button>
-
-                            {isExpanded && (
-                              <div className="thinking-content-tree">
-                                {msgTraces.map((trace, idx) => {
-                                  const nodeDetails = getNodeDetails(trace.node);
-                                  return (
-                                    <div key={idx} className="thinking-node-item">
-                                      <div className="node-marker-col">
-                                        <div className={`node-dot ${nodeDetails.color}`} />
-                                        {idx < msgTraces.length - 1 && <div className="node-connector-line" />}
-                                      </div>
-                                      <div className="node-info-col">
-                                        <div className="node-header-line">
-                                          <span className="node-tag-name">
-                                            <span className="node-icon-inline">{nodeDetails.icon}</span>
-                                            {nodeDetails.title}
-                                          </span>
-                                          {trace.latency_ms != null && (
-                                            <span className="node-lat">{trace.latency_ms}ms</span>
-                                          )}
-                                        </div>
-                                        <p className="node-msg-text">{trace.message}</p>
-                                      </div>
-                                    </div>
-                                  );
-                                })}
-                              </div>
-                            )}
-                          </div>
-                        )}
-
-                        {/* Multi-Document Conflict Alert Banner */}
-                        {isAssistant && msg.conflict_data?.detected && (
-                          <div className="conflict-alert-banner">
-                            <div className="conflict-banner-header">
-                              <AlertTriangle size={15} className="text-rust" />
-                              <span className="conflict-banner-title">Document Conflict Detected</span>
-                            </div>
-                            <p className="conflict-banner-desc">
-                              {msg.conflict_data.summary || 'Multiple indexed documents present conflicting statements or policies on this question.'}
-                            </p>
-                            {msg.conflict_data.sources && msg.conflict_data.sources.length > 0 && (
-                              <div className="conflict-sources-row">
-                                <span className="conflict-sources-label">Conflicting Sources:</span>
-                                {msg.conflict_data.sources.map((src, i) => (
-                                  <span key={i} className="conflict-source-tag">{src}</span>
-                                ))}
-                              </div>
-                            )}
-                          </div>
-                        )}
-
-                        {/* Markdown Text */}
-                        {msg.content ? (
-                          <div className="recall-markdown-body">
-                            <ReactMarkdown
-                              remarkPlugins={[remarkGfm]}
-                              rehypePlugins={[rehypeRaw]}
-                              components={{
-                                table: ({ children, ...props }) => (
-                                  <div className="markdown-table-wrapper">
-                                    <table {...props}>{children}</table>
-                                  </div>
-                                ),
-                                a: ({ href, children, ...props }) => {
-                                  if (href?.startsWith('#cit-')) {
-                                    const citIdx = parseInt(href.replace('#cit-', ''), 10);
-                                    const targetGrade = msgGrades[citIdx - 1];
-                                    return (
-                                      <span
-                                        className="interactive-cit-wrapper"
-                                        onMouseEnter={(e) => {
-                                          const rect = e.currentTarget.getBoundingClientRect();
-                                          setHoveredCitation({
-                                            msgId: msg.id,
-                                            index: citIdx,
-                                            target: targetGrade,
-                                            rect,
-                                          });
-                                        }}
-                                        onMouseLeave={() => setHoveredCitation(null)}
-                                      >
-                                        <button
-                                          type="button"
-                                          className="inline-citation-badge"
-                                          onClick={(e) => {
-                                            e.preventDefault();
-                                            const elem = document.getElementById(`doc-card-${msg.id}-${citIdx}`);
-                                            if (elem) {
-                                              elem.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                                              setActiveCitationHighlight(`${msg.id}-${citIdx}`);
-                                              setTimeout(() => setActiveCitationHighlight(null), 2500);
-                                            } else if (targetGrade) {
-                                              setSelectedSourceModal(targetGrade);
-                                            }
-                                          }}
-                                          title={`Source [${citIdx}]: Click to jump to verified card`}
-                                        >
-                                          {citIdx}
-                                        </button>
-                                      </span>
-                                    );
-                                  }
-                                  if (href?.startsWith('file://')) {
-                                    const path = href.replace('file://', '');
-                                    const fname = path.split('/').pop() || path;
-                                    return (
-                                      <span
-                                        className="inline-file-link"
-                                        title={`Local path: ${path} (Click to copy)`}
-                                        onClick={(e) => {
-                                          e.preventDefault();
-                                          navigator.clipboard.writeText(path);
-                                          showToast(`Copied path: ${fname}`, 'info');
-                                        }}
-                                        style={{
-                                          cursor: 'pointer',
-                                          textDecoration: 'underline',
-                                          color: 'var(--color-5)',
-                                          fontFamily: 'var(--font-mono)',
-                                          fontSize: '0.9em'
-                                        }}
-                                      >
-                                        {children}
-                                      </span>
-                                    );
-                                  }
-                                  return (
-                                    <a href={href} target="_blank" rel="noopener noreferrer" {...props}>
-                                      {children}
-                                    </a>
-                                  );
-                                }
-                              }}
-                            >
-                              {cleanMarkdownContent(msg.content)}
-                            </ReactMarkdown>
-                          </div>
-                        ) : (
-                          msg.isStreaming && (
-                            <div className="recall-shimmer-loader">
-                              <div className="shimmer-pulse-dot" />
-                              <div className="shimmer-pulse-dot" />
-                              <div className="shimmer-pulse-dot" />
-                              <span>Evaluating context and generating verified answer...</span>
-                            </div>
-                          )
-                        )}
-
-                        {/* Embedded Citations & Veracity Cards */}
-                        {isAssistant && msgGrades.length > 0 && (
-                          <div className="recall-citations-section">
-                            <div className="citations-header">
-                              {msgGrades.some((g: any) => g.breadcrumb === 'Web Search Fallback' || g.source?.startsWith('http')) ? (
-                                <Globe size={13} className="text-amber" />
-                              ) : (
-                                <BookOpen size={13} className="text-teal" />
-                              )}
-                              <span>
-                                {msgGrades.some((g: any) => g.breadcrumb === 'Web Search Fallback' || g.source?.startsWith('http'))
-                                  ? `Live Web Sources (${msgGrades.length} retrieved)`
-                                  : `Anchored Topo & Grader Verdicts (${msgGrades.length} chunks evaluated)`}
-                              </span>
-                            </div>
-                            <div className="citations-flex">
-                              {msgGrades.map((g: any, idx: number) => {
-                                const citNum = idx + 1;
-                                const cardId = `doc-card-${msg.id}-${citNum}`;
-                                const isHighlighted = activeCitationHighlight === `${msg.id}-${citNum}`;
-                                const isWeb = g.breadcrumb === 'Web Search Fallback' || g.source?.startsWith('http') || g.source?.includes('(');
-                                const fname = g.source ? (g.source.split('/').pop() || g.source) : `Chunk #${citNum}`;
-                                const isRelevant = g.score === 'yes';
-                                const displayTitle = isWeb 
-                                  ? (g.source ? g.source.split('(')[0]?.trim() : `Web Source #${citNum}`)
-                                  : (g.breadcrumb ? (g.breadcrumb.split('>').pop()?.trim() || fname) : fname);
-                                return (
-                                  <button 
-                                    id={cardId}
-                                    key={idx} 
-                                    className={`citation-pill ${isRelevant ? 'relevant' : 'filtered'} ${isHighlighted ? 'pulse-highlight' : ''}`}
-                                    onClick={() => setSelectedSourceModal(g)}
-                                    title={isWeb ? "Inspect live web source URL and snippet" : "Inspect grader rationale and chunk excerpt"}
-                                  >
-                                    <span className="cit-icon">
-                                      {isRelevant ? <Check size={12} className="text-moss" /> : <X size={12} className="text-rust" />}
-                                    </span>
-                                    <span className="cit-name">[{citNum}] {displayTitle}</span>
-                                    <span className={`cit-verdict ${isRelevant ? 'pass' : 'fail'}`}>
-                                      {isRelevant ? (isWeb ? 'Web Verified' : 'Verified') : 'Filtered Crux'}
-                                    </span>
-                                  </button>
-                                );
-                              })}
-                            </div>
-                          </div>
-                        )}
-
-                        {/* Grounded Confidence Scorecard & Badge */}
-                        {isAssistant && msg.confidence && (
-                          <div className="confidence-metric-container">
-                            <div className={`confidence-badge-pill ${msg.confidence.level.toLowerCase()}`}>
-                              <span className="confidence-dot" />
-                              <span className="confidence-percent">{msg.confidence.score}%</span>
-                              <span className="confidence-text">
-                                {msg.confidence.level === 'HIGH' ? 'High Grounded Confidence' : (msg.confidence.level === 'MEDIUM' ? 'Moderate Confidence' : 'Low Context Confidence')}
-                              </span>
-                            </div>
-                            <div className="confidence-meta-chips">
-                              <span className="meta-chip">
-                                <span className="chip-label">Source:</span> {msg.confidence.breakdown.source_trust}
-                              </span>
-                              <span className="meta-chip">
-                                <span className="chip-label">Grader Pass:</span> {msg.confidence.breakdown.grader_consensus}%
-                              </span>
-                              {msg.confidence.breakdown.faithfulness && (
-                                <span className="meta-chip">
-                                  <span className="chip-label">Faithfulness:</span> {msg.confidence.breakdown.faithfulness}
-                                </span>
-                              )}
-                              {msg.confidence.breakdown.reformulation_loops > 0 && (
-                                <span className="meta-chip">
-                                  <span className="chip-label">Query Rewrites:</span> {msg.confidence.breakdown.reformulation_loops}
-                                </span>
-                              )}
-                            </div>
-                          </div>
-                        )}
-
-                        {/* Assistant Message Action Bar in Grouped Pill Container */}
-                        {isAssistant && msg.content && (
-                          <div className="message-action-footer">
-                            <div className="action-pill-container">
-                              <button 
-                                className="msg-action-btn"
-                                onClick={() => copyToClipboard(msg.content, msg.id)}
-                                title="Copy response"
-                                aria-label="Copy response"
-                              >
-                                {copiedId === msg.id ? <Check size={14} className="text-moss" /> : <Copy size={14} />}
-                                <span>{copiedId === msg.id ? 'Copied' : 'Copy'}</span>
-                              </button>
-
-                              <button 
-                                className={`msg-action-btn ${msg.liked === true ? 'active-like' : ''}`}
-                                onClick={() => handleReaction(msg.id, true)}
-                                title="Helpful ascent"
-                                aria-label="Helpful response"
-                              >
-                                <ThumbsUp size={14} />
-                              </button>
-
-                              <button 
-                                className={`msg-action-btn ${msg.liked === false ? 'active-dislike' : ''}`}
-                                onClick={() => handleReaction(msg.id, false)}
-                                title="Crux encountered"
-                                aria-label="Crux encountered"
-                              >
-                                <ThumbsDown size={14} />
-                              </button>
-                            </div>
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                );
-              })}
+              {messages.map((msg) => (
+                <ChatMessageItem
+                  key={msg.id}
+                  msg={msg}
+                  isExpanded={expandedThinking[msg.id] ?? false}
+                  activeCitationHighlight={activeCitationHighlight}
+                  copiedId={copiedId}
+                  onToggleThinking={(id) => setExpandedThinking(prev => ({ ...prev, [id]: !prev[id] }))}
+                  onSelectConflict={(c) => setSelectedConflictDiff(c)}
+                  onSelectSource={(s) => setSelectedSourceModal(s)}
+                  onCopy={(text, id) => copyToClipboard(text, id)}
+                  onReaction={(id, liked) => handleReaction(id, liked)}
+                  onHoverCitation={(h) => setHoveredCitation(h)}
+                  onHighlightCitation={(h) => setActiveCitationHighlight(h)}
+                  onFileClick={(path) => {
+                    navigator.clipboard.writeText(path);
+                    showToast(`Copied path: ${path.split('/').pop() || path}`, 'info');
+                  }}
+                />
+              ))}
               <div ref={messagesEndRef} />
             </div>
           )}
         </div>
 
-        {/* Bottom Input Deck Anchored with Top Border */}
-        <div className="recall-input-deck">
-          {/* Slash Commands Dropup */}
-          {showSlashMenu && (
-            <div className="slash-menu-popover">
-              <div className="slash-menu-header">
-                <Command size={13} />
-                <span>Quick Inquiries and Actions</span>
-              </div>
-              <button 
-                className="slash-menu-item"
-                onClick={() => {
-                  setInput("Summarize the key findings across all indexed documents.");
-                  setShowSlashMenu(false);
-                }}
-              >
-                <Sparkles size={14} className="text-teal" />
-                <div className="slash-item-meta">
-                  <span className="slash-label">/summarize</span>
-                  <span className="slash-desc">Generate comprehensive summary across indexed chunks</span>
-                </div>
-              </button>
+        {/* Isolated Zero-Lag Chat Input Deck */}
+        <ChatInputDeck
+          ref={chatInputRef}
+          isLoading={isLoading}
+          onSend={(query) => handleSend(query)}
+          onStop={handleStopGeneration}
+          onAttachFile={handleChatFileAttach}
+          selectedSourceFilter={selectedSourceFilter}
+          onSelectSourceFilter={(s) => {
+            setSelectedSourceFilter(s);
+            showToast(s === 'all' ? 'Search scope set to All Sources' : `Scoped queries to: ${s.split('/').pop() || s}`, 'info');
+          }}
+          kbSources={kbSources}
+          onFetchKBSources={fetchKBSources}
+          webSearchEnabled={webSearchEnabled}
+          onToggleWebSearch={() => {
+            const nextVal = !webSearchEnabled;
+            setWebSearchEnabled(nextVal);
+            showToast(nextVal ? 'Web search fallback enabled' : 'Web search fallback disabled (Local KB only)', 'info');
+          }}
+        />
 
-              <button 
-                className="slash-menu-item"
-                onClick={() => {
-                  setInput("Audit all sources for contradictory claims or hallucinations.");
-                  setShowSlashMenu(false);
-                }}
-              >
-                <ShieldCheck size={14} className="text-moss" />
-                <div className="slash-item-meta">
-                  <span className="slash-label">/verify</span>
-                  <span className="slash-desc">Check veracity and contrast retrieved documents</span>
-                </div>
-              </button>
-
-              <button 
-                className="slash-menu-item"
-                onClick={() => {
-                  setInput("Extract all step-by-step methodologies mentioned in the knowledge base.");
-                  setShowSlashMenu(false);
-                }}
-              >
-                <BookOpen size={14} className="text-rust" />
-                <div className="slash-item-meta">
-                  <span className="slash-label">/methodology</span>
-                  <span className="slash-desc">Synthesize actionable implementation steps</span>
-                </div>
-              </button>
-            </div>
-          )}
-
-          <div className={`recall-input-card ${isLoading ? 'is-loading' : ''}`}>
-            <textarea
-              ref={textareaRef}
-              className="recall-textarea"
-              placeholder="Ask anything about your documents, or type / for prompts..."
-              value={input}
-              onChange={(e) => {
-                const val = e.target.value;
-                setInput(val);
-                if (val.startsWith('/')) {
-                  setShowSlashMenu(true);
-                } else if (showSlashMenu) {
-                  setShowSlashMenu(false);
-                }
-              }}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && !e.shiftKey) {
-                  e.preventDefault();
-                  handleSend();
-                }
-              }}
-              rows={1}
-              disabled={isLoading}
-            />
-
-            <div className="input-toolbar-row">
-              <div className="toolbar-left">
-                {/* File Attachment Button */}
-                <input 
-                  type="file" 
-                  ref={chatAttachRef} 
-                  onChange={handleChatFileAttach}
-                  accept=".pdf,.md,.txt"
-                  style={{ display: 'none' }}
-                />
-                <button 
-                  className="toolbar-btn attach-btn"
-                  onClick={() => chatAttachRef.current?.click()}
-                  title="Attach file (PDF, TXT, MD) to index into Crag"
-                  aria-label="Attach file"
-                >
-                  <Paperclip size={14} />
-                  <span>Attach</span>
-                </button>
-
-                {/* Web Search Fallback Mode Toggle */}
-                <button 
-                  type="button"
-                  className={`toolbar-btn fallback-toggle-chip ${webSearchEnabled ? 'active' : ''}`}
-                  onClick={() => {
-                    const nextVal = !webSearchEnabled;
-                    setWebSearchEnabled(nextVal);
-                    showToast(nextVal ? 'Web search fallback enabled' : 'Web search fallback disabled (Local KB only)', 'info');
-                  }}
-                  title={webSearchEnabled ? "Web fallback enabled when knowledge base recall is low (click to disable)" : "Web fallback disabled — queries will strictly stay within local documents (click to enable)"}
-                  aria-label="Toggle web fallback"
-                >
-                  <Globe size={13} className="fallback-globe-icon" />
-                  <span>Web fallback: {webSearchEnabled ? 'ON' : 'OFF'}</span>
-                  <span className={`fallback-indicator-dot ${webSearchEnabled ? 'active' : ''}`} />
-                </button>
-
-                {/* Quick Prompts Helper */}
-                <button
-                  className="toolbar-btn prompts-trigger-btn"
-                  onClick={() => setShowSlashMenu(!showSlashMenu)}
-                  title="Browse structured prompts"
-                  aria-label="Browse prompts"
-                >
-                  <Sparkles size={13} />
-                  <span>Prompts</span>
-                  <kbd className="prompt-slash-kbd">/</kbd>
-                </button>
-              </div>
-
-              <div className="toolbar-right">
-                {isLoading ? (
-                  <button 
-                    type="button"
-                    className="recall-stop-btn"
-                    onClick={handleStopGeneration}
-                    title="Stop ascent generation (Esc)"
-                    aria-label="Stop generation"
-                  >
-                    <Square size={11} fill="currentColor" />
-                  </button>
-                ) : (
-                  <>
-                    <span className="keyboard-enter-hint">Enter ↵</span>
-                    <button 
-                      type="button"
-                      className={`recall-send-btn ${input.trim() ? 'ready' : ''}`}
-                      onClick={() => handleSend()}
-                      disabled={!input.trim()}
-                      title="Send message (Enter)"
-                      aria-label="Send message"
-                    >
-                      <ArrowUp size={17} strokeWidth={2.4} />
-                    </button>
-                  </>
-                )}
-              </div>
-            </div>
-          </div>
-
-          <div className="input-deck-disclaimer">
-            Ridge can make mistakes. Verify important information against indexed sources.
-          </div>
+        <div className="input-deck-disclaimer">
+          Ridge can make mistakes. Verify important information against indexed sources.
         </div>
       </main>
 
@@ -2589,37 +3152,106 @@ export default function App() {
 
             <div className="modal-body-area">
               {ingestMode === 'file' ? (
-                <div 
-                  className={`recall-dropzone ${isDragging ? 'dragging' : ''} ${selectedFile ? 'has-file' : ''}`}
-                  onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
-                  onDragLeave={() => setIsDragging(false)}
-                  onDrop={handleFileDrop}
-                  onClick={() => fileInputRef.current?.click()}
-                >
-                  <input 
-                    type="file" 
-                    ref={fileInputRef} 
-                    onChange={(e) => {
-                      if (e.target.files && e.target.files.length > 0) {
-                        setSelectedFile(e.target.files[0]);
-                        setIngestInput('');
-                      }
-                    }}
-                    accept=".pdf,.png,.jpg,.jpeg,.webp,.bmp,.tiff,.docx,.doc,.pptx,.ppt,.xlsx,.xls,.csv,.tsv,.md,.markdown,.txt,.py,.js,.ts,.tsx,.jsx,.json,.yaml,.yml,.toml,.sql,.html,.css,.cpp,.c,.h,.java,.go,.rs,.sh,.srt,.vtt"
-                    style={{ display: 'none' }}
-                  />
-                  {selectedFile ? (
-                    <div className="dropzone-file-preview">
-                      <FileText size={36} className="text-teal" />
-                      <span className="file-preview-name">{selectedFile.name}</span>
-                      <span className="file-preview-size">{(selectedFile.size / 1024).toFixed(1)} KB</span>
-                    </div>
-                  ) : (
+                <div className="multi-file-ingest-container">
+                  <div 
+                    className={`recall-dropzone ${isDragging ? 'dragging' : ''} ${uploadQueue.length > 0 ? 'has-queue' : ''}`}
+                    onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
+                    onDragLeave={() => setIsDragging(false)}
+                    onDrop={handleFileDrop}
+                    onClick={() => fileInputRef.current?.click()}
+                  >
+                    <input 
+                      type="file" 
+                      ref={fileInputRef} 
+                      multiple
+                      onChange={(e) => {
+                        if (e.target.files && e.target.files.length > 0) {
+                          handleAddFilesToQueue(e.target.files);
+                        }
+                      }}
+                      accept=".pdf,.png,.jpg,.jpeg,.webp,.bmp,.tiff,.docx,.doc,.pptx,.ppt,.xlsx,.xls,.csv,.tsv,.md,.markdown,.txt,.py,.js,.ts,.tsx,.jsx,.json,.yaml,.yml,.toml,.sql,.html,.css,.cpp,.c,.h,.java,.go,.rs,.sh,.srt,.vtt"
+                      style={{ display: 'none' }}
+                    />
                     <div className="dropzone-empty-prompt">
-                      <Upload size={32} className="text-teal" />
-                      <p>Drag and drop <strong>Documents, Images (OCR), Code, or Spreadsheets</strong></p>
-                      <span className="dropzone-sub-formats">PDF, Images (PNG, JPG), Word (.docx), PPTX, Excel, CSV, Code, Markdown</span>
-                      <span className="dropzone-tap-prompt">or tap to browse files</span>
+                      <Upload size={28} className="text-teal" />
+                      <p>Drag and drop <strong>Multiple Documents, OCR Images, or Slides</strong></p>
+                      <span className="dropzone-sub-formats">Select multiple PDFs, Word documents, PPTX, Images, or Code</span>
+                      <span className="dropzone-tap-prompt">+ Tap to browse files</span>
+                    </div>
+                  </div>
+
+                  {/* Upload Queue Progress & File List */}
+                  {uploadQueue.length > 0 && (
+                    <div className="upload-queue-card">
+                      <div className="upload-queue-header">
+                        <div className="queue-title-count">
+                          <span>Upload Queue ({uploadQueue.length} files)</span>
+                          {uploadProgress && (
+                            <span className="queue-progress-tag">
+                              Indexing {uploadProgress.current} of {uploadProgress.total} ({Math.round((uploadProgress.current / uploadProgress.total) * 100)}%)
+                            </span>
+                          )}
+                        </div>
+                        {!isIngesting && (
+                          <button
+                            type="button"
+                            className="queue-clear-btn"
+                            onClick={handleClearQueue}
+                          >
+                            Clear All
+                          </button>
+                        )}
+                      </div>
+
+                      {uploadProgress && (
+                        <div className="queue-progress-bar-track">
+                          <div 
+                            className="queue-progress-bar-fill" 
+                            style={{ width: `${(uploadProgress.current / uploadProgress.total) * 100}%` }}
+                          />
+                        </div>
+                      )}
+
+                      <div className="upload-queue-items-list">
+                        {uploadQueue.map((item) => (
+                          <div key={item.id} className={`upload-queue-row ${item.status}`}>
+                            <div className="queue-item-main">
+                              <FileText size={14} className="text-teal" />
+                              <span className="queue-item-name" title={item.file.name}>{item.file.name}</span>
+                              <span className="queue-item-size">{(item.file.size / 1024).toFixed(1)} KB</span>
+                            </div>
+
+                            <div className="queue-item-status-col">
+                              {item.status === 'waiting' && <span className="queue-badge waiting">Waiting</span>}
+                              {item.status === 'uploading' && (
+                                <span className="queue-badge uploading">
+                                  <RotateCw size={11} className="spin-slow" /> Indexing...
+                                </span>
+                              )}
+                              {item.status === 'completed' && (
+                                <span className="queue-badge completed">
+                                  ✓ Anchored ({item.chunksAdded || 0} chunks)
+                                </span>
+                              )}
+                              {item.status === 'error' && (
+                                <span className="queue-badge error" title={item.error}>
+                                  ✕ Error
+                                </span>
+                              )}
+                              {!isIngesting && (
+                                <button
+                                  type="button"
+                                  className="queue-remove-btn"
+                                  onClick={() => handleRemoveQueueItem(item.id)}
+                                  title="Remove from queue"
+                                >
+                                  <X size={12} />
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
                     </div>
                   )}
                 </div>
@@ -2648,12 +3280,12 @@ export default function App() {
               <button 
                 className={`recall-btn-primary ${isIngestSuccess ? 'success' : ''}`} 
                 onClick={handleIngest} 
-                disabled={(!ingestInput.trim() && !selectedFile) || isIngesting || isIngestSuccess}
+                disabled={(ingestMode === 'file' ? uploadQueue.length === 0 : !ingestInput.trim()) || isIngesting || isIngestSuccess}
               >
                 {isIngesting ? (
                   <>
                     <RotateCw size={15} className="spin-slow" />
-                    <span>Anchoring Chunks...</span>
+                    <span>{uploadProgress ? `Indexing ${uploadProgress.current}/${uploadProgress.total}...` : 'Anchoring Chunks...'}</span>
                   </>
                 ) : isIngestSuccess ? (
                   <>
@@ -2663,7 +3295,7 @@ export default function App() {
                 ) : (
                   <>
                     <Plus size={15} />
-                    <span>Anchor to Crag</span>
+                    <span>{uploadQueue.length > 1 ? `Anchor ${uploadQueue.length} Files` : 'Anchor to Crag'}</span>
                   </>
                 )}
               </button>
@@ -2761,6 +3393,70 @@ export default function App() {
                   </pre>
                 </div>
               )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Side-by-Side Conflict Diff Viewer Modal */}
+      {selectedConflictDiff && (
+        <div className="recall-modal-backdrop" onClick={() => setSelectedConflictDiff(null)}>
+          <div className="recall-modal-card conflict-diff-modal" onClick={e => e.stopPropagation()}>
+            <div className="modal-header">
+              <div className="modal-title-wrap">
+                <AlertTriangle size={18} className="text-rust" />
+                <div>
+                  <h3>Document Contradiction & Version Diff</h3>
+                  {selectedConflictDiff.summary && (
+                    <p className="modal-subtitle-text">{selectedConflictDiff.summary}</p>
+                  )}
+                </div>
+              </div>
+              <button className="modal-close-btn" onClick={() => setSelectedConflictDiff(null)}>
+                <X size={18} />
+              </button>
+            </div>
+            <div className="modal-body-area">
+              <div className="conflict-diff-split-grid">
+                {(selectedConflictDiff.passages && selectedConflictDiff.passages.length > 0
+                  ? selectedConflictDiff.passages
+                  : selectedConflictDiff.sources.map((src): ConflictPassage => ({
+                      source: src,
+                      name: src.split('/').pop() || src,
+                      text: `Indexed content from ${src}`,
+                      rationale: undefined
+                    }))
+                ).map((p, pIdx) => (
+                  <div key={pIdx} className="conflict-diff-column">
+                    <div className="conflict-diff-card-header">
+                      <div className="conflict-diff-source-title">
+                        <FileText size={14} className="text-indigo" />
+                        <span title={p.source}>{p.name}</span>
+                      </div>
+                      <button
+                        type="button"
+                        className="conflict-diff-copy-btn"
+                        onClick={() => {
+                          navigator.clipboard.writeText(p.text);
+                          showToast(`Copied excerpt from ${p.name}`, 'info');
+                        }}
+                        title="Copy excerpt"
+                      >
+                        <Copy size={12} />
+                        <span>Copy</span>
+                      </button>
+                    </div>
+                    <div className="conflict-diff-text-box">
+                      {p.text}
+                    </div>
+                    {p.rationale && (
+                      <div className="conflict-diff-rationale">
+                        <strong>Relevance context:</strong> {p.rationale}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
             </div>
           </div>
         </div>
