@@ -36,10 +36,10 @@ RUN python -c "from langchain_huggingface import HuggingFaceEmbeddings; HuggingF
 COPY --from=frontend-builder /app/frontend/dist ./frontend/dist
 
 # Create writable dirs and hand ownership to the non-root user
-RUN mkdir -p /app/chroma_db && chown -R user:user /app
+RUN mkdir -p /app/chroma_db /app/data && chown -R user:user /app
 
 USER user
 
 EXPOSE 7860
 
-CMD ["uvicorn", "api:app", "--host", "0.0.0.0", "--port", "7860"]
+CMD ["sh", "-c", "uvicorn api:app --host 0.0.0.0 --port ${PORT:-7860}"]
