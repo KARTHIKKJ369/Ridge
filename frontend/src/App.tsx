@@ -43,7 +43,11 @@ import {
   Image,
   Code,
   AlertTriangle,
-  Layers
+  Layers,
+  ZoomIn,
+  ZoomOut,
+  Maximize2,
+  Minimize2
 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -60,9 +64,17 @@ mermaid.initialize({
   suppressErrorRendering: true,
   theme: 'base',
   securityLevel: 'loose',
+  flowchart: {
+    useMaxWidth: false,
+    htmlLabels: true,
+    curve: 'basis',
+    nodeSpacing: 30,
+    rankSpacing: 36,
+    padding: 10,
+  },
   themeVariables: {
     fontFamily: "'Plus Jakarta Sans', 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif",
-    fontSize: '13px',
+    fontSize: '12.5px',
     lineColor: '#64748b',
     primaryColor: '#ffffff',
     primaryTextColor: '#1e293b',
@@ -171,6 +183,8 @@ const MermaidDiagram = ({ chart }: { chart: string }) => {
   const [copied, setCopied] = useState<boolean>(false);
   const [renderError, setRenderError] = useState<string>('');
   const [cleanChart, setCleanChart] = useState<string>(initialClean);
+  const [zoom, setZoom] = useState<number>(1.0);
+  const [isFullscreen, setIsFullscreen] = useState<boolean>(false);
 
   useEffect(() => {
     let isMounted = true;
@@ -230,62 +244,159 @@ const MermaidDiagram = ({ chart }: { chart: string }) => {
     setTimeout(() => setCopied(false), 2000);
   };
 
+  const handleZoomIn = () => setZoom(prev => Math.min(2.2, +(prev + 0.15).toFixed(2)));
+  const handleZoomOut = () => setZoom(prev => Math.max(0.55, +(prev - 0.15).toFixed(2)));
+  const handleZoomReset = () => setZoom(1.0);
+
   return (
-    <div className="mermaid-diagram-card">
-      <div className="mermaid-diagram-header">
-        <div className="mermaid-header-left">
-          <span className="mermaid-diagram-badge">
-            <Activity size={12} />
-            <span>Interactive Diagram</span>
-          </span>
-          {renderError && (
-            <span className="mermaid-render-error-badge" title={renderError}>
-              ⚠ Render Error
+    <>
+      <div className="mermaid-diagram-card">
+        <div className="mermaid-diagram-header">
+          <div className="mermaid-header-left">
+            <span className="mermaid-diagram-badge">
+              <Activity size={12} />
+              <span>Interactive Diagram</span>
             </span>
-          )}
-        </div>
-        <div className="mermaid-header-right">
-          {isRendered && (
+            {renderError && (
+              <span className="mermaid-render-error-badge" title={renderError}>
+                ⚠ Render Error
+              </span>
+            )}
+          </div>
+          <div className="mermaid-header-right">
+            {isRendered && !renderError && !showCode && (
+              <div className="mermaid-zoom-controls">
+                <button
+                  type="button"
+                  className="mermaid-icon-tool-btn"
+                  onClick={handleZoomOut}
+                  title="Zoom out diagram"
+                  aria-label="Zoom out"
+                  disabled={zoom <= 0.55}
+                >
+                  <ZoomOut size={12} />
+                </button>
+                <button
+                  type="button"
+                  className="mermaid-icon-tool-btn zoom-text-btn"
+                  onClick={handleZoomReset}
+                  title="Reset diagram zoom"
+                  aria-label="Reset zoom"
+                >
+                  {Math.round(zoom * 100)}%
+                </button>
+                <button
+                  type="button"
+                  className="mermaid-icon-tool-btn"
+                  onClick={handleZoomIn}
+                  title="Zoom in diagram"
+                  aria-label="Zoom in"
+                  disabled={zoom >= 2.2}
+                >
+                  <ZoomIn size={12} />
+                </button>
+                <button
+                  type="button"
+                  className="mermaid-icon-tool-btn"
+                  onClick={() => setIsFullscreen(true)}
+                  title="Expand diagram fullscreen"
+                  aria-label="Expand diagram fullscreen"
+                >
+                  <Maximize2 size={12} />
+                </button>
+              </div>
+            )}
+            {isRendered && (
+              <button 
+                type="button"
+                className="mermaid-tool-btn"
+                onClick={() => setShowCode(!showCode)}
+                title={showCode ? "Show visual diagram" : "View diagram source code"}
+              >
+                <Code size={12} />
+                <span>{showCode ? "Visual" : "Source"}</span>
+              </button>
+            )}
             <button 
               type="button"
               className="mermaid-tool-btn"
-              onClick={() => setShowCode(!showCode)}
-              title={showCode ? "Show visual diagram" : "View diagram source code"}
+              onClick={handleCopyCode}
+              title="Copy Mermaid code"
             >
-              <Code size={12} />
-              <span>{showCode ? "Visual" : "Source"}</span>
+              {copied ? <Check size={12} className="text-moss" /> : <Copy size={12} />}
+              <span>{copied ? "Copied" : "Copy"}</span>
             </button>
-          )}
-          <button 
-            type="button"
-            className="mermaid-tool-btn"
-            onClick={handleCopyCode}
-            title="Copy Mermaid code"
-          >
-            {copied ? <Check size={12} className="text-moss" /> : <Copy size={12} />}
-            <span>{copied ? "Copied" : "Copy"}</span>
-          </button>
+          </div>
         </div>
+
+        {showCode ? (
+          <pre className="mermaid-code-preview">{(cleanChart || chart).trim()}</pre>
+        ) : renderError ? (
+          <pre className="mermaid-code-preview">{(cleanChart || chart).trim()}</pre>
+        ) : isRendered && svg ? (
+          <div className="mermaid-diagram-canvas-wrapper">
+            <div 
+              className="mermaid-diagram-canvas"
+              style={{ transform: `scale(${zoom})`, transformOrigin: 'top center' }}
+              dangerouslySetInnerHTML={{ __html: svg }}
+            />
+          </div>
+        ) : (
+          <div className="mermaid-diagram-loading">
+            <div className="shimmer-pulse-dot" />
+            <div className="shimmer-pulse-dot" />
+            <div className="shimmer-pulse-dot" />
+            <span>Rendering visual diagram...</span>
+          </div>
+        )}
       </div>
 
-      {showCode ? (
-        <pre className="mermaid-code-preview">{(cleanChart || chart).trim()}</pre>
-      ) : renderError ? (
-        <pre className="mermaid-code-preview">{(cleanChart || chart).trim()}</pre>
-      ) : isRendered && svg ? (
-        <div 
-          className="mermaid-diagram-canvas"
-          dangerouslySetInnerHTML={{ __html: svg }}
-        />
-      ) : (
-        <div className="mermaid-diagram-loading">
-          <div className="shimmer-pulse-dot" />
-          <div className="shimmer-pulse-dot" />
-          <div className="shimmer-pulse-dot" />
-          <span>Rendering visual diagram...</span>
+      {/* Fullscreen Expanded Diagram Modal */}
+      {isFullscreen && (
+        <div className="recall-modal-backdrop mermaid-fullscreen-backdrop" onClick={() => setIsFullscreen(false)}>
+          <div className="mermaid-fullscreen-card" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <div className="modal-title-wrap">
+                <Activity size={16} className="text-teal" />
+                <h3>Expanded Diagram View</h3>
+              </div>
+              <div className="mermaid-fullscreen-header-actions">
+                <div className="mermaid-zoom-controls">
+                  <button type="button" className="mermaid-icon-tool-btn" onClick={handleZoomOut} title="Zoom out" disabled={zoom <= 0.55}>
+                    <ZoomOut size={13} />
+                  </button>
+                  <button type="button" className="mermaid-icon-tool-btn zoom-text-btn" onClick={handleZoomReset} title="Reset zoom">
+                    {Math.round(zoom * 100)}%
+                  </button>
+                  <button type="button" className="mermaid-icon-tool-btn" onClick={handleZoomIn} title="Zoom in" disabled={zoom >= 2.5}>
+                    <ZoomIn size={13} />
+                  </button>
+                </div>
+                <button 
+                  type="button"
+                  className="mermaid-tool-btn"
+                  onClick={handleCopyCode}
+                  title="Copy Mermaid code"
+                >
+                  {copied ? <Check size={13} className="text-moss" /> : <Copy size={13} />}
+                  <span>{copied ? "Copied" : "Copy"}</span>
+                </button>
+                <button className="modal-close-btn" onClick={() => setIsFullscreen(false)} title="Exit fullscreen view">
+                  <Minimize2 size={16} />
+                </button>
+              </div>
+            </div>
+            <div className="mermaid-fullscreen-body">
+              <div 
+                className="mermaid-diagram-canvas fullscreen-canvas"
+                style={{ transform: `scale(${zoom})`, transformOrigin: 'center center' }}
+                dangerouslySetInnerHTML={{ __html: svg }}
+              />
+            </div>
+          </div>
         </div>
       )}
-    </div>
+    </>
   );
 };
 
@@ -307,11 +418,35 @@ const cleanMarkdownContent = (content: string) => {
   text = text.replace(/\(([^()\n]*\\[a-zA-Z]+[^()\n]*)\)/g, '$$$1$$');
 
   // 5. Citations and cleanups
+  // Handle special citation markers: 【1†source】 or 【1】
+  text = text.replace(/【(\d+)†[^】]*】/g, ' [$1](#cit-$1)');
+  text = text.replace(/【(\d+)】/g, ' [$1](#cit-$1)');
+  text = text.replace(/【[^】]*】/g, '');
+
+  // Handle grouped bracketed citations like [1, 2, 4] or [1,2]
+  text = text.replace(/(?<![\$\w\\])\[(\d+(?:\s*,\s*\d+)+)\](?!\()/g, (_match, group) => {
+    const nums = group.split(',').map((n: string) => n.trim()).filter(Boolean);
+    return nums.map((n: string) => `[${n}](#cit-${n})`).join(' ');
+  });
+
+  // Handle range bracketed citations like [1-3] or [1–3]
+  text = text.replace(/(?<![\$\w\\])\[(\d+)\s*[-–—]\s*(\d+)\](?!\()/g, (_match, startStr, endStr) => {
+    const start = parseInt(startStr, 10);
+    const end = parseInt(endStr, 10);
+    if (!isNaN(start) && !isNaN(end) && start < end && end - start <= 10) {
+      const items = [];
+      for (let i = start; i <= end; i++) {
+        items.push(`[${i}](#cit-${i})`);
+      }
+      return items.join(' ');
+    }
+    return `[${startStr}](#cit-${startStr})-[${endStr}](#cit-${endStr})`;
+  });
+
+  // Handle single bracketed citations [1], [2], etc. (without requiring broken word boundaries)
+  text = text.replace(/(?<![\$\w\\])\[(\d+)\](?!\()/g, '[$1](#cit-$1)');
+
   return text
-    .replace(/【(\d+)†[^】]*】/g, ' [$1](#cit-$1)')
-    .replace(/【(\d+)】/g, ' [$1](#cit-$1)')
-    .replace(/(?<!\$|\$\$)\b\[(\d+)\](?!\()/g, '[$1](#cit-$1)')
-    .replace(/【[^】]*】/g, '')
     .replace(/<br\s*\/?>\s*•/gi, '\n- ')
     .replace(/<br\s*\/?>\s*\*/gi, '\n* ')
     .replace(/<br\s*\/?>\s*-/gi, '\n- ')
@@ -339,12 +474,28 @@ const markdownToReportHtml = (md: string): string => {
     .replace(/__(.*?)__/gim, '<strong>$1</strong>')
     .replace(/_(.*?)_/gim, '<em>$1</em>');
 
-  // 4. Citation badges: [1], [2] or 【1†L1-L4】
+  // 4. Citation badges: [1], [2], [1, 2], [1-3] or 【1†L1-L4】
   text = text
     .replace(/【(\d+)†[^】]*】/gim, '<span class="report-cit-badge">[$1]</span>')
     .replace(/【(\d+)】/gim, '<span class="report-cit-badge">[$1]</span>')
     .replace(/【[^】]*】/gim, '')
-    .replace(/\[(\d+)\]/gim, '<span class="report-cit-badge">[$1]</span>');
+    .replace(/(?<![\$\w\\])\[(\d+(?:\s*,\s*\d+)+)\](?!\()/gim, (_m, group) => {
+      const nums = group.split(',').map((n: string) => n.trim()).filter(Boolean);
+      return nums.map((n: string) => `<span class="report-cit-badge">[${n}]</span>`).join(' ');
+    })
+    .replace(/(?<![\$\w\\])\[(\d+)\s*[-–—]\s*(\d+)\](?!\()/gim, (_m, s, e) => {
+      const start = parseInt(s, 10);
+      const end = parseInt(e, 10);
+      if (!isNaN(start) && !isNaN(end) && start < end && end - start <= 10) {
+        const items = [];
+        for (let i = start; i <= end; i++) {
+          items.push(`<span class="report-cit-badge">[${i}]</span>`);
+        }
+        return items.join(' ');
+      }
+      return `<span class="report-cit-badge">[${s}-${e}]</span>`;
+    })
+    .replace(/(?<![\$\w\\])\[(\d+)\](?!\()/gim, '<span class="report-cit-badge">[$1]</span>');
 
   // 5. Code blocks & inline code
   text = text
@@ -719,9 +870,8 @@ const ChatMessageItem = React.memo(({
 }: ChatMessageItemProps) => {
   const isAssistant = msg.role === 'assistant';
   const msgTraces = msg.traces || [];
-  const webSearchTrace = msgTraces.find(t => t.node === 'web_search_node' && t.doc_grades && t.doc_grades.length > 0);
-  const gradeTrace = [...msgTraces].reverse().find(t => t.node === 'grade_node' && t.doc_grades && t.doc_grades.length > 0);
-  const msgGrades: any[] = webSearchTrace?.doc_grades || gradeTrace?.doc_grades || [];
+  const latestTraceWithGrades = [...msgTraces].reverse().find(t => t.doc_grades && t.doc_grades.length > 0);
+  const msgGrades: any[] = latestTraceWithGrades?.doc_grades || [];
   const totalPipelineLatency = msgTraces.reduce((sum, t) => sum + (t.latency_ms || 0), 0);
 
   return (
@@ -875,16 +1025,23 @@ const ChatMessageItem = React.memo(({
                             className="inline-citation-badge"
                             onClick={(e) => {
                               e.preventDefault();
+                              e.stopPropagation();
+                              onHoverCitation(null);
                               const elem = document.getElementById(`doc-card-${msg.id}-${citIdx}`);
                               if (elem) {
                                 elem.scrollIntoView({ behavior: 'smooth', block: 'center' });
                                 onHighlightCitation(`${msg.id}-${citIdx}`);
                                 setTimeout(() => onHighlightCitation(null), 2500);
-                              } else if (targetGrade) {
+                              }
+                              if (targetGrade) {
                                 onSelectSource(targetGrade);
+                              } else if (!elem) {
+                                onHighlightCitation(`${msg.id}-${citIdx}`);
+                                setTimeout(() => onHighlightCitation(null), 2500);
                               }
                             }}
-                            title={`Source [${citIdx}]: Click to jump to verified card`}
+                            title={targetGrade?.source ? `Source [${citIdx}]: ${targetGrade.source.split('/').pop()} (Click to inspect)` : `Source [${citIdx}]: Click to inspect verified passage`}
+                            aria-label={`Source citation ${citIdx}`}
                           >
                             {citIdx}
                           </button>
@@ -3097,7 +3254,10 @@ export default function App() {
                   copiedId={copiedId}
                   onToggleThinking={(id) => setExpandedThinking(prev => ({ ...prev, [id]: !prev[id] }))}
                   onSelectConflict={(c) => setSelectedConflictDiff(c)}
-                  onSelectSource={(s) => setSelectedSourceModal(s)}
+                  onSelectSource={(s) => {
+                    setHoveredCitation(null);
+                    setSelectedSourceModal(s);
+                  }}
                   onCopy={(text, id) => copyToClipboard(text, id)}
                   onReaction={(id, liked) => handleReaction(id, liked)}
                   onHoverCitation={(h) => setHoveredCitation(h)}
@@ -3832,24 +3992,24 @@ export default function App() {
       )}
 
       {/* Floating Citation Hover Preview Popover */}
-      {hoveredCitation && (
+      {hoveredCitation && !selectedSourceModal && !isGlossaryOpen && !isAdminModalOpen && !isExportOpen && !isIngestOpen && !isAuthModalOpen && (
         <div 
           className="citation-hover-popover"
           style={{
             position: 'fixed',
-            top: `${Math.max(10, hoveredCitation.rect.top - 120)}px`,
+            top: `${hoveredCitation.rect.top < 150 ? hoveredCitation.rect.bottom + 8 : Math.max(10, hoveredCitation.rect.top - 125)}px`,
             left: `${Math.min(window.innerWidth - 320, Math.max(16, hoveredCitation.rect.left - 100))}px`,
-            zIndex: 9999,
+            zIndex: 120,
           }}
         >
           <div className="cit-popover-header">
             <span className="cit-popover-tag">Source [{hoveredCitation.index}]</span>
-            <span className="cit-popover-src">
+            <span className="cit-popover-src" title={hoveredCitation.target?.source || 'Verified Passage'}>
               {hoveredCitation.target?.source ? hoveredCitation.target.source.split('/').pop() : 'Verified Passage'}
             </span>
           </div>
           <div className="cit-popover-body">
-            {hoveredCitation.target?.text ? hoveredCitation.target.text.slice(0, 200) + '...' : 'Referenced document passage evaluated and verified by the CRAG pipeline.'}
+            {hoveredCitation.target?.text ? hoveredCitation.target.text.slice(0, 220) + '...' : 'Referenced document passage evaluated and verified by the CRAG pipeline.'}
           </div>
         </div>
       )}
