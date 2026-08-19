@@ -54,6 +54,7 @@ import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
 import rehypeRaw from 'rehype-raw';
 import rehypeKatex from 'rehype-katex';
+import katex from 'katex';
 import 'katex/dist/katex.min.css';
 import mermaid from 'mermaid';
 import { AuthModal } from './components/AuthModal';
@@ -411,23 +412,61 @@ const cleanMarkdownContent = (content: string) => {
   // 2. Convert standard LaTeX inline \( ... \) to $ ... $
   text = text.replace(/\\\(([\s\S]*?)\\\)/g, '$$$1$$');
 
-  // 3. Convert bracketed math blocks containing LaTeX like [ p_c := \alpha ... ] to $$ ... $$
-  text = text.replace(/(?:^|\n)\s*\[\s*([^[\]\n]*\\[a-zA-Z]+[^[\]\n]*|[a-zA-Z0-9_^{}]+\s*(?:[:=+\-*/]=?)\s*[^[\]\n]*\\[a-zA-Z]+[^[\]\n]*)\s*\]\s*(?=\n|$)/g, '\n\n$$\n$1\n$$\n\n');
-
-  // 4. Convert standalone raw LaTeX lines (not enclosed in $ or $$) containing commands like \frac, \text, \sum, \sigma, etc. into $$ ... $$ blocks
-  text = text.replace(/(?:^|\n)(?!\$\$)([^\n$]*?\\(?:frac|sum|prod|sqrt|int|text|mathbf|mathrm|mathbf|bmatrix|pmatrix|begin|alpha|beta|gamma|theta|sigma|omega|Delta|nabla|partial|times|cdot|approx|equiv|le|ge|neq|infty)\b[^\n$]*?)(?=\n|$)/g, (match, eq) => {
-    // Only wrap if it's an equation line without backticks or markdown headers
-    let trimmed = eq.trim();
-    if (trimmed.startsWith('#') || trimmed.startsWith('`') || trimmed.startsWith('-') || trimmed.startsWith('*') || trimmed.startsWith('>')) {
-      return match;
-    }
-    // Remove accidental lone '$' symbols embedded inside raw math formula (e.g. \sum $\text...)
-    trimmed = trimmed.replace(/\$/g, '');
-    return `\n\n$$\n${trimmed}\n$$\n\n`;
+  // 3. Fix multiline block math wrapped in single dollar signs on separate lines:
+  // e.g. \n$\n\text{SGPA}...\n$\n -> \n\n$$\n\text{SGPA}...\n$$\n\n
+  text = text.replace(/(?:^|\n)[ \t]*\$[ \t]*\n([\s\S]*?)\n[ \t]*\$[ \t]*(?=\n|$)/g, (_m, body) => {
+    const cleanedBody = body.replace(/\$/g, '').trim();
+    return `\n\n$$\n${cleanedBody}\n$$\n\n`;
   });
 
-  // 5. Convert inline parenthesized math with LaTeX backslashes like (\alpha) or (\alpha \le 1) or (p^{s}_{T,c}) to $ ... $
-  text = text.replace(/\(([^()\n]*\\[a-zA-Z]+[^()\n]*)\)/g, '$$$1$$');
+  // 4. Convert bracketed math blocks containing LaTeX like [ p_c := \alpha ... ] to $$ ... $$
+  text = text.replace(/(?:^|\n)\s*\[\s*([^[\]\n]*\\[a-zA-Z]+[^[\]\n]*|[a-zA-Z0-9_^{}]+\s*(?:[:=+\-*/]=?)\s*[^[\]\n]*\\[a-zA-Z]+[^[\]\n]*)\s*\]\s*(?=\n|$)/g, '\n\n$$\n$1\n$$\n\n');
+
+  // 5. Convert any standalone line containing LaTeX math commands into a $$ ... $$ block
+  // e.g. \text{SGPA}= \frac{\displaystyle\sum_{i=1}^{n} Grade-Point_i \times Credit_i}{\displaystyle\sum_{i=1}^{n}\text{Credit}_i}
+  text = text.replace(/(?:^|\n)(?!\s*\$\$)([^\n]*?\\[a-zA-Z]+[^\n]*?)(?=\n|$)/g, (match, line) => {
+    const trimmed = line.trim();
+    if (/^[#*>\-`]|^\d+\./.test(trimmed)) {
+      return match;
+    }
+    if (/\\[a-zA-Z]+(?:\{|\[|\b)/.test(trimmed) || /[_^]\{|\\[_&%$#]/.test(trimmed)) {
+      const cleaned = trimmed.replace(/\$/g, '');
+      return `\n\n$$\n${cleaned}\n$$\n\n`;
+    }
+    return match;
+  });
+
+  // 6. Direct KaTeX Pre-rendering for $$ ... $$ display math (guarantees perfect rendering through rehype-raw)
+  text = text.replace(/\$\$([\s\S]*?)\$\$/g, (_m, formula) => {
+    const cleaned = formula.replace(/\$/g, '').trim();
+    if (!cleaned) return '';
+    try {
+      const rendered = katex.renderToString(cleaned, { displayMode: true, throwOnError: false, strict: 'ignore' });
+      return `\n\n${rendered}\n\n`;
+    } catch {
+      return `\n\n$$\n${cleaned}\n$$\n\n`;
+    }
+  });
+
+  // 7. Direct KaTeX Pre-rendering for $ ... $ inline math
+  text = text.replace(/(?<!\\)\$([^\$\n]+?)\$/g, (_m, formula) => {
+    const cleaned = formula.trim();
+    if (!cleaned) return '$$';
+    try {
+      return katex.renderToString(cleaned, { displayMode: false, throwOnError: false, strict: 'ignore' });
+    } catch {
+      return `$${cleaned}$`;
+    }
+  });
+
+  // 8. Convert inline parenthesized math with LaTeX backslashes like (\alpha) or (\alpha \le 1) or (p^{s}_{T,c})
+  text = text.replace(/\(([^()\n]*\\[a-zA-Z]+[^()\n]*)\)/g, (_m, formula) => {
+    try {
+      return katex.renderToString(formula.trim(), { displayMode: false, throwOnError: false, strict: 'ignore' });
+    } catch {
+      return `(${formula})`;
+    }
+  });
 
   // 5. Citations and cleanups
   // Handle special citation markers: 【1†source】 or 【1】
