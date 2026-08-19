@@ -414,7 +414,19 @@ const cleanMarkdownContent = (content: string) => {
   // 3. Convert bracketed math blocks containing LaTeX like [ p_c := \alpha ... ] to $$ ... $$
   text = text.replace(/(?:^|\n)\s*\[\s*([^[\]\n]*\\[a-zA-Z]+[^[\]\n]*|[a-zA-Z0-9_^{}]+\s*(?:[:=+\-*/]=?)\s*[^[\]\n]*\\[a-zA-Z]+[^[\]\n]*)\s*\]\s*(?=\n|$)/g, '\n\n$$\n$1\n$$\n\n');
 
-  // 4. Convert inline parenthesized math with LaTeX backslashes like (\alpha) or (\alpha \le 1) or (p^{s}_{T,c}) to $ ... $
+  // 4. Convert standalone raw LaTeX lines (not enclosed in $ or $$) containing commands like \frac, \text, \sum, \sigma, etc. into $$ ... $$ blocks
+  text = text.replace(/(?:^|\n)(?!\$\$)([^\n$]*?\\(?:frac|sum|prod|sqrt|int|text|mathbf|mathrm|mathbf|bmatrix|pmatrix|begin|alpha|beta|gamma|theta|sigma|omega|Delta|nabla|partial|times|cdot|approx|equiv|le|ge|neq|infty)\b[^\n$]*?)(?=\n|$)/g, (match, eq) => {
+    // Only wrap if it's an equation line without backticks or markdown headers
+    let trimmed = eq.trim();
+    if (trimmed.startsWith('#') || trimmed.startsWith('`') || trimmed.startsWith('-') || trimmed.startsWith('*') || trimmed.startsWith('>')) {
+      return match;
+    }
+    // Remove accidental lone '$' symbols embedded inside raw math formula (e.g. \sum $\text...)
+    trimmed = trimmed.replace(/\$/g, '');
+    return `\n\n$$\n${trimmed}\n$$\n\n`;
+  });
+
+  // 5. Convert inline parenthesized math with LaTeX backslashes like (\alpha) or (\alpha \le 1) or (p^{s}_{T,c}) to $ ... $
   text = text.replace(/\(([^()\n]*\\[a-zA-Z]+[^()\n]*)\)/g, '$$$1$$');
 
   // 5. Citations and cleanups
