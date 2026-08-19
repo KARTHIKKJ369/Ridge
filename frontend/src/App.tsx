@@ -406,6 +406,11 @@ const cleanMarkdownContent = (content: string) => {
   // 0. Normalize exotic Unicode whitespace characters (e.g. \u202F, \u00A0, \u2000-\u200B) to standard ASCII space
   let text = content.replace(/[\u202F\u00A0\u2000-\u200B\u2028\u2029\uFEFF]/g, ' ');
 
+  // 0.1 Fix collapsed Markdown tables where table rows lack newlines
+  text = text.replace(/(\|[-:]+[-| :]*)\|([^\n\-\|])/g, '$1|\n| $2');
+  text = text.replace(/(\|[^|\n]+)\|(\|[-:]+[-| :]*\|)/g, '$1|\n$2');
+  text = text.replace(/\|[ \t]*\|/g, '|\n|');
+
   // 1. Convert standard LaTeX block \[ ... \] to $$ ... $$
   text = text.replace(/\\\[([\s\S]*?)\\\]/g, '\n\n$$\n$1\n$$\n\n');
 
@@ -426,6 +431,11 @@ const cleanMarkdownContent = (content: string) => {
   // e.g. \text{SGPA}= \frac{\displaystyle\sum_{i=1}^{n} Grade-Point_i \times Credit_i}{\displaystyle\sum_{i=1}^{n}\text{Credit}_i}
   text = text.replace(/(?:^|\n)(?!\s*\$\$)([^\n]*?\\[a-zA-Z]+[^\n]*?)(?=\n|$)/g, (match, line) => {
     const trimmed = line.trim();
+    // Do NOT wrap if line is a markdown table row (starts/ends with | or has table pipes)
+    if (/^\|.*\|$/.test(trimmed) || (trimmed.startsWith('|') && trimmed.includes('|'))) {
+      return match;
+    }
+    // Do NOT wrap if line is a markdown heading, list bullet, quote, or code block
     if (/^[#*>\-`]|^\d+\./.test(trimmed)) {
       return match;
     }
