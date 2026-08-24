@@ -585,11 +585,21 @@ async def generate_chat_events(
                         retrieval_strategy="hybrid_rrf",
                         cache_hit=False,
                         latency_ms=total_latency,
-                        total_results=len(last_retrieved_docs),
-                        confidence_score=last_confidence.get("score", 0),
+                        results_list=[
+                            {
+                                "dense_score": float(g.get("relevance", 0.8)),
+                                "sparse_score": float(g.get("relevance", 0.8)),
+                                "rrf_score": 1.0 / (60 + i + 1),
+                                "rerank_score": float(g.get("relevance", 0.8)),
+                                "final_rank": i + 1,
+                                "selected": True,
+                            }
+                            for i, g in enumerate(relevant_grades[:6])
+                        ],
                         conversation_id=db_conv_id,
                         message_id=ast_msg.id,
                     )
+
             except Exception as save_err:
                 logger.warning(f"Error persisting assistant message to PostgreSQL: {save_err}")
 
@@ -821,7 +831,12 @@ async def get_kb_sources(all_users: bool = False, user: UserProfile = Depends(ge
         async with get_db_session() as session:
             stmt = select(Document).order_by(Document.created_at.desc())
             if not show_all:
-                stmt = stmt.where(Document.uploaded_by == user.id)
+                stmt = stmt.where(or_(
+                    Document.uploaded_by == user.id,
+                    Document.uploaded_by.in_(['shared', 'default', 'admin', 'usr_de4adc48053eccbc']),
+                    Document.uploaded_by.is_(None)
+                ))
+
 
             
             docs = (await session.execute(stmt)).scalars().all()

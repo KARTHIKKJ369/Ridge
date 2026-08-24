@@ -26,10 +26,12 @@ def _load_cache() -> list[dict]:
     if os.path.exists(CACHE_FILE_PATH):
         try:
             with open(CACHE_FILE_PATH, "r", encoding="utf-8") as f:
-                return json.load(f)
+                data = json.load(f)
+                return data if isinstance(data, list) else []
         except Exception:
             return []
     return []
+
 
 
 def _save_cache(entries: list[dict]) -> None:

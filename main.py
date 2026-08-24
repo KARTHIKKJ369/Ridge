@@ -691,9 +691,10 @@ def build_app():
                 "You are a strict inconsistency auditor for an enterprise document store.\n"
                 f"User Question: {question}\n\n"
                 f"Retrieved Passages from Multiple Documents:\n{docs_paired}\n\n"
-                "Task: Check if there is an explicit factual contradiction, differing policy terms/dates, or incompatible statements between these different documents regarding the user's question.\n"
-                "Return ONLY a JSON object: {\"conflict\": true | false, \"summary\": \"1-2 sentence description of the disagreement, or empty string\"}"
+                "Task: Check if these documents present differing numbers, conflicting policy rules/allowances across versions/years, or incompatible statements regarding the question.\n"
+                "Return ONLY a JSON object: {\"conflict\": true | false, \"summary\": \"1-2 sentence description of the discrepancy or differing terms across sources, or empty string\"}"
             )
+
             try:
                 c_resp = llm_fast.invoke(conflict_prompt)
                 c_clean = clean_llm_response(c_resp.content)
@@ -1011,80 +1012,46 @@ def build_app():
             return {"sub_queries": sub_queries, "latency_ms": int((time.time() - t0) * 1000)}
 
         # --- Step 2: Parallel hybrid retrieval per sub-query ---
-        bm25, raw_docs, raw_metas = get_bm25()
-        
-        src_filter = state.get("source_filter")
-        is_filtered = bool(src_filter and src_filter.strip().lower() not in ("", "all", "all sources", "none"))
-        if is_filtered and raw_docs:
-            filtered_docs = []
-            filtered_metas = []
-            for d, m in zip(raw_docs, raw_metas):
-                m_src = str(m.get("source", "")) if m else ""
-                if m_src == src_filter or src_filter.lower() in m_src.lower():
-                    filtered_docs.append(d)
-                    filtered_metas.append(m)
-            if filtered_docs:
-                from rank_bm25 import BM25Okapi
-                tokenized_corpus = [re.findall(r"\w+", doc.lower()) for doc in filtered_docs]
-                bm25 = BM25Okapi(tokenized_corpus)
-                raw_docs, raw_metas = filtered_docs, filtered_metas
+        import asyncio
+        import concurrent.futures
+
+        async def _retrieve_all():
+            all_candidates = []
+            for sq in sub_queries:
+                cands = await retriever_engine.retrieve(
+                    query=sq,
+                    user_id=state.get("user_id"),
+                    source_filter=state.get("source_filter"),
+                    k=settings["retriever_fetch_k"],
+                )
+                all_candidates.extend(cands)
+            return all_candidates
+
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                with concurrent.futures.ThreadPoolExecutor() as pool:
+                    merged_candidates = pool.submit(asyncio.run, _retrieve_all()).result()
             else:
-                bm25 = None
-                raw_docs, raw_metas = [], []
+                merged_candidates = loop.run_until_complete(_retrieve_all())
+        except Exception:
+            merged_candidates = asyncio.run(_retrieve_all())
 
-        # RRF registry across all sub-queries
-        rrf_scores: dict[str, float] = {}
-        doc_registry: dict[str, tuple[str, dict]] = {}
-        K = 60  # RRF constant
+        # De-duplicate candidates by chunk_id or text
+        seen_chunks = set()
+        unique_candidates = []
+        for c in merged_candidates:
+            key = c.chunk_id or c.text.strip()[:100]
+            if key not in seen_chunks:
+                seen_chunks.add(key)
+                unique_candidates.append(c)
 
-        for sq in sub_queries:
-            # Dense retrieval (with optional source filter)
-            if is_filtered:
-                try:
-                    dense = vectorstore.similarity_search(sq, k=50, filter={"source": src_filter})
-                except Exception:
-                    dense = retriever.invoke(sq)
-                    dense = [d for d in dense if d.metadata.get("source") == src_filter or src_filter.lower() in str(d.metadata.get("source", "")).lower()]
-            else:
-                dense = retriever.invoke(sq)
-
-            for rank, d in enumerate(dense):
-                did = d.page_content.strip()[:180]
-                doc_registry[did] = (d.page_content, d.metadata)
-                rrf_scores[did] = rrf_scores.get(did, 0.0) + 1.0 / (K + rank + 1)
-
-            # BM25 sparse retrieval
-            if bm25 and raw_docs:
-                tokens = re.findall(r"\w+", sq.lower())
-                if tokens:
-                    scores = bm25.get_scores(tokens)
-                    top_idx = sorted(range(len(scores)), key=lambda i: scores[i], reverse=True)[:20]
-                    for rank, idx in enumerate(top_idx):
-                        if scores[idx] > 0.0:
-                            did = raw_docs[idx].strip()[:180]
-                            doc_registry[did] = (raw_docs[idx], raw_metas[idx] if idx < len(raw_metas) else {})
-                            rrf_scores[did] = rrf_scores.get(did, 0.0) + 1.0 / (K + rank + 1)
-
-        # --- Step 3: Sort + FlashRank re-rank merged pool ---
-        rerank_top_n = settings.get("rerank_top_n", 20)
-        sorted_fused = sorted(rrf_scores.keys(), key=lambda k: rrf_scores[k], reverse=True)[:rerank_top_n]
-        fused_texts = [doc_registry[k][0] for k in sorted_fused]
-        fused_metas = [doc_registry[k][1] for k in sorted_fused]
-        print(f"  Multi-hop merged pool: {len(fused_texts)} candidates from {len(sub_queries)} sub-queries.")
-
-        final_texts, final_metas = fused_texts, fused_metas
-        if fused_texts:
-            from flashrank import RerankRequest
-            passages = [{"id": i, "text": t, "meta": fused_metas[i]} for i, t in enumerate(fused_texts)]
-            rr = RerankRequest(query=question, passages=passages)
-            results = sorted(ranker.rerank(rr), key=lambda x: x["score"], reverse=True)
-            final_texts = [r["text"] for r in results[:settings["retriever_k"]]]
-            final_metas = []
-            for r in results[:settings["retriever_k"]]:
-                m = r["meta"]
-                m["score"] = float(r["score"])
-                final_metas.append(m)
-            print(f"  Re-ranked to top {len(final_texts)} documents.")
+        final_texts, final_metas, expanded_count = retriever_engine.rerank_and_expand(
+            query=question,
+            candidates=unique_candidates,
+            top_k=settings["retriever_k"],
+            rerank_top_n=settings.get("rerank_top_n", 20),
+        )
 
         return {
             "sub_queries": sub_queries,
@@ -1092,6 +1059,7 @@ def build_app():
             "documents_metadata": final_metas,
             "latency_ms": int((time.time() - t0) * 1000),
         }
+
 
     workflow = StateGraph(GraphState)
     workflow.add_node("decompose_node", decompose)
