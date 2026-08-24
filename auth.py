@@ -270,6 +270,34 @@ def register_user(req: RegisterRequest) -> UserProfile:
     finally:
         conn.close()
 
+    # Synchronize to PostgreSQL if configured
+    try:
+        from app.db.database import get_db_session, is_postgres_configured
+        import asyncio
+        import concurrent.futures
+        from sqlalchemy import text
+        from app.db.repositories.user_repo import DEFAULT_TENANT_ID
+
+        if is_postgres_configured():
+            async def sync_pg_user():
+                async with get_db_session() as s:
+                    await s.execute(
+                        text("""
+                            INSERT INTO users (id, tenant_id, username, email, name, password_hash, salt, role, is_active, daily_request_limit)
+                            VALUES (:uid, :tid, :uname, :email, :name, :hash, :salt, :role, true, :limit)
+                            ON CONFLICT (id) DO UPDATE SET username = :uname, email = :email, role = :role
+                        """),
+                        {"uid": user_id, "tid": DEFAULT_TENANT_ID, "uname": username, "email": email, "name": name, "hash": password_hash, "salt": salt, "role": role, "limit": daily_limit}
+                    )
+            try:
+                loop = asyncio.get_running_loop()
+                with concurrent.futures.ThreadPoolExecutor() as pool:
+                    pool.submit(asyncio.run, sync_pg_user()).result()
+            except RuntimeError:
+                asyncio.run(sync_pg_user())
+    except Exception:
+        pass
+
     return UserProfile(
         id=user_id,
         username=username,
@@ -283,6 +311,7 @@ def register_user(req: RegisterRequest) -> UserProfile:
         daily_request_limit=daily_limit,
         requests_today=0,
     )
+
 
 
 def authenticate_user(req: LoginRequest) -> UserProfile:

@@ -63,11 +63,31 @@ async def save_ingested_document(
     """
     kb_id = knowledge_base_id or await get_or_create_default_kb(session)
 
+    # Ensure user exists in PostgreSQL users table to satisfy foreign key constraint
+    if uploaded_by and uploaded_by not in ("shared", "default", "system"):
+        from app.db.models.user import User
+        u_check = await session.get(User, uploaded_by)
+        if not u_check:
+            stub_user = User(
+                id=uploaded_by,
+                tenant_id=DEFAULT_TENANT_ID,
+                username=uploaded_by,
+                email=f"{uploaded_by}@ridge.ai",
+                name=uploaded_by,
+                password_hash="",
+                salt="",
+                role="user",
+                is_active=True,
+                daily_request_limit=50,
+            )
+            session.add(stub_user)
+            await session.flush()
+
     # 1. Create Document
     doc = Document(
         id=uuid.uuid4(),
         knowledge_base_id=kb_id,
-        uploaded_by=uploaded_by,
+        uploaded_by=uploaded_by if uploaded_by not in ("shared", "default", "system") else None,
         filename=filename,
         mime_type=mime_type,
         file_size=file_size,
@@ -77,6 +97,7 @@ async def save_ingested_document(
         status="indexed",
         version=1,
     )
+
     session.add(doc)
     await session.flush()
 
