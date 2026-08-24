@@ -313,6 +313,7 @@ def ingest_document(text_or_url: str, original_filename: str | None = None, user
     if is_postgres_configured():
         try:
             import asyncio
+            import concurrent.futures
             embeddings_list = embedder.embed_documents([d.page_content for d in docs_to_index])
 
             async def _persist_pg_doc():
@@ -331,12 +332,15 @@ def ingest_document(text_or_url: str, original_filename: str | None = None, user
 
             try:
                 loop = asyncio.get_running_loop()
-                loop.create_task(_persist_pg_doc())
+                with concurrent.futures.ThreadPoolExecutor() as pool:
+                    pool.submit(asyncio.run, _persist_pg_doc()).result()
             except RuntimeError:
                 asyncio.run(_persist_pg_doc())
             print("  [PostgreSQL] Successfully saved document, chunks, and pgvector embeddings.")
         except Exception as pg_ingest_err:
-            print(f"  [PostgreSQL] Ingestion note: {pg_ingest_err}")
+            print(f"  [PostgreSQL] Ingestion error: {pg_ingest_err}")
+            raise pg_ingest_err
+
 
 
     # Extract & Index domain acronyms into glossary
@@ -360,11 +364,14 @@ def ingest_document(text_or_url: str, original_filename: str | None = None, user
                         )
                 try:
                     loop = asyncio.get_running_loop()
-                    loop.create_task(_persist_pg_glossary())
+                    with concurrent.futures.ThreadPoolExecutor() as pool:
+                        pool.submit(asyncio.run, _persist_pg_glossary()).result()
                 except RuntimeError:
                     asyncio.run(_persist_pg_glossary())
     except Exception as ge:
         print(f"Glossary indexing note: {ge}")
+
+
     
     # Generate suggestions in a background thread so ingestion returns immediately
     if doc_splits:
