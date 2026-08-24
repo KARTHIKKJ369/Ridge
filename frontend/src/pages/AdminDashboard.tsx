@@ -1298,94 +1298,100 @@ export const AdminDashboard: React.FC = () => {
                   </div>
                 )}
 
-                {/* Main Users Table */}
-                <table className="admin-full-table">
-                  <thead>
-                    <tr>
-                      <th style={{ width: 44, textAlign: 'center' }}>
-                        <div
-                          className={`admin-custom-checkbox ${
-                            filteredUsers.length > 0 &&
-                            filteredUsers.filter(u => u.role !== 'superadmin' && u.id !== currentUser?.id).length > 0 &&
-                            filteredUsers
-                              .filter(u => u.role !== 'superadmin' && u.id !== currentUser?.id)
-                              .every(u => selectedUserIds.has(u.id))
-                              ? 'checked'
-                              : ''
-                          }`}
-                          onClick={() => {
-                            const deletables = filteredUsers.filter(u => u.role !== 'superadmin' && u.id !== currentUser?.id);
-                            const allSelected = deletables.length > 0 && deletables.every(u => selectedUserIds.has(u.id));
-                            handleToggleSelectAllUsers(!allSelected, filteredUsers);
-                          }}
-                          title="Select all visible climbers"
-                        >
-                          {filteredUsers.length > 0 &&
-                            filteredUsers.filter(u => u.role !== 'superadmin' && u.id !== currentUser?.id).length > 0 &&
-                            filteredUsers
-                              .filter(u => u.role !== 'superadmin' && u.id !== currentUser?.id)
-                              .every(u => selectedUserIds.has(u.id)) && <Check size={12} />}
-                        </div>
-                      </th>
-                      <th>Climber</th>
-                      {isSuperAdmin && !tenantFilter && <th>Enterprise</th>}
-                      <th>Email</th>
-                      <th>Role</th>
-                      <th>Status</th>
-                      <th>Daily Limit</th>
-                      <th>Usage Today</th>
-                      <th style={{ textAlign: 'right' }}>Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {filteredUsers.length === 0 ? (
+                {/* Main Users Table with Horizontal Scroll Support */}
+                <div className="admin-table-scroll-wrap">
+                  <table className="admin-full-table">
+                    <thead>
                       <tr>
-                        <td colSpan={9} style={{ textAlign: 'center', padding: '40px 0', color: 'var(--recall-text-muted)' }}>
-                          No climbers found matching query.
-                        </td>
+                        <th style={{ width: 44, textAlign: 'center' }}>
+                          <div
+                            className={`admin-custom-checkbox ${
+                              filteredUsers.length > 0 &&
+                              filteredUsers.filter(u => u.role !== 'superadmin' && u.id !== currentUser?.id).length > 0 &&
+                              filteredUsers
+                                .filter(u => u.role !== 'superadmin' && u.id !== currentUser?.id)
+                                .every(u => selectedUserIds.has(u.id))
+                                ? 'checked'
+                                : ''
+                            }`}
+                            onClick={() => {
+                              const deletables = filteredUsers.filter(u => u.role !== 'superadmin' && u.id !== currentUser?.id);
+                              const allSelected = deletables.length > 0 && deletables.every(u => selectedUserIds.has(u.id));
+                              handleToggleSelectAllUsers(!allSelected, filteredUsers);
+                            }}
+                            title="Select all visible climbers"
+                          >
+                            {filteredUsers.length > 0 &&
+                              filteredUsers.filter(u => u.role !== 'superadmin' && u.id !== currentUser?.id).length > 0 &&
+                              filteredUsers
+                                .filter(u => u.role !== 'superadmin' && u.id !== currentUser?.id)
+                                .every(u => selectedUserIds.has(u.id)) && <Check size={12} />}
+                          </div>
+                        </th>
+                        <th>Climber</th>
+                        {isSuperAdmin && !tenantFilter && <th>Enterprise</th>}
+                        <th>Email</th>
+                        <th>Role</th>
+                        <th>Status</th>
+                        <th>Daily Limit</th>
+                        <th>Usage Today</th>
+                        <th style={{ textAlign: 'right' }}>Actions</th>
                       </tr>
-                    ) : (
-                      filteredUsers.map(u => {
-                        const isSelected = selectedUserIds.has(u.id);
-                        const isProtected = u.role === 'superadmin' || u.id === currentUser?.id;
+                    </thead>
+                    <tbody>
+                      {filteredUsers.length === 0 ? (
+                        <tr>
+                          <td colSpan={9} style={{ textAlign: 'center', padding: '40px 0', color: 'var(--recall-text-muted)' }}>
+                            No climbers found matching query.
+                          </td>
+                        </tr>
+                      ) : (
+                        filteredUsers.map(u => {
+                          const isSelected = selectedUserIds.has(u.id);
+                          const isProtected = u.role === 'superadmin' || u.id === currentUser?.id;
 
-                        return (
-                          <tr key={u.id} className={`${!u.is_active ? 'user-row-inactive' : ''} ${isSelected ? 'selected' : ''}`}>
-                            <td style={{ textAlign: 'center' }}>
-                              {!isProtected ? (
-                                <div
-                                  className={`admin-custom-checkbox ${isSelected ? 'checked' : ''}`}
-                                  onClick={() => handleToggleSelectUser(u.id)}
-                                >
-                                  {isSelected && <Check size={12} />}
-                                </div>
-                              ) : (
-                                <span style={{ opacity: 0.2 }}>—</span>
-                              )}
-                            </td>
+                          return (
+                            <tr key={u.id} className={`${!u.is_active ? 'user-row-inactive' : ''} ${isSelected ? 'selected' : ''}`}>
+                              <td style={{ textAlign: 'center' }}>
+                                {!isProtected ? (
+                                  <div
+                                    className={`admin-custom-checkbox ${isSelected ? 'checked' : ''}`}
+                                    onClick={() => handleToggleSelectUser(u.id)}
+                                  >
+                                    {isSelected && <Check size={12} />}
+                                  </div>
+                                ) : (
+                                  <span style={{ opacity: 0.2 }}>—</span>
+                                )}
+                              </td>
 
-                            <td>
-                              <div className="climber-cell">
-                                <div className="climber-avatar-circle">
-                                  {(u.name || u.username).charAt(0).toUpperCase()}
-                                </div>
-                                <div className="climber-names">
-                                  <span className="climber-name-text">{u.name || u.username}</span>
-                                  <span className="climber-username-text">@{u.username}</span>
-                                </div>
-                              </div>
-                            </td>
-
-                            {isSuperAdmin && !tenantFilter && (
                               <td>
-                                <span className="tenant-table-badge">
-                                  <Building2 size={12} />
-                                  <span>{u.tenant_name || 'Default'}</span>
+                                <div className="climber-cell">
+                                  <div className="climber-avatar-circle">
+                                    {(u.name || u.username).charAt(0).toUpperCase()}
+                                  </div>
+                                  <div className="climber-names">
+                                    <span className="climber-name-text" title={u.name || u.username}>{u.name || u.username}</span>
+                                    <span className="climber-username-text">@{u.username}</span>
+                                  </div>
+                                </div>
+                              </td>
+
+                              {isSuperAdmin && !tenantFilter && (
+                                <td>
+                                  <span className="tenant-table-badge">
+                                    <Building2 size={12} />
+                                    <span>{u.tenant_name || 'Default'}</span>
+                                  </span>
+                                </td>
+                              )}
+
+                              <td>
+                                <span className="user-email-text" title={u.email}>
+                                  {u.email}
                                 </span>
                               </td>
-                            )}
 
-                            <td>{u.email}</td>
 
                             <td>
                               {u.role === 'superadmin' ? (
@@ -1488,7 +1494,9 @@ export const AdminDashboard: React.FC = () => {
                 </table>
               </div>
             </div>
-          )}
+          </div>
+        )}
+
 
           {/* ================================================================ */}
           {/* TAB 3: KNOWLEDGE & DOCUMENT MANAGEMENT                          */}
@@ -1579,134 +1587,137 @@ export const AdminDashboard: React.FC = () => {
                   </div>
                 )}
 
-                {/* Documents Table */}
-                <table className="admin-full-table">
-                  <thead>
-                    <tr>
-                      <th style={{ width: 44, textAlign: 'center' }}>
-                        <div
-                          className={`admin-custom-checkbox ${
-                            filteredDocs.length > 0 &&
-                            filteredDocs.every(d => selectedDocIds.has(d.id))
-                              ? 'checked'
-                              : ''
-                          }`}
-                          onClick={() => {
-                            const allSelected = filteredDocs.length > 0 && filteredDocs.every(d => selectedDocIds.has(d.id));
-                            handleToggleSelectAllDocs(!allSelected, filteredDocs);
-                          }}
-                          title="Select all visible documents"
-                        >
-                          {filteredDocs.length > 0 && filteredDocs.every(d => selectedDocIds.has(d.id)) && <Check size={12} />}
-                        </div>
-                      </th>
-                      <th>Document</th>
-                      {isSuperAdmin && !tenantFilter && <th>Enterprise</th>}
-                      <th>Uploader</th>
-                      <th>Chunks</th>
-                      <th>Size</th>
-                      <th>Visibility</th>
-                      <th>Ingested</th>
-                      <th style={{ textAlign: 'right' }}>Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {filteredDocs.length === 0 ? (
+                {/* Documents Table with Horizontal Scroll Support */}
+                <div className="admin-table-scroll-wrap">
+                  <table className="admin-full-table">
+                    <thead>
                       <tr>
-                        <td colSpan={9} style={{ textAlign: 'center', padding: '40px 0', color: 'var(--recall-text-muted)' }}>
-                          No documents found matching query.
-                        </td>
+                        <th style={{ width: 44, textAlign: 'center' }}>
+                          <div
+                            className={`admin-custom-checkbox ${
+                              filteredDocs.length > 0 &&
+                              filteredDocs.every(d => selectedDocIds.has(d.id))
+                                ? 'checked'
+                                : ''
+                            }`}
+                            onClick={() => {
+                              const allSelected = filteredDocs.length > 0 && filteredDocs.every(d => selectedDocIds.has(d.id));
+                              handleToggleSelectAllDocs(!allSelected, filteredDocs);
+                            }}
+                            title="Select all visible documents"
+                          >
+                            {filteredDocs.length > 0 && filteredDocs.every(d => selectedDocIds.has(d.id)) && <Check size={12} />}
+                          </div>
+                        </th>
+                        <th>Document</th>
+                        {isSuperAdmin && !tenantFilter && <th>Enterprise</th>}
+                        <th>Uploader</th>
+                        <th>Chunks</th>
+                        <th>Size</th>
+                        <th>Visibility</th>
+                        <th>Ingested</th>
+                        <th style={{ textAlign: 'right' }}>Actions</th>
                       </tr>
-                    ) : (
-                      filteredDocs.map(doc => {
-                        const isSelected = selectedDocIds.has(doc.id);
-                        const fileSizeFormatted = doc.file_size > 1024 * 1024
-                          ? `${(doc.file_size / (1024 * 1024)).toFixed(2)} MB`
-                          : `${Math.round(doc.file_size / 1024)} KB`;
+                    </thead>
+                    <tbody>
+                      {filteredDocs.length === 0 ? (
+                        <tr>
+                          <td colSpan={9} style={{ textAlign: 'center', padding: '40px 0', color: 'var(--recall-text-muted)' }}>
+                            No documents found matching query.
+                          </td>
+                        </tr>
+                      ) : (
+                        filteredDocs.map(doc => {
+                          const isSelected = selectedDocIds.has(doc.id);
+                          const fileSizeFormatted = doc.file_size > 1024 * 1024
+                            ? `${(doc.file_size / (1024 * 1024)).toFixed(2)} MB`
+                            : `${Math.round(doc.file_size / 1024)} KB`;
 
-                        return (
-                          <tr key={doc.id} className={isSelected ? 'selected' : ''}>
-                            <td style={{ textAlign: 'center' }}>
-                              <div
-                                className={`admin-custom-checkbox ${isSelected ? 'checked' : ''}`}
-                                onClick={() => handleToggleSelectDoc(doc.id)}
-                              >
-                                {isSelected && <Check size={12} />}
-                              </div>
-                            </td>
-
-                            <td>
-                              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                                <div style={{ width: 28, height: 28, borderRadius: 6, background: 'var(--recall-accent-subtle)', color: 'var(--recall-accent)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                                  <FileText size={15} />
+                          return (
+                            <tr key={doc.id} className={isSelected ? 'selected' : ''}>
+                              <td style={{ textAlign: 'center' }}>
+                                <div
+                                  className={`admin-custom-checkbox ${isSelected ? 'checked' : ''}`}
+                                  onClick={() => handleToggleSelectDoc(doc.id)}
+                                >
+                                  {isSelected && <Check size={12} />}
                                 </div>
-                                <div style={{ display: 'flex', flexDirection: 'column' }}>
-                                  <span style={{ fontWeight: 600, color: 'var(--recall-text-primary)' }}>{doc.filename}</span>
-                                  <span style={{ fontSize: '0.7rem', color: 'var(--recall-text-muted)' }}>{doc.mime_type}</span>
-                                </div>
-                              </div>
-                            </td>
+                              </td>
 
-                            {isSuperAdmin && !tenantFilter && (
                               <td>
-                                <span className="tenant-table-badge">
-                                  <Building2 size={12} />
-                                  <span>{doc.tenant_name || 'Default'}</span>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: 10, maxWidth: 300 }}>
+                                  <div style={{ width: 28, height: 28, borderRadius: 6, background: 'var(--recall-accent-subtle)', color: 'var(--recall-accent)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                                    <FileText size={15} />
+                                  </div>
+                                  <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0, overflow: 'hidden' }}>
+                                    <span className="doc-filename-text" title={doc.filename}>{doc.filename}</span>
+                                    <span style={{ fontSize: '0.7rem', color: 'var(--recall-text-muted)' }}>{doc.mime_type}</span>
+                                  </div>
+                                </div>
+                              </td>
+
+                              {isSuperAdmin && !tenantFilter && (
+                                <td>
+                                  <span className="tenant-table-badge">
+                                    <Building2 size={12} />
+                                    <span>{doc.tenant_name || 'Default'}</span>
+                                  </span>
+                                </td>
+                              )}
+
+                              <td>
+                                <div style={{ display: 'flex', flexDirection: 'column' }}>
+                                  <span style={{ fontSize: '0.82rem', color: 'var(--recall-text-primary)' }} title={doc.uploader_name}>{doc.uploader_name}</span>
+                                  <span style={{ fontSize: '0.7rem', color: 'var(--recall-text-muted)' }}>@{doc.uploader_username}</span>
+                                </div>
+                              </td>
+
+                              <td>
+                                <span style={{ fontWeight: 700, fontFamily: 'var(--font-mono)' }}>{doc.chunk_count}</span>
+                                <span style={{ fontSize: '0.72rem', color: 'var(--recall-text-muted)', marginLeft: 4 }}>chunks</span>
+                              </td>
+
+                              <td>
+                                <span style={{ fontSize: '0.82rem', fontFamily: 'var(--font-mono)' }}>{fileSizeFormatted}</span>
+                              </td>
+
+                              <td>
+                                <button
+                                  className={`status-chip-btn ${doc.is_shared ? 'active' : 'neutral'}`}
+                                  onClick={() => handleToggleDocumentSharing(doc.id, doc.is_shared)}
+                                  title="Click to toggle between Enterprise Shared and Climber Private"
+                                >
+                                  {doc.is_shared ? <Globe size={12} /> : <Lock size={12} />}
+                                  <span>{doc.is_shared ? 'Shared' : 'Private'}</span>
+                                </button>
+                              </td>
+
+                              <td>
+                                <span style={{ fontSize: '0.74rem', color: 'var(--recall-text-muted)' }}>
+                                  {doc.created_at ? new Date(doc.created_at).toLocaleDateString() : '—'}
                                 </span>
                               </td>
-                            )}
 
-                            <td>
-                              <div style={{ display: 'flex', flexDirection: 'column' }}>
-                                <span style={{ fontSize: '0.82rem', color: 'var(--recall-text-primary)' }}>{doc.uploader_name}</span>
-                                <span style={{ fontSize: '0.7rem', color: 'var(--recall-text-muted)' }}>@{doc.uploader_username}</span>
-                              </div>
-                            </td>
-
-                            <td>
-                              <span style={{ fontWeight: 700, fontFamily: 'var(--font-mono)' }}>{doc.chunk_count}</span>
-                              <span style={{ fontSize: '0.72rem', color: 'var(--recall-text-muted)', marginLeft: 4 }}>chunks</span>
-                            </td>
-
-                            <td>
-                              <span style={{ fontSize: '0.82rem', fontFamily: 'var(--font-mono)' }}>{fileSizeFormatted}</span>
-                            </td>
-
-                            <td>
-                              <button
-                                className={`status-chip-btn ${doc.is_shared ? 'active' : 'neutral'}`}
-                                onClick={() => handleToggleDocumentSharing(doc.id, doc.is_shared)}
-                                title="Click to toggle between Enterprise Shared and Climber Private"
-                              >
-                                {doc.is_shared ? <Globe size={12} /> : <Lock size={12} />}
-                                <span>{doc.is_shared ? 'Shared' : 'Private'}</span>
-                              </button>
-                            </td>
-
-                            <td>
-                              <span style={{ fontSize: '0.74rem', color: 'var(--recall-text-muted)' }}>
-                                {doc.created_at ? new Date(doc.created_at).toLocaleDateString() : '—'}
-                              </span>
-                            </td>
-
-                            <td style={{ textAlign: 'right' }}>
-                              <button
-                                className="user-delete-action-btn"
-                                onClick={() => handleDeleteSingleDoc(doc.id, doc.filename)}
-                                title="Permanently delete document"
-                              >
-                                <Trash2 size={14} />
-                              </button>
-                            </td>
-                          </tr>
-                        );
-                      })
-                    )}
-                  </tbody>
-                </table>
+                              <td style={{ textAlign: 'right' }}>
+                                <button
+                                  className="user-delete-action-btn"
+                                  onClick={() => handleDeleteSingleDoc(doc.id, doc.filename)}
+                                  title="Permanently delete document"
+                                >
+                                  <Trash2 size={14} />
+                                </button>
+                              </td>
+                            </tr>
+                          );
+                        })
+                      )}
+                    </tbody>
+                  </table>
+                </div>
               </div>
             </div>
           )}
+
 
           {/* ================================================================ */}
           {/* TAB 4: FEEDBACK & INQUIRIES                                     */}

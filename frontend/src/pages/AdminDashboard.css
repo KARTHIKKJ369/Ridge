@@ -628,6 +628,12 @@
   overflow: hidden;
 }
 
+.admin-table-scroll-wrap {
+  width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
 .admin-toolbar-row {
   padding: 16px 20px;
   border-bottom: 1px solid var(--recall-border);
@@ -648,7 +654,9 @@
   background: var(--recall-surface-elevated);
   border: 1px solid var(--recall-border);
   border-radius: var(--radius-sm, 8px);
-  min-width: 280px;
+  flex: 1;
+  max-width: 380px;
+  min-width: 220px;
   transition: border-color var(--transition-fast);
 }
 
@@ -764,9 +772,10 @@
   color: #ffffff;
 }
 
-/* Full Width Table */
+/* Full Width Table with Horizontal Scroll Safety */
 .admin-full-table {
   width: 100%;
+  min-width: 840px;
   border-collapse: collapse;
   text-align: left;
 }
@@ -780,6 +789,7 @@
   color: var(--recall-text-muted);
   border-bottom: 1px solid var(--recall-border);
   font-weight: 700;
+  white-space: nowrap;
 }
 
 .admin-full-table td {
@@ -787,6 +797,7 @@
   font-size: 0.85rem;
   border-bottom: 1px solid var(--recall-border);
   vertical-align: middle;
+  white-space: nowrap;
 }
 
 .admin-full-table tr:hover {
@@ -814,16 +825,22 @@
   display: flex;
   align-items: center;
   justify-content: center;
+  flex-shrink: 0;
 }
 
 .climber-names {
   display: flex;
   flex-direction: column;
+  min-width: 0;
 }
 
 .climber-name-text {
   font-weight: 600;
   color: var(--recall-text-primary);
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .climber-username-text {
@@ -831,6 +848,25 @@
   color: var(--recall-text-muted);
   font-family: var(--font-mono);
 }
+
+.user-email-text {
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  display: block;
+}
+
+.doc-filename-text {
+  font-weight: 600;
+  color: var(--recall-text-primary);
+  max-width: 280px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  display: block;
+}
+
 
 /* --------------------------------------------------------------------------
    6. Institutions Tab (Grid & Table)
