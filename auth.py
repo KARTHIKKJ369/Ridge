@@ -124,8 +124,8 @@ def init_db():
                 admin_id = f"usr_{secrets.token_hex(8)}"
                 session.execute(
                     text("""
-                        INSERT INTO users (id, tenant_id, username, email, name, password_hash, salt, role, is_active, daily_request_limit)
-                        VALUES (:uid, :tid, 'admin', 'admin@ridge.ai', 'Ridge Administrator', :hash, :salt, 'admin', true, 999999)
+                        INSERT INTO users (id, tenant_id, username, email, name, password_hash, salt, role, is_active, daily_request_limit, created_at, updated_at)
+                        VALUES (:uid, :tid, 'admin', 'admin@ridge.ai', 'Ridge Administrator', :hash, :salt, 'admin', true, 999999, NOW(), NOW())
                         ON CONFLICT (username) DO NOTHING
                     """),
                     {"uid": admin_id, "tid": DEFAULT_TENANT_ID, "hash": pw_hash, "salt": salt}
@@ -239,12 +239,13 @@ def register_user(req: RegisterRequest) -> UserProfile:
 
             session.execute(
                 text("""
-                    INSERT INTO users (id, tenant_id, username, email, name, password_hash, salt, role, is_active, daily_request_limit)
-                    VALUES (:uid, :tid, :uname, :email, :name, :hash, :salt, :role, true, :limit)
+                    INSERT INTO users (id, tenant_id, username, email, name, password_hash, salt, role, is_active, daily_request_limit, created_at, updated_at)
+                    VALUES (:uid, :tid, :uname, :email, :name, :hash, :salt, :role, true, :limit, NOW(), NOW())
                 """),
                 {"uid": user_id, "tid": DEFAULT_TENANT_ID, "uname": username, "email": email, "name": name, "hash": password_hash, "salt": salt, "role": role, "limit": daily_limit}
             )
             session.commit()
+
     except Exception as e:
         err_msg = str(e).lower()
         if "username" in err_msg or "unique" in err_msg:

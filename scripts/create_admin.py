@@ -60,7 +60,7 @@ def create_or_update_admin(
                 session.execute(
                     text("""
                         UPDATE users
-                        SET username = :uname, email = :email, name = :name, password_hash = :hash, salt = :salt, role = :role, is_active = true, daily_request_limit = 999999
+                        SET username = :uname, email = :email, name = :name, password_hash = :hash, salt = :salt, role = :role, is_active = true, daily_request_limit = 999999, updated_at = NOW()
                         WHERE id = :uid
                     """),
                     {"uname": uname, "email": em, "name": name, "hash": pw_hash, "salt": salt, "role": role, "uid": user_id}
@@ -71,12 +71,13 @@ def create_or_update_admin(
                 user_id = f"usr_{secrets.token_hex(8)}"
                 session.execute(
                     text("""
-                        INSERT INTO users (id, tenant_id, username, email, name, password_hash, salt, role, is_active, daily_request_limit)
-                        VALUES (:uid, :tid, :uname, :email, :name, :hash, :salt, :role, true, 999999)
+                        INSERT INTO users (id, tenant_id, username, email, name, password_hash, salt, role, is_active, daily_request_limit, created_at, updated_at)
+                        VALUES (:uid, :tid, :uname, :email, :name, :hash, :salt, :role, true, 999999, NOW(), NOW())
                     """),
                     {"uid": user_id, "tid": DEFAULT_TENANT_ID, "uname": uname, "email": em, "name": name, "hash": pw_hash, "salt": salt, "role": role}
                 )
                 session.commit()
+
                 print(f"✅ Successfully created new admin account in PostgreSQL:")
                 print(f"   ID:       {user_id}")
                 print(f"   Username: {username}")
