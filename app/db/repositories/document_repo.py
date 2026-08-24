@@ -24,6 +24,20 @@ DEFAULT_KB_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 
 
 async def get_or_create_default_kb(session: AsyncSession) -> uuid.UUID:
+    from app.db.models.tenant import Tenant
+    t_res = await session.execute(select(Tenant).where(Tenant.id == DEFAULT_TENANT_ID))
+    tenant = t_res.scalar_one_or_none()
+    if not tenant:
+        tenant = Tenant(
+            id=DEFAULT_TENANT_ID,
+            name="Default Tenant",
+            slug="default",
+            plan="enterprise",
+            is_active=True,
+        )
+        session.add(tenant)
+        await session.flush()
+
     res = await session.execute(select(KnowledgeBase).where(KnowledgeBase.id == DEFAULT_KB_ID))
     kb = res.scalar_one_or_none()
     if not kb:
@@ -36,6 +50,7 @@ async def get_or_create_default_kb(session: AsyncSession) -> uuid.UUID:
         session.add(kb)
         await session.flush()
     return kb.id
+
 
 
 async def save_ingested_document(

@@ -132,5 +132,34 @@ async def init_db() -> None:
             # Create tables
             await conn.run_sync(Base.metadata.create_all)
             logger.info("  [PostgreSQL] Database tables & extensions initialized successfully.")
+
+        # Seed default tenant and KB
+        async with get_db_session() as session:
+            from app.db.models.tenant import Tenant
+            from app.db.models.knowledge_base import KnowledgeBase
+            from app.db.repositories.user_repo import DEFAULT_TENANT_ID
+
+            DEFAULT_KB_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
+            t_res = await session.execute(select(Tenant).where(Tenant.id == DEFAULT_TENANT_ID))
+            if not t_res.scalar_one_or_none():
+                session.add(Tenant(
+                    id=DEFAULT_TENANT_ID,
+                    name="Default Tenant",
+                    slug="default",
+                    plan="enterprise",
+                    is_active=True,
+                ))
+                await session.flush()
+
+            kb_res = await session.execute(select(KnowledgeBase).where(KnowledgeBase.id == DEFAULT_KB_ID))
+            if not kb_res.scalar_one_or_none():
+                session.add(KnowledgeBase(
+                    id=DEFAULT_KB_ID,
+                    tenant_id=DEFAULT_TENANT_ID,
+                    name="Default Knowledge Base",
+                    description="Primary system knowledge base",
+                ))
+                await session.flush()
     except Exception as e:
         logger.error(f"  [PostgreSQL] Database initialization warning: {e}")
+
