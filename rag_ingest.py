@@ -136,19 +136,41 @@ def semantic_chunk(
         # Too short to find meaningful boundaries
         return [text] if text.strip() else []
 
-    # ── 2. Compute before/after cosine sims at each candidate boundary ────────
-    sims: list[tuple[int, float]] = []   # (sentence_index, cosine_sim)
+    # ── 2. Batch compute before/after cosine sims at each candidate boundary ──
+    windows_before: list[str] = []
+    windows_after: list[str] = []
+    indices: list[int] = []
     for i in range(window, len(sentences) - window):
         before = " ".join(sentences[max(0, i - window): i])
         after  = " ".join(sentences[i: i + window])
-        try:
-            sim = _cosine_sim(embedder.embed_query(before), embedder.embed_query(after))
-        except Exception:
-            continue
-        sims.append((i, sim))
+        windows_before.append(before)
+        windows_after.append(after)
+        indices.append(i)
+
+    if not indices:
+        return [text]
+
+    all_texts = windows_before + windows_after
+    try:
+        if hasattr(embedder, "embed_documents"):
+            all_vecs = embedder.embed_documents(all_texts)
+        else:
+            all_vecs = [embedder.embed_query(t) for t in all_texts]
+    except Exception:
+        all_vecs = [embedder.embed_query(t) for t in all_texts]
+
+    n_pairs = len(indices)
+    before_vecs = all_vecs[:n_pairs]
+    after_vecs = all_vecs[n_pairs:]
+
+    sims: list[tuple[int, float]] = []
+    for idx, (b_vec, a_vec) in enumerate(zip(before_vecs, after_vecs)):
+        sim = _cosine_sim(b_vec, a_vec)
+        sims.append((indices[idx], sim))
 
     if not sims:
         return [text]
+
 
     # ── 3. Percentile-based breakpoint detection ──────────────────────────────
     sim_values = sorted(s for _, s in sims)
