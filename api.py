@@ -796,8 +796,8 @@ async def get_stats(user: UserProfile = Depends(get_current_user)):
             doc_stmt = select(func.count(Document.id))
             chunk_stmt = select(func.count(DocumentChunk.id))
         else:
-            doc_stmt = select(func.count(Document.id)).where(or_(Document.uploaded_by == user.id, Document.uploaded_by.is_(None), Document.uploaded_by == "default"))
-            chunk_stmt = select(func.count(DocumentChunk.id)).join(Document).where(or_(Document.uploaded_by == user.id, Document.uploaded_by.is_(None), Document.uploaded_by == "default"))
+            doc_stmt = select(func.count(Document.id)).where(Document.uploaded_by == user.id)
+            chunk_stmt = select(func.count(DocumentChunk.id)).join(Document).where(Document.uploaded_by == user.id)
         
         doc_count = (await session.execute(doc_stmt)).scalar() or 0
         chunk_count = (await session.execute(chunk_stmt)).scalar() or 0
@@ -821,7 +821,8 @@ async def get_kb_sources(all_users: bool = False, user: UserProfile = Depends(ge
         async with get_db_session() as session:
             stmt = select(Document).order_by(Document.created_at.desc())
             if not show_all:
-                stmt = stmt.where(or_(Document.uploaded_by == user.id, Document.uploaded_by.is_(None), Document.uploaded_by == "default"))
+                stmt = stmt.where(Document.uploaded_by == user.id)
+
             
             docs = (await session.execute(stmt)).scalars().all()
             if not docs:

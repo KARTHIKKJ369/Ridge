@@ -67,7 +67,7 @@ class PgvectorRetriever(BaseRetriever):
                 FROM document_chunks c
                 JOIN chunk_embeddings e ON c.id = e.chunk_id
                 JOIN documents d ON c.document_id = d.id
-                WHERE (CAST(:user_id AS VARCHAR) IS NULL OR d.uploaded_by = CAST(:user_id AS VARCHAR) OR d.uploaded_by = 'default' OR d.uploaded_by IS NULL)
+                WHERE (CAST(:user_id AS VARCHAR) IS NULL OR d.uploaded_by = CAST(:user_id AS VARCHAR))
                   AND (CAST(:source_filter AS VARCHAR) IS NULL OR d.filename = CAST(:source_filter AS VARCHAR) OR d.source_url = CAST(:source_filter AS VARCHAR) OR LOWER(d.filename) = LOWER(CAST(:source_filter AS VARCHAR)))
                 ORDER BY distance ASC
                 LIMIT :limit;
@@ -103,7 +103,8 @@ class PgvectorRetriever(BaseRetriever):
                     FROM document_chunks c
                     JOIN documents d ON c.document_id = d.id
                     WHERE c.search_vector @@ plainto_tsquery('english', :query)
-                      AND (CAST(:user_id AS VARCHAR) IS NULL OR d.uploaded_by = CAST(:user_id AS VARCHAR) OR d.uploaded_by = 'default' OR d.uploaded_by IS NULL)
+                      AND (CAST(:user_id AS VARCHAR) IS NULL OR d.uploaded_by = CAST(:user_id AS VARCHAR))
+
                       AND (CAST(:source_filter AS VARCHAR) IS NULL OR d.filename = CAST(:source_filter AS VARCHAR) OR d.source_url = CAST(:source_filter AS VARCHAR) OR LOWER(d.filename) = LOWER(CAST(:source_filter AS VARCHAR)))
                     ORDER BY rank_score DESC
                     LIMIT 30;
