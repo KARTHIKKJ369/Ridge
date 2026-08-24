@@ -32,7 +32,15 @@ services:
 
     volumes:
       - app_data:/app/data
+      - ./app:/app/app
+      - ./api.py:/app/api.py
+      - ./main.py:/app/main.py
+      - ./rag_ingest.py:/app/rag_ingest.py
+      - ./auth.py:/app/auth.py
+      - ./query_cache.py:/app/query_cache.py
+      - ./scripts:/app/scripts
     restart: unless-stopped
+
 
 volumes:
   pg_data:
