@@ -18,9 +18,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Create non-root user required by Hugging Face Spaces
 RUN useradd -m -u 1000 user
 
+# Install lightweight PyTorch CPU first to avoid downloading heavy 3GB+ CUDA wheels
+RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu
+
 # Install Python dependencies
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
+
 
 # Copy backend source files
 COPY *.py ./
