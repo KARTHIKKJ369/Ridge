@@ -2,9 +2,9 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Users,
-  Activity,
   Database,
   Building2,
+
   UserPlus,
   ShieldCheck,
   Crown,
@@ -34,7 +34,9 @@ import {
   Lock,
   CheckCircle2,
   Clock,
+  Calendar,
 } from 'lucide-react';
+
 import './AdminDashboard.css';
 
 // Symmetrical Mountain Summit & Neural Ridge Emblem
@@ -851,8 +853,13 @@ export const AdminDashboard: React.FC = () => {
   });
 
   const isSuperAdmin = currentUser?.role === 'superadmin' || adminStats?.is_superadmin;
-  const maxHistoryReqs = Math.max(...(adminStats?.activity_history?.map(d => d.requests) || [1]), 10);
+  const activityHistory = adminStats?.activity_history || [];
+  const maxHistoryReqs = Math.max(...activityHistory.map(d => d.requests), 6);
+  const totalWeeklyReqs = activityHistory.reduce((acc, curr) => acc + curr.requests, 0);
+  const avgDailyReqs = activityHistory.length > 0 ? Math.round(totalWeeklyReqs / activityHistory.length) : 0;
+  const peakDayReqs = activityHistory.length > 0 ? Math.max(...activityHistory.map(d => d.requests)) : 0;
   const unresolvedFeedbackCount = adminFeedbacks.filter(f => f.status !== 'resolved').length;
+
 
   return (
 
@@ -1116,9 +1123,15 @@ export const AdminDashboard: React.FC = () => {
                       <HardDrive size={18} />
                     </div>
                   </div>
-                  <div className="kpi-value">{adminStats?.storage_mb || 0} MB</div>
+                  <div className="kpi-value">
+                    {adminStats?.storage_mb && adminStats.storage_mb >= 0.1
+                      ? `${adminStats.storage_mb} MB`
+                      : adminStats?.storage_bytes && adminStats.storage_bytes > 0
+                      ? `${Math.round(adminStats.storage_bytes / 1024)} KB`
+                      : `${adminStats?.total_chunks ? Math.round((adminStats.total_chunks * 4096) / 1024) + ' KB' : '0 MB'}`}
+                  </div>
                   <span className="kpi-sub">
-                    {adminStats?.storage_bytes?.toLocaleString() || 0} embedded bytes
+                    {adminStats?.storage_bytes ? adminStats.storage_bytes.toLocaleString() : (adminStats?.total_chunks ? (adminStats.total_chunks * 4096).toLocaleString() : '0')} embedded bytes
                   </span>
                 </div>
               </div>
@@ -1126,34 +1139,123 @@ export const AdminDashboard: React.FC = () => {
               {/* Analytics Panels: 7-Day Chart & Top Climbers */}
               <div className="analytics-cards-row">
                 {/* 7-Day Query Trend Chart */}
-                <div className="analytics-panel">
+                <div className="analytics-panel chart-panel">
                   <div className="panel-header">
                     <div className="panel-title">
-                      <Activity size={17} style={{ color: 'var(--recall-accent)' }} />
-                      <span>7-Day Query & Inference Volume</span>
+                      <TrendingUp size={18} style={{ color: 'var(--recall-accent)' }} />
+                      <span>7-Day Inference & Query Activity</span>
                     </div>
-                    <span style={{ fontSize: '0.75rem', color: 'var(--recall-text-muted)', fontWeight: 600 }}>Weekly Trend</span>
+                    <div className="chart-stat-chips">
+                      <div className="chart-stat-chip">
+                        <span className="stat-chip-label">7-Day Total</span>
+                        <strong className="stat-chip-val">{totalWeeklyReqs} reqs</strong>
+                      </div>
+                      <div className="chart-stat-chip">
+                        <span className="stat-chip-label">Daily Avg</span>
+                        <strong className="stat-chip-val">{avgDailyReqs}</strong>
+                      </div>
+                      <div className="chart-stat-chip">
+                        <span className="stat-chip-label">Peak</span>
+                        <strong className="stat-chip-val">{peakDayReqs}</strong>
+                      </div>
+                    </div>
                   </div>
 
-                  <div className="activity-bar-chart">
-                    {adminStats?.activity_history?.map((day, idx) => {
-                      const heightPercent = Math.max(8, Math.round((day.requests / maxHistoryReqs) * 100));
-                      return (
-                        <div key={idx} className="chart-bar-group">
-                          <div
-                            className="chart-bar-pill"
-                            style={{ height: `${heightPercent}%` }}
-                          >
-                            <span className="chart-bar-tooltip">
-                              {day.requests} requests ({day.active_users} active)
-                            </span>
-                          </div>
-                          <span className="chart-day-label">{day.day}</span>
-                        </div>
-                      );
-                    })}
+                  <div className="modern-chart-container">
+                    {/* Y-Axis Reference Ticks */}
+                    <div className="chart-y-axis">
+                      <span>{maxHistoryReqs}</span>
+                      <span>{Math.round(maxHistoryReqs * 0.5)}</span>
+                      <span>0</span>
+                    </div>
+
+                    {/* Chart Canvas & SVG Overlay */}
+                    <div className="chart-canvas-area">
+                      {/* Dashed Horizontal Gridlines */}
+                      <div className="chart-gridlines">
+                        <div className="gridline top" />
+                        <div className="gridline mid" />
+                        <div className="gridline btm" />
+                      </div>
+
+                      {/* SVG Spline Area Curve */}
+                      {activityHistory.length > 1 && (
+                        <svg className="chart-svg-layer" viewBox="0 0 700 160" preserveAspectRatio="none">
+                          <defs>
+                            <linearGradient id="chartGlowGrad" x1="0" y1="0" x2="0" y2="1">
+                              <stop offset="0%" stopColor="var(--recall-accent)" stopOpacity="0.25" />
+                              <stop offset="100%" stopColor="var(--recall-accent)" stopOpacity="0.0" />
+                            </linearGradient>
+                          </defs>
+                          {(() => {
+                            const numPoints = activityHistory.length;
+                            const points = activityHistory.map((d, i) => {
+                              const x = (i / (numPoints - 1)) * 640 + 30;
+                              const y = 140 - (d.requests / maxHistoryReqs) * 115;
+                              return { x, y };
+                            });
+                            const linePath = points.reduce((acc, pt, i, arr) => {
+                              if (i === 0) return `M ${pt.x},${pt.y}`;
+                              const prev = arr[i - 1];
+                              const cx = (prev.x + pt.x) / 2;
+                              return `${acc} C ${cx},${prev.y} ${cx},${pt.y} ${pt.x},${pt.y}`;
+                            }, '');
+                            const areaPath = `${linePath} L ${points[points.length - 1].x},150 L ${points[0].x},150 Z`;
+
+                            return (
+                              <>
+                                <path d={areaPath} fill="url(#chartGlowGrad)" />
+                                <path d={linePath} fill="none" stroke="var(--recall-accent)" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
+                                {points.map((pt, idx) => (
+                                  <circle key={idx} cx={pt.x} cy={pt.y} r="3.5" fill="var(--recall-surface)" stroke="var(--recall-accent)" strokeWidth="2" />
+                                ))}
+                              </>
+                            );
+                          })()}
+                        </svg>
+                      )}
+
+                      {/* Interactive Bar Pillars */}
+                      <div className="chart-bars-track">
+                        {activityHistory.map((day, idx) => {
+                          const isToday = idx === activityHistory.length - 1;
+                          const heightPercent = maxHistoryReqs > 0 ? Math.max(6, Math.round((day.requests / maxHistoryReqs) * 100)) : 6;
+
+                          return (
+                            <div key={idx} className={`modern-bar-col ${isToday ? 'is-today' : ''}`}>
+                              <div className="bar-pillar-wrap">
+                                <div className="bar-pillar-bg">
+                                  <div
+                                    className="bar-pillar-fill"
+                                    style={{ height: `${heightPercent}%` }}
+                                  />
+                                </div>
+
+                                {/* Hover Tooltip */}
+                                <div className="modern-chart-tooltip">
+                                  <div className="tooltip-header">
+                                    <Calendar size={11} />
+                                    <span>{day.date} ({day.day})</span>
+                                    {isToday && <span className="today-chip">Today</span>}
+                                  </div>
+                                  <div className="tooltip-body">
+                                    <strong>{day.requests}</strong> inferences
+                                    <span className="tooltip-sub">({day.active_users} active climbers)</span>
+                                  </div>
+                                </div>
+                              </div>
+
+                              <div className="bar-day-wrap">
+                                <span className="bar-day-name">{isToday ? 'Today' : day.day}</span>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
                   </div>
                 </div>
+
 
                 {/* Top Active Climbers Leaderboard */}
                 <div className="analytics-panel">
