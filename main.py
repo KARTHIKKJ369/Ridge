@@ -257,78 +257,74 @@ def ingest_document(
 
     # Check if URL
     is_url = False
-    try:
-        result = urllib.parse.urlparse(text_or_url)
-        is_url = all([result.scheme, result.netloc])
-    except Exception:
-        pass
+    # --- Structure-Aware Parsing, AST Generation & Semantic Chunking ---
+    from rag_ingest import ingest_document_structure_aware
 
-    raw_splits = []
-    if is_url:
-        print("Detected URL, using rag_ingest...")
-        raw_splits = load_and_split_source(text_or_url)
-    elif os.path.exists(text_or_url):
-        print("Detected local file, using rag_ingest...")
-        raw_splits = load_and_split_source(text_or_url)
-    else:
-        print("Detected raw text, processing...")
-        doc = Document(page_content=text_or_url, metadata={"source": original_filename or "user_input"})
-        raw_splits = _sub_chunk([doc], 1500, 200)
-
-    # Attach original filename and user_id to all raw splits
-    for d in raw_splits:
-        d.metadata["user_id"] = user_id
-        if original_filename:
-            d.metadata["source"] = original_filename
-            d.metadata["h1"] = original_filename
-
-    # --- Semantic Chunking: re-split by embedding gradient for topic-aware boundaries ---
-    try:
-        embedder = get_embeddings()
-        doc_splits = semantic_split_documents(raw_splits, embedder, percentile=25.0, max_chars=1800)
-        print(f"  Semantic chunking: {len(raw_splits)} raw -> {len(doc_splits)} semantic parent chunks.")
-    except Exception as sc_err:
-        print(f"  Semantic chunking fallback (char-split): {sc_err}")
-        doc_splits = raw_splits
-
-    # --- Small-to-Big: create child chunks for indexing, keep parents in store ---
-    from parent_store import make_parent_id, save_parents
-    from langchain_text_splitters import RecursiveCharacterTextSplitter
-
-    child_splitter = RecursiveCharacterTextSplitter(
-        chunk_size=400,
-        chunk_overlap=60,
-        separators=["\n\n", "\n", ".", " ", ""],
+    doc_ast, parent_docs, child_docs, lineage_info = ingest_document_structure_aware(
+        source=text_or_url,
+        original_filename=original_filename,
+        user_id=user_id,
+        target_chunk_size=1200,
+        chunk_overlap=150,
+        child_chunk_size=350,
+        child_overlap=50,
     )
 
+    print(f"  Document Intelligence: {lineage_info['parser_name']} extracted {len(parent_docs)} parents, {len(child_docs)} children, {lineage_info['table_count']} tables, {lineage_info['figure_count']} figures.")
+
+    # --- Small-to-Big Parent Records Preparation ---
+    from parent_store import make_parent_id, save_parents
+
     parent_records = []
-    child_docs = []
-
-    for parent_doc in doc_splits:
-        parent_doc.metadata["user_id"] = user_id
-        source = parent_doc.metadata.get("source", "unknown")
+    for parent_doc in parent_docs:
+        source = parent_doc.metadata.get("source", original_filename or "unknown")
         pid = make_parent_id(parent_doc.page_content, source)
-        parent_records.append({"id": pid, "text": parent_doc.page_content, "metadata": parent_doc.metadata})
+        parent_records.append({
+            "id": pid,
+            "text": parent_doc.page_content,
+            "metadata": parent_doc.metadata,
+        })
 
-        # Split parent into child chunks
-        children = child_splitter.split_documents([parent_doc])
-        for child in children:
-            child.metadata = {**parent_doc.metadata, "parent_id": pid, "user_id": user_id}
-            child_docs.append(child)
-
-    # Save parents to persistent JSON/SQLite store for S2B lookup
+    # Save parents to persistent store for S2B lookup
     try:
         save_parents(parent_records)
     except Exception as ps_err:
         print(f"  ParentStore note: {ps_err}")
 
-    docs_to_index = child_docs if child_docs else doc_splits
-    print(f"  Small-to-Big: {len(doc_splits)} parent chunks -> {len(docs_to_index)} child chunks indexed for user {user_id}.")
+    # Prepare structured tables and figures for relational persistence
+    table_records = []
+    for tbl in doc_ast.all_tables():
+        table_records.append({
+            "page_number": tbl.page_number,
+            "caption": tbl.caption,
+            "section_path": tbl.section_path,
+            "headers": tbl.headers,
+            "rows": tbl.rows,
+            "markdown": tbl.generate_markdown(),
+            "search_text": tbl.get_search_text(),
+            "metadata": tbl.metadata,
+        })
+
+    figure_records = []
+    for fig in doc_ast.all_figures():
+        figure_records.append({
+            "page_number": fig.page_number,
+            "caption": fig.caption,
+            "section_path": fig.section_path,
+            "image_path": fig.image_path,
+            "ocr_text": fig.ocr_text,
+            "description": fig.description,
+            "nearby_text": fig.nearby_text,
+            "metadata": fig.metadata,
+        })
+
+    docs_to_index = child_docs if child_docs else parent_docs
 
     # Ingest directly into PostgreSQL with pgvector & TSVector
     from app.db.database import is_postgres_configured, get_db_session
     from app.db.repositories import document_repo, glossary_repo, tenant_repo
 
+    embedder = get_embeddings()
     if is_postgres_configured():
         try:
             import asyncio
@@ -352,6 +348,9 @@ def ingest_document(
                         embedding_model_name=os.getenv("EMBEDDING_MODEL", "BAAI/bge-large-en-v1.5"),
                         is_shared=is_shared,
                         knowledge_base_id=kb_id,
+                        ingestion_run_info=lineage_info,
+                        table_records=table_records,
+                        figure_records=figure_records,
                     )
 
             try:
@@ -360,7 +359,7 @@ def ingest_document(
                     pool.submit(asyncio.run, _persist_pg_doc()).result()
             except RuntimeError:
                 asyncio.run(_persist_pg_doc())
-            print("  [PostgreSQL] Successfully saved document, chunks, and pgvector embeddings.")
+            print("  [PostgreSQL] Successfully saved document, chunks, structured tables/figures, and pgvector embeddings.")
         except Exception as pg_ingest_err:
             print(f"  [PostgreSQL] Ingestion error: {pg_ingest_err}")
             raise pg_ingest_err
@@ -368,12 +367,14 @@ def ingest_document(
 
 
 
+
     # Extract & Index domain acronyms into glossary
     try:
         from glossary import index_text_glossary, extract_acronyms_from_text
-        full_text = " ".join(d.page_content for d in doc_splits)
+        full_text = " ".join(d.page_content for d in parent_docs)
         source_name = original_filename or text_or_url
         index_text_glossary(full_text, source_name, user_id=user_id)
+
 
         # Dual-write to PostgreSQL glossary
         if is_postgres_configured():
@@ -399,15 +400,16 @@ def ingest_document(
 
     
     # Generate suggestions in a background thread so ingestion returns immediately
-    if doc_splits:
+    if parent_docs:
         try:
             import threading
-            context_text = " ".join(d.page_content for d in doc_splits[:3])[:1500]
+            context_text = " ".join(d.page_content for d in parent_docs[:3])[:1500]
             threading.Thread(target=generate_suggestions, args=(context_text,), daemon=True).start()
         except Exception as e:
             print(f"Error launching background suggestions: {e}")
 
     return {"status": "success", "chunks_added": len(docs_to_index)}
+
 
 
 

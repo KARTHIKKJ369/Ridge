@@ -141,7 +141,17 @@ async def init_db() -> None:
             await conn.execute(text("ALTER TABLE documents ADD COLUMN IF NOT EXISTS is_shared BOOLEAN DEFAULT FALSE NOT NULL;"))
             await conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS ix_tenants_slug ON tenants(slug);"))
 
+            # Idempotent Column Migrations for Document Intelligence & Ingestion Lineage
+            await conn.execute(text("ALTER TABLE document_chunks ADD COLUMN IF NOT EXISTS raw_content TEXT;"))
+            await conn.execute(text("ALTER TABLE document_chunks ADD COLUMN IF NOT EXISTS contextual_content TEXT;"))
+            await conn.execute(text("ALTER TABLE document_chunks ADD COLUMN IF NOT EXISTS content_type VARCHAR(32) DEFAULT 'text' NOT NULL;"))
+            await conn.execute(text("ALTER TABLE document_chunks ADD COLUMN IF NOT EXISTS is_boilerplate BOOLEAN DEFAULT FALSE NOT NULL;"))
+            await conn.execute(text("ALTER TABLE document_chunks ADD COLUMN IF NOT EXISTS duplicate_of UUID REFERENCES document_chunks(id) ON DELETE SET NULL;"))
+            await conn.execute(text("ALTER TABLE document_chunks ADD COLUMN IF NOT EXISTS ingestion_run_id UUID REFERENCES ingestion_runs(id) ON DELETE SET NULL;"))
+            await conn.execute(text("UPDATE document_chunks SET raw_content = content WHERE raw_content IS NULL;"))
+
             logger.info("  [PostgreSQL] Database tables & extensions initialized successfully.")
+
 
         # Seed default tenant and KB
         async with get_db_session() as session:

@@ -17,6 +17,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.models.document import Document
 from app.db.models.document_chunk import DocumentChunk
 from app.db.models.embedding import ChunkEmbedding
+from app.db.models.ingestion_run import IngestionRun
+from app.db.models.document_table import DocumentTable
+from app.db.models.document_figure import DocumentFigure
 from app.db.models.knowledge_base import KnowledgeBase
 from app.db.repositories.user_repo import DEFAULT_TENANT_ID
 
@@ -35,7 +38,6 @@ async def get_or_create_default_kb(session: AsyncSession) -> uuid.UUID:
         session.add(tenant)
         await session.flush()
 
-
     res = await session.execute(select(KnowledgeBase).where(KnowledgeBase.id == DEFAULT_KB_ID))
     kb = res.scalar_one_or_none()
     if not kb:
@@ -48,7 +50,6 @@ async def get_or_create_default_kb(session: AsyncSession) -> uuid.UUID:
         session.add(kb)
         await session.flush()
     return kb.id
-
 
 
 async def save_ingested_document(
@@ -66,14 +67,19 @@ async def save_ingested_document(
     content_hash: str = "",
     is_shared: bool = False,
     knowledge_base_id: Optional[uuid.UUID] = None,
+    ingestion_run_info: Optional[dict] = None,
+    table_records: Optional[list[dict]] = None,
+    figure_records: Optional[list[dict]] = None,
 ) -> Document:
     """
-    Saves the complete document hierarchy in a single transaction:
+    Saves the complete document hierarchy and lineage in a single transaction:
     1. Document row
-    2. Parent chunks in document_chunks
-    3. Child chunks with parent_chunk_id FK
-    4. Chunk embeddings in chunk_embeddings
-    5. Generates tsvector search vectors for lexical search
+    2. IngestionRun lineage record
+    3. Parent chunks in document_chunks
+    4. Child chunks with parent_chunk_id FK, raw_content, and contextual_content
+    5. Chunk embeddings in chunk_embeddings
+    6. Structured DocumentTable and DocumentFigure records
+    7. Generates tsvector search vectors for lexical search
     """
     kb_id = knowledge_base_id or await get_or_create_default_kb(session)
 
@@ -112,13 +118,36 @@ async def save_ingested_document(
         is_shared=is_shared,
         version=1,
     )
-
-
     session.add(doc)
     await session.flush()
 
-    # 2. Map & Create Parent Chunks
-    # parent_records: list of {"id": pid_str, "text": content, "metadata": dict}
+    # 2. Record Ingestion Lineage
+    run_id = None
+    if ingestion_run_info:
+        run_obj = IngestionRun(
+            id=uuid.uuid4(),
+            document_id=doc.id,
+            parser_name=ingestion_run_info.get("parser_name", "unified"),
+            parser_version=ingestion_run_info.get("parser_version", "1.0.0"),
+            chunker_version=ingestion_run_info.get("chunker_version", "structure_v1"),
+            embedding_model=embedding_model_name,
+            contextualization_model=ingestion_run_info.get("contextualization_model"),
+            processing_started_at=ingestion_run_info.get("started_at", datetime.now(timezone.utc)),
+            processing_finished_at=datetime.now(timezone.utc),
+            processing_time_ms=ingestion_run_info.get("processing_time_ms", 0),
+            chunk_count=len(child_docs),
+            parent_count=len(parent_records),
+            table_count=len(table_records or []),
+            figure_count=len(figure_records or []),
+            ocr_page_count=ingestion_run_info.get("ocr_page_count", 0),
+            dedup_removed_count=ingestion_run_info.get("dedup_removed_count", 0),
+            status="completed",
+        )
+        session.add(run_obj)
+        await session.flush()
+        run_id = run_obj.id
+
+    # 3. Map & Create Parent Chunks
     pid_to_uuid: dict[str, uuid.UUID] = {}
     for idx, p in enumerate(parent_records):
         p_uuid = uuid.uuid4()
@@ -129,18 +158,21 @@ async def save_ingested_document(
             id=p_uuid,
             document_id=doc.id,
             parent_chunk_id=None,
+            ingestion_run_id=run_id,
             chunk_index=idx,
             content=p["text"],
+            raw_content=p["text"],
             heading=str(p_meta.get("h1", "")),
             section=str(p_meta.get("h2", "")),
             page_number=p_meta.get("page"),
+            content_type=p_meta.get("content_type", "text"),
             metadata_json={**p_meta, "is_parent": True, "source": filename or source_url},
         )
         session.add(parent_chunk)
 
     await session.flush()
 
-    # 3. Create Child Chunks & Vector Embeddings
+    # 4. Create Child Chunks & Vector Embeddings
     for idx, (child_doc, emb_vec) in enumerate(zip(child_docs, embeddings_list)):
         c_meta = dict(getattr(child_doc, "metadata", {}) or {})
         c_text = getattr(child_doc, "page_content", str(child_doc))
@@ -152,8 +184,12 @@ async def save_ingested_document(
             id=uuid.uuid4(),
             document_id=doc.id,
             parent_chunk_id=parent_db_uuid,
+            ingestion_run_id=run_id,
             chunk_index=idx,
             content=c_text,
+            raw_content=c_meta.get("raw_content", c_text),
+            contextual_content=c_meta.get("contextual_content"),
+            content_type=c_meta.get("content_type", "text"),
             heading=str(c_meta.get("h1", "")),
             section=str(c_meta.get("h2", "")),
             page_number=c_meta.get("page"),
@@ -162,7 +198,7 @@ async def save_ingested_document(
         session.add(child_chunk)
         await session.flush()
 
-        # 4. Add Chunk Embedding
+        # Add Chunk Embedding
         chunk_emb = ChunkEmbedding(
             id=uuid.uuid4(),
             chunk_id=child_chunk.id,
@@ -171,11 +207,47 @@ async def save_ingested_document(
         )
         session.add(chunk_emb)
 
-    # 5. Populate search_vector tsvectors for lexical FTS
+    # 5. Persist Structured Tables if any
+    if table_records:
+        for t_idx, t_data in enumerate(table_records):
+            tbl = DocumentTable(
+                id=uuid.uuid4(),
+                document_id=doc.id,
+                page_number=t_data.get("page_number", 1),
+                table_index=t_idx,
+                caption=t_data.get("caption", ""),
+                section_path=t_data.get("section_path", ""),
+                headers_json=t_data.get("headers", []),
+                rows_json=t_data.get("rows", []),
+                markdown_text=t_data.get("markdown", ""),
+                search_text=t_data.get("search_text", ""),
+                metadata_json=t_data.get("metadata", {}),
+            )
+            session.add(tbl)
+
+    # 6. Persist Structured Figures if any
+    if figure_records:
+        for f_idx, f_data in enumerate(figure_records):
+            fig = DocumentFigure(
+                id=uuid.uuid4(),
+                document_id=doc.id,
+                page_number=f_data.get("page_number", 1),
+                figure_index=f_idx,
+                caption=f_data.get("caption", ""),
+                section_path=f_data.get("section_path", ""),
+                image_path=f_data.get("image_path", ""),
+                ocr_text=f_data.get("ocr_text", ""),
+                description=f_data.get("description", ""),
+                nearby_text=f_data.get("nearby_text", ""),
+                metadata_json=f_data.get("metadata", {}),
+            )
+            session.add(fig)
+
+    # 7. Populate search_vector tsvectors for lexical FTS
     await session.execute(
         text("""
             UPDATE document_chunks
-            SET search_vector = to_tsvector('english', coalesce(heading, '') || ' ' || coalesce(section, '') || ' ' || content)
+            SET search_vector = to_tsvector('english', coalesce(heading, '') || ' ' || coalesce(section, '') || ' ' || coalesce(contextual_content, '') || ' ' || content)
             WHERE document_id = :doc_id
         """),
         {"doc_id": doc.id}
@@ -183,6 +255,7 @@ async def save_ingested_document(
 
     await session.flush()
     return doc
+
 
 
 async def get_kb_sources_summary(

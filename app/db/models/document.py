@@ -56,7 +56,11 @@ class Document(Base):
     knowledge_base = relationship("KnowledgeBase", back_populates="documents")
     uploader = relationship("User", back_populates="documents")
     chunks = relationship("DocumentChunk", back_populates="document", cascade="all, delete-orphan")
+    ingestion_runs = relationship("IngestionRun", back_populates="document", cascade="all, delete-orphan")
+    tables = relationship("DocumentTable", back_populates="document", cascade="all, delete-orphan")
+    figures = relationship("DocumentFigure", back_populates="document", cascade="all, delete-orphan")
     glossary_terms = relationship("GlossaryTerm", back_populates="source_document")
+
 
     __table_args__ = (
         Index("ix_documents_kb_filename", "knowledge_base_id", "filename"),

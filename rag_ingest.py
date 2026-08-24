@@ -783,6 +783,115 @@ def load_and_split_source(
     )
 
 
+def ingest_document_structure_aware(
+    source: str,
+    original_filename: Optional[str] = None,
+    user_id: Optional[str] = None,
+    target_chunk_size: int = 1200,
+    chunk_overlap: int = 150,
+    child_chunk_size: int = 350,
+    child_overlap: int = 50,
+):
+    """
+    Parses any document source via UnifiedDocumentParser into a DocumentAST,
+    then executes element-aware semantic chunking into (parent_docs, child_docs)
+    and returns comprehensive lineage telemetry.
+    """
+    import time
+    from app.document_intelligence.parser import get_document_parser
+    from app.document_intelligence.chunker import StructureAwareChunker
+    from app.retrieval.contextual import get_contextual_engine
+
+    t0 = time.time()
+    parser = get_document_parser()
+    doc_ast, parser_name, parser_version = parser.parse(source, original_filename=original_filename)
+
+    chunker = StructureAwareChunker(
+        target_chunk_size=target_chunk_size,
+        chunk_overlap=chunk_overlap,
+        child_chunk_size=child_chunk_size,
+        child_overlap=child_overlap,
+    )
+    parent_chunks, child_chunks = chunker.chunk_document(doc_ast)
+
+    # Deduplication & Boilerplate Stripping (SHA-256 + SimHash)
+    from app.document_intelligence.dedup import get_deduplicator
+    deduplicator = get_deduplicator()
+    child_chunks, dedup_removed_count = deduplicator.deduplicate_chunks(child_chunks)
+
+
+    # Contextual Retrieval Enrichment
+    contextual_engine = get_contextual_engine()
+    doc_full_text = doc_ast.to_markdown()
+    child_chunks = contextual_engine.enrich_chunks(
+        chunks=child_chunks,
+        doc_text=doc_full_text,
+        doc_title=original_filename or doc_ast.filename,
+    )
+
+    # Hierarchical Document Summary
+    from app.document_intelligence.summarizer import get_hierarchical_summarizer
+    summarizer = get_hierarchical_summarizer()
+    summary_chunk = summarizer.generate_document_summary(doc_ast)
+    if summary_chunk:
+        child_chunks.append(summary_chunk)
+
+    # Convert StructuredChunks to LangChain Document objects with lineage & metadata
+    parent_docs = []
+
+    for p in parent_chunks:
+        meta = {
+            **p.metadata,
+            "chunk_id": p.id,
+            "is_parent": True,
+            "content_type": p.content_type,
+            "raw_content": p.raw_content,
+            "page": p.page_number,
+            "h1": p.heading,
+            "h2": p.section,
+            "section_path": p.section_path,
+            "user_id": user_id,
+        }
+        parent_docs.append(Document(page_content=p.content, metadata=meta))
+
+    child_docs = []
+    for c in child_chunks:
+        meta = {
+            **c.metadata,
+            "chunk_id": c.id,
+            "parent_id": c.parent_id,
+            "is_parent": False,
+            "content_type": c.content_type,
+            "raw_content": c.raw_content,
+            "contextual_content": c.contextual_content,
+            "page": c.page_number,
+            "h1": c.heading,
+            "h2": c.section,
+            "section_path": c.section_path,
+            "user_id": user_id,
+        }
+        child_docs.append(Document(page_content=c.content, metadata=meta))
+
+    elapsed_ms = int((time.time() - t0) * 1000)
+    lineage_info = {
+        "parser_name": parser_name,
+        "parser_version": parser_version,
+        "chunker_version": chunker.version,
+        "contextualization_model": "contextual_engine_v1",
+        "processing_time_ms": elapsed_ms,
+        "chunk_count": len(child_docs),
+        "parent_count": len(parent_docs),
+        "table_count": len(doc_ast.all_tables()),
+        "figure_count": len(doc_ast.all_figures()),
+        "ocr_page_count": doc_ast.ocr_page_count(),
+        "dedup_removed_count": dedup_removed_count,
+    }
+
+
+    return doc_ast, parent_docs, child_docs, lineage_info
+
+
+
 def load_and_split_sources(sources: list[str], **kwargs) -> list[Document]:
     all_splits = []
     for source in sources:

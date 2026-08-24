@@ -15,6 +15,9 @@ from app.db.models.retrieval import RetrievalRun, RetrievalResult
 from app.db.models.glossary import GlossaryTerm
 from app.db.models.query_cache import QueryCache
 from app.db.models.feedback import Feedback
+from app.db.models.ingestion_run import IngestionRun
+from app.db.models.document_table import DocumentTable
+from app.db.models.document_figure import DocumentFigure
 
 __all__ = [
     "Tenant",
@@ -24,6 +27,9 @@ __all__ = [
     "Document",
     "DocumentChunk",
     "ChunkEmbedding",
+    "IngestionRun",
+    "DocumentTable",
+    "DocumentFigure",
     "Conversation",
     "Message",
     "MessageCitation",
@@ -33,4 +39,5 @@ __all__ = [
     "QueryCache",
     "Feedback",
 ]
+
 

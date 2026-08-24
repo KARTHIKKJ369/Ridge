@@ -40,15 +40,28 @@ class UnifiedRetriever(BaseRetriever):
         k: int = 50,
     ) -> list[RetrievalCandidate]:
         """
-        Executes hybrid vector + full-text search with SQL Reciprocal Rank Fusion.
+        Executes query-aware routed hybrid vector + full-text search with SQL Reciprocal Rank Fusion.
         """
-        return await self._pg_retriever.retrieve(
+        from app.retrieval.router import get_query_router
+        router = get_query_router()
+        plan = router.route_query(query)
+
+        effective_k = max(k, plan.top_k_candidates)
+
+        candidates = await self._pg_retriever.retrieve(
             query=query,
             user_id=user_id,
             tenant_id=tenant_id,
             source_filter=source_filter,
-            k=k,
+            k=effective_k,
         )
+
+        # Tag candidates with routing metadata
+        for c in candidates:
+            c.metadata["query_archetype"] = plan.archetype.value
+
+        return candidates
+
 
 
 
@@ -78,18 +91,18 @@ class UnifiedRetriever(BaseRetriever):
         rerank_req = RerankRequest(query=query, passages=passages)
         results = sorted(ranker.rerank(rerank_req), key=lambda x: x["score"], reverse=True)
 
-        reranked_texts = []
-        reranked_metas = []
-
-        for r in results[:top_k]:
-            reranked_texts.append(r["text"])
+        ranked_passages = []
+        for r in results:
             m = dict(r.get("meta", {}) or {})
             m["score"] = float(r["score"])
-            reranked_metas.append(m)
+            ranked_passages.append({
+                "text": r["text"],
+                "meta": m,
+                "score": float(r["score"]),
+            })
 
-        # Small-to-Big Expansion: expand child chunks to their parents
-        from parent_store import expand_documents
-        exp_texts, exp_metas = expand_documents(reranked_texts, reranked_metas)
-        expanded_count = sum(1 for m in exp_metas if m.get("expanded_from_child"))
+        # Bounded Parent + Neighbor Expansion & Context Packing
+        from app.retrieval.context_packer import get_context_packer
+        packer = get_context_packer()
+        return packer.pack_context(ranked_passages, top_k=top_k)
 
-        return exp_texts, exp_metas, expanded_count
