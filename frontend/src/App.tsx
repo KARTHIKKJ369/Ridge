@@ -778,6 +778,8 @@ const getUserSessionStorageKey = (u: UserProfile | null) => {
 };
 
 const createFreshSession = (): ChatSession => ({
+
+
   id: Date.now().toString(),
   title: 'New Research Ascent',
   createdAt: Date.now(),
@@ -1652,7 +1654,7 @@ export default function App() {
   const [isArtifactsOpen, setIsArtifactsOpen] = useState(false);
   const [activeArtifactTab, setActiveArtifactTab] = useState<'trace' | 'knowledge' | 'grader'>('trace');
 
-  // Multi-Session Chat State (User-scoped and guaranteed to open to Home view)
+  // Multi-Session Chat State (User-scoped and persistent across reloads)
   const [sessions, setSessions] = useState<ChatSession[]>(() => {
     const initialUser = (() => {
       try {
@@ -1676,6 +1678,14 @@ export default function App() {
       } catch { return null; }
     })();
     const userSessions = loadUserSessions(initialUser);
+
+    // Tab-isolated active session: preserved on refresh within same tab, fresh on new tab
+    const tabActiveId = sessionStorage.getItem('ridge_tab_active_session');
+    if (tabActiveId && userSessions.some(s => s.id === tabActiveId)) {
+      return tabActiveId;
+    }
+
+    // Fresh start on new tab: select or create an empty chat
     const emptySession = userSessions.find(s => s.messages.length === 0);
     if (emptySession) return emptySession.id;
     return userSessions[0]?.id || 'default-session';
@@ -1684,6 +1694,9 @@ export default function App() {
   const activeSessionIdRef = useRef<string>(activeSessionId);
   useEffect(() => {
     activeSessionIdRef.current = activeSessionId;
+    if (activeSessionId) {
+      sessionStorage.setItem('ridge_tab_active_session', activeSessionId);
+    }
   }, [activeSessionId]);
 
   const currentUserIdRef = useRef<string>(user?.id || 'guest');
@@ -1695,14 +1708,22 @@ export default function App() {
     if (currentUserIdRef.current !== activeId) {
       currentUserIdRef.current = activeId;
       const loaded = loadUserSessions(user);
-      const emptySession = loaded.find(s => s.messages.length === 0);
-      if (emptySession) {
+      const tabActiveId = sessionStorage.getItem('ridge_tab_active_session');
+      const targetSession = tabActiveId ? loaded.find(s => s.id === tabActiveId) : null;
+      
+      if (targetSession) {
         setSessions(loaded);
-        setActiveSessionId(emptySession.id);
+        setActiveSessionId(targetSession.id);
       } else {
-        const fresh = createFreshSession();
-        setSessions([fresh, ...loaded]);
-        setActiveSessionId(fresh.id);
+        const emptySession = loaded.find(s => s.messages.length === 0);
+        if (emptySession) {
+          setSessions(loaded);
+          setActiveSessionId(emptySession.id);
+        } else {
+          const fresh = createFreshSession();
+          setSessions([fresh, ...loaded]);
+          setActiveSessionId(fresh.id);
+        }
       }
       chatInputRef.current?.setValue('');
     }
@@ -1729,24 +1750,26 @@ export default function App() {
                 };
               });
               const localDrafts = prev.filter(p => !p.id.includes('-') && p.messages.length === 0);
+              const nonServerSessions = prev.filter(p => !data.conversations.some((c: any) => c.id === p.id) && p.messages.length > 0);
               const draftList = localDrafts.length > 0 ? localDrafts : [createFreshSession()];
-              return [...draftList, ...serverSessions];
+              return [...draftList, ...nonServerSessions, ...serverSessions];
             });
 
             setActiveSessionId(curr => {
-              const isServerConv = data.conversations.some((c: any) => c.id === curr);
+              const tabActiveId = sessionStorage.getItem('ridge_tab_active_session') || curr;
+              const isServerConv = data.conversations.some((c: any) => c.id === tabActiveId);
               if (isServerConv) {
-                // Preload active messages from server if user was already viewing this conversation
-                fetchWithAuth(`/api/conversations/${curr}/messages`).then(async (mRes) => {
+                // Preload active messages from server if user is viewing this conversation in this tab
+                fetchWithAuth(`/api/conversations/${tabActiveId}/messages`).then(async (mRes) => {
                   if (mRes.ok && isMounted) {
                     const mData = await mRes.json();
                     if (mData.messages && mData.messages.length > 0) {
-                      setSessions(sPrev => sPrev.map(s => s.id === curr ? { ...s, messages: mData.messages } : s));
+                      setSessions(sPrev => sPrev.map(s => s.id === tabActiveId ? { ...s, messages: mData.messages } : s));
                     }
                   }
                 }).catch(() => {});
               }
-              return curr;
+              return tabActiveId;
             });
 
         }
@@ -1766,6 +1789,8 @@ export default function App() {
       localStorage.setItem(currentKey, JSON.stringify(sessions));
     }
   }, [sessions, user]);
+
+
 
 
   const activeSession = sessions.find(s => s.id === activeSessionId) || sessions[0];
