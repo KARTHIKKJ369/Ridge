@@ -27,8 +27,11 @@ services:
       - RETRIEVAL_BACKEND=pgvector
       - EMBEDDING_MODEL=BAAI/bge-large-en-v1.5
       - EMBEDDING_DIMENSION=1024
+      - TORCH_THREADS=2
+      - TORCH_INTEROP_THREADS=2
     depends_on:
       - postgres
+
 
     volumes:
       - app_data:/app/data

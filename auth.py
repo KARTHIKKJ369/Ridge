@@ -1,14 +1,13 @@
 """
-Ridge: Authentication Module (ID/Password + JWT Sessions)
-=========================================================
-Supports Local ID + Password Registration and Login with salted PBKDF2-SHA256 hashing.
-Stores users in a persistent SQLite database (users.db).
+Ridge: Authentication Module (PostgreSQL Stored Users & JWT Sessions)
+=====================================================================
+Supports Local Registration and Login with salted PBKDF2-SHA256 hashing.
+Stores users and usage in PostgreSQL.
 Issues signed JWT Bearer session tokens.
 """
 
 import os
 import time
-import sqlite3
 import hashlib
 import secrets
 import logging
@@ -19,11 +18,14 @@ import jwt
 from fastapi import Request, HTTPException, Depends, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel, Field
+from sqlalchemy import text
+
+from app.db.database import get_sync_session, is_postgres_configured
+from app.db.repositories.user_repo import DEFAULT_TENANT_ID
 
 logger = logging.getLogger(__name__)
 
 security = HTTPBearer(auto_error=False)
-DB_PATH = os.getenv("AUTH_DB_PATH", "./users.db")
 
 
 KNOWN_INSECURE_DEV_SECRETS = {
@@ -58,35 +60,33 @@ def get_auth_settings() -> dict:
                 "an insecure default secret in production/cloud environment. Refusing to start. "
                 "Please set a strong, unique JWT_SECRET in your Railway / cloud dashboard."
             )
-    else:
-        if not jwt_secret:
-            jwt_secret = "e2eb3dc152cb4185a5089016c21b6fe7ee8b0325f668140991d3e7841fb8c1ab"
-            logger.warning("Using default dev JWT_SECRET. Set JWT_SECRET in production.")
+    elif not jwt_secret:
+        jwt_secret = "ridge-default-insecure-dev-secret-replace-in-prod-xyz789"
 
     return {
-        "enabled": enabled,
         "jwt_secret": jwt_secret,
-        "jwt_algorithm": "HS256",
-        "jwt_expires_days": int(os.getenv("JWT_EXPIRES_DAYS", "7")),
+        "jwt_algorithm": os.getenv("JWT_ALGORITHM", "HS256"),
+        "jwt_expires_days": int(os.getenv("JWT_EXPIRES_DAYS", "30")),
+        "enabled": enabled,
     }
 
 
 class UserProfile(BaseModel):
     id: str
     username: str
-    email: str
     name: str
+    email: str
     avatar_url: str = ""
     provider: str = "local"
     is_guest: bool = False
-    role: str = "user"  # "admin" | "user"
+    role: str = "user"
     is_active: bool = True
     daily_request_limit: int = 50
     requests_today: int = 0
 
 
 class RegisterRequest(BaseModel):
-    username: str = Field(..., min_length=3, max_length=30)
+    username: str = Field(..., min_length=3, max_length=50)
     email: str = Field(..., min_length=5)
     password: str = Field(..., min_length=6)
 
@@ -97,7 +97,7 @@ class LoginRequest(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# SQLite User Database Persistence & Migrations
+# PostgreSQL User Database Persistence & Rate Limiting
 # ---------------------------------------------------------------------------
 
 def _hash_password(password: str, salt: str) -> str:
@@ -110,126 +110,111 @@ def _hash_password(password: str, salt: str) -> str:
 
 
 def init_db():
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS users (
-            id TEXT PRIMARY KEY,
-            username TEXT UNIQUE NOT NULL,
-            email TEXT UNIQUE NOT NULL,
-            name TEXT NOT NULL,
-            password_hash TEXT NOT NULL,
-            salt TEXT NOT NULL,
-            created_at INTEGER NOT NULL,
-            role TEXT NOT NULL DEFAULT 'user',
-            is_active INTEGER NOT NULL DEFAULT 1,
-            daily_request_limit INTEGER NOT NULL DEFAULT 50
-        );
-    """)
+    """Initializes and seeds default admin in PostgreSQL."""
+    try:
+        with get_sync_session() as session:
+            # Check for existing admin
+            admin_check = session.execute(
+                text("SELECT id FROM users WHERE username = 'admin' OR email = 'admin@ridge.ai'")
+            ).first()
 
-    # Schema migration checks for existing tables
-    cursor.execute("PRAGMA table_info(users);")
-    cols = [col[1] for col in cursor.fetchall()]
-    if "role" not in cols:
-        cursor.execute("ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'user';")
-    if "is_active" not in cols:
-        cursor.execute("ALTER TABLE users ADD COLUMN is_active INTEGER NOT NULL DEFAULT 1;")
-    if "daily_request_limit" not in cols:
-        cursor.execute("ALTER TABLE users ADD COLUMN daily_request_limit INTEGER NOT NULL DEFAULT 50;")
-
-    # Daily rate limit tracking table
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS user_usage (
-            user_id TEXT NOT NULL,
-            usage_date TEXT NOT NULL,
-            request_count INTEGER NOT NULL DEFAULT 0,
-            PRIMARY KEY (user_id, usage_date)
-        );
-    """)
-
-    # Seed default admin user account if not exists
-    cursor.execute("SELECT id FROM users WHERE username = 'admin' OR email = 'admin@ridge.ai'")
-    if not cursor.fetchone():
-        salt = secrets.token_hex(16)
-        pw_hash = _hash_password("Kichu@5120", salt)
-        cursor.execute("""
-            INSERT INTO users (id, username, email, name, password_hash, salt, created_at, role, is_active, daily_request_limit)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, 999999)
-        """, (f"usr_{secrets.token_hex(8)}", "admin", "admin@ridge.ai", "Ridge Administrator", pw_hash, salt, int(time.time()), "admin"))
-
-    # Ensure only 'admin' is admin by default
-    cursor.execute("UPDATE users SET role = 'admin' WHERE username = 'admin';")
-    conn.commit()
-    conn.close()
-
-
-init_db()
+            if not admin_check:
+                salt = secrets.token_hex(16)
+                pw_hash = _hash_password("Kichu@5120", salt)
+                admin_id = f"usr_{secrets.token_hex(8)}"
+                session.execute(
+                    text("""
+                        INSERT INTO users (id, tenant_id, username, email, name, password_hash, salt, role, is_active, daily_request_limit)
+                        VALUES (:uid, :tid, 'admin', 'admin@ridge.ai', 'Ridge Administrator', :hash, :salt, 'admin', true, 999999)
+                        ON CONFLICT (username) DO NOTHING
+                    """),
+                    {"uid": admin_id, "tid": DEFAULT_TENANT_ID, "hash": pw_hash, "salt": salt}
+                )
+                session.commit()
+    except Exception as e:
+        logger.warning(f"Auth DB init notice: {e}")
 
 
 def get_user_usage_today(user_id: str) -> int:
-    """Returns today's UTC request count for the user."""
+    """Returns today's UTC request count for the user from PostgreSQL."""
     today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    cursor.execute("SELECT request_count FROM user_usage WHERE user_id = ? AND usage_date = ?", (user_id, today_str))
-    row = cursor.fetchone()
-    conn.close()
-    return int(row[0]) if row else 0
+    try:
+        with get_sync_session() as session:
+            row = session.execute(
+                text("SELECT request_count FROM user_usage WHERE user_id = :uid AND usage_date = :udate"),
+                {"uid": user_id, "udate": today_str}
+            ).first()
+            return int(row[0]) if row else 0
+    except Exception as e:
+        logger.warning(f"Error reading usage: {e}")
+        return 0
 
 
 def check_and_increment_user_usage(user_id: str) -> tuple[bool, int, int]:
     """
-    Checks if user is within daily request limit and increments usage count.
+    Checks if user is within daily request limit and increments usage count in PostgreSQL.
     Returns (allowed: bool, current_count: int, daily_limit: int).
     """
     today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
+    try:
+        with get_sync_session() as session:
+            row = session.execute(
+                text("SELECT daily_request_limit, is_active, role FROM users WHERE id = :uid"),
+                {"uid": user_id}
+            ).first()
 
-    cursor.execute("SELECT daily_request_limit, is_active, role FROM users WHERE id = ?", (user_id,))
-    row = cursor.fetchone()
+            if not row:
+                daily_limit = 50
+                is_active = True
+                role = "user"
+            else:
+                daily_limit = row[0] or 50
+                is_active = bool(row[1]) if row[1] is not None else True
+                role = row[2] or "user"
 
-    if not row:
-        # Guests or default users
-        daily_limit = 20
-        is_active = 1
-        role = "guest"
-    else:
-        daily_limit = row[0] or 50
-        is_active = row[1] if row[1] is not None else 1
-        role = row[2] or "user"
+            if not is_active:
+                raise HTTPException(status_code=403, detail="Account has been suspended by an administrator.")
 
-    if not is_active:
-        conn.close()
-        raise HTTPException(status_code=403, detail="Account has been suspended by an administrator.")
+            if role == "admin":
+                session.execute(
+                    text("""
+                        INSERT INTO user_usage (user_id, usage_date, request_count) VALUES (:uid, :udate, 1)
+                        ON CONFLICT (user_id, usage_date) DO UPDATE SET request_count = user_usage.request_count + 1
+                    """),
+                    {"uid": user_id, "udate": today_str}
+                )
+                session.commit()
+                count_row = session.execute(
+                    text("SELECT request_count FROM user_usage WHERE user_id = :uid AND usage_date = :udate"),
+                    {"uid": user_id, "udate": today_str}
+                ).first()
+                count = count_row[0] if count_row else 1
+                return True, count, 999999
 
-    # Admin users have unlimited queries
-    if role == "admin":
-        cursor.execute("""
-            INSERT INTO user_usage (user_id, usage_date, request_count) VALUES (?, ?, 1)
-            ON CONFLICT(user_id, usage_date) DO UPDATE SET request_count = request_count + 1;
-        """, (user_id, today_str))
-        conn.commit()
-        cursor.execute("SELECT request_count FROM user_usage WHERE user_id = ? AND usage_date = ?", (user_id, today_str))
-        count = cursor.fetchone()[0]
-        conn.close()
-        return True, count, 999999
+            usage_row = session.execute(
+                text("SELECT request_count FROM user_usage WHERE user_id = :uid AND usage_date = :udate"),
+                {"uid": user_id, "udate": today_str}
+            ).first()
+            current_count = usage_row[0] if usage_row else 0
 
-    cursor.execute("SELECT request_count FROM user_usage WHERE user_id = ? AND usage_date = ?", (user_id, today_str))
-    usage_row = cursor.fetchone()
-    current_count = usage_row[0] if usage_row else 0
+            if current_count >= daily_limit:
+                return False, current_count, daily_limit
 
-    if current_count >= daily_limit:
-        conn.close()
-        return False, current_count, daily_limit
+            session.execute(
+                text("""
+                    INSERT INTO user_usage (user_id, usage_date, request_count) VALUES (:uid, :udate, 1)
+                    ON CONFLICT (user_id, usage_date) DO UPDATE SET request_count = user_usage.request_count + 1
+                """),
+                {"uid": user_id, "udate": today_str}
+            )
+            session.commit()
+            return True, current_count + 1, daily_limit
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.warning(f"Error checking user usage: {e}")
+        return True, 1, 50
 
-    cursor.execute("""
-        INSERT INTO user_usage (user_id, usage_date, request_count) VALUES (?, ?, 1)
-        ON CONFLICT(user_id, usage_date) DO UPDATE SET request_count = request_count + 1;
-    """, (user_id, today_str))
-    conn.commit()
-    conn.close()
-    return True, current_count + 1, daily_limit
 
 
 def register_user(req: RegisterRequest) -> UserProfile:
@@ -243,60 +228,28 @@ def register_user(req: RegisterRequest) -> UserProfile:
     salt = secrets.token_hex(16)
     password_hash = _hash_password(req.password, salt)
     user_id = f"usr_{secrets.token_hex(8)}"
-    created_at = int(time.time())
-
-    # Check if first user or explicitly admin username
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    cursor.execute("SELECT COUNT(*) FROM users")
-    user_count = cursor.fetchone()[0]
-    role = "admin" if (user_count == 0 or username in ("admin", "testadmin") or email.startswith("admin@")) else "user"
-    daily_limit = 100 if role == "admin" else 50
 
     try:
-        cursor.execute(
-            "INSERT INTO users (id, username, email, name, password_hash, salt, created_at, role, is_active, daily_request_limit) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (user_id, username, email, name, password_hash, salt, created_at, role, 1, daily_limit),
-        )
-        conn.commit()
-    except sqlite3.IntegrityError as e:
-        conn.close()
+        with get_sync_session() as session:
+            # Check if any users exist
+            cnt_row = session.execute(text("SELECT count(*) FROM users")).first()
+            user_count = cnt_row[0] if cnt_row else 0
+            role = "admin" if (user_count == 0 or username in ("admin", "testadmin") or email.startswith("admin@")) else "user"
+            daily_limit = 100 if role == "admin" else 50
+
+            session.execute(
+                text("""
+                    INSERT INTO users (id, tenant_id, username, email, name, password_hash, salt, role, is_active, daily_request_limit)
+                    VALUES (:uid, :tid, :uname, :email, :name, :hash, :salt, :role, true, :limit)
+                """),
+                {"uid": user_id, "tid": DEFAULT_TENANT_ID, "uname": username, "email": email, "name": name, "hash": password_hash, "salt": salt, "role": role, "limit": daily_limit}
+            )
+            session.commit()
+    except Exception as e:
         err_msg = str(e).lower()
-        if "username" in err_msg:
-            raise HTTPException(status_code=400, detail="Username is already taken.")
-        elif "email" in err_msg:
-            raise HTTPException(status_code=400, detail="An account with this email already exists.")
-        raise HTTPException(status_code=400, detail="Account already exists.")
-    finally:
-        conn.close()
-
-    # Synchronize to PostgreSQL if configured
-    try:
-        from app.db.database import get_db_session, is_postgres_configured
-        import asyncio
-        import concurrent.futures
-        from sqlalchemy import text
-        from app.db.repositories.user_repo import DEFAULT_TENANT_ID
-
-        if is_postgres_configured():
-            async def sync_pg_user():
-                async with get_db_session() as s:
-                    await s.execute(
-                        text("""
-                            INSERT INTO users (id, tenant_id, username, email, name, password_hash, salt, role, is_active, daily_request_limit)
-                            VALUES (:uid, :tid, :uname, :email, :name, :hash, :salt, :role, true, :limit)
-                            ON CONFLICT (id) DO UPDATE SET username = :uname, email = :email, role = :role
-                        """),
-                        {"uid": user_id, "tid": DEFAULT_TENANT_ID, "uname": username, "email": email, "name": name, "hash": password_hash, "salt": salt, "role": role, "limit": daily_limit}
-                    )
-            try:
-                loop = asyncio.get_running_loop()
-                with concurrent.futures.ThreadPoolExecutor() as pool:
-                    pool.submit(asyncio.run, sync_pg_user()).result()
-            except RuntimeError:
-                asyncio.run(sync_pg_user())
-    except Exception:
-        pass
+        if "username" in err_msg or "unique" in err_msg:
+            raise HTTPException(status_code=400, detail="Username or email is already registered.")
+        raise HTTPException(status_code=400, detail=f"Registration failed: {e}")
 
     return UserProfile(
         id=user_id,
@@ -313,129 +266,120 @@ def register_user(req: RegisterRequest) -> UserProfile:
     )
 
 
-
 def authenticate_user(req: LoginRequest) -> UserProfile:
     identifier = req.username_or_email.strip().lower()
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    cursor.execute(
-        "SELECT id, username, email, name, password_hash, salt, role, is_active, daily_request_limit FROM users WHERE username = ? OR email = ?",
-        (identifier, identifier),
-    )
-    row = cursor.fetchone()
-    conn.close()
+    try:
+        with get_sync_session() as session:
+            row = session.execute(
+                text("SELECT id, username, email, name, password_hash, salt, role, is_active, daily_request_limit FROM users WHERE username = :ident OR email = :ident"),
+                {"ident": identifier}
+            ).first()
 
-    if not row:
+            if not row:
+                raise HTTPException(status_code=401, detail="Invalid username or password.")
+
+            user_id, username, email, name, stored_hash, salt, role, is_active, daily_limit = row
+            test_hash = _hash_password(req.password, salt)
+
+            if not secrets.compare_digest(stored_hash, test_hash):
+                raise HTTPException(status_code=401, detail="Invalid username or password.")
+
+            if not is_active:
+                raise HTTPException(status_code=403, detail="Your account has been deactivated. Please contact an administrator.")
+
+            requests_today = get_user_usage_today(user_id)
+
+            return UserProfile(
+                id=user_id,
+                username=username,
+                email=email,
+                name=name,
+                avatar_url="",
+                provider="local",
+                is_guest=False,
+                role=role or "user",
+                is_active=bool(is_active),
+                daily_request_limit=daily_limit or 50,
+                requests_today=requests_today,
+            )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Authentication error: {e}")
         raise HTTPException(status_code=401, detail="Invalid username or password.")
-
-    user_id, username, email, name, stored_hash, salt, role, is_active, daily_limit = row
-    test_hash = _hash_password(req.password, salt)
-
-    if not secrets.compare_digest(stored_hash, test_hash):
-        raise HTTPException(status_code=401, detail="Invalid username or password.")
-
-    if not is_active:
-        raise HTTPException(status_code=403, detail="Your account has been deactivated. Please contact an administrator.")
-
-    requests_today = get_user_usage_today(user_id)
-
-    return UserProfile(
-        id=user_id,
-        username=username,
-        email=email,
-        name=name,
-        avatar_url="",
-        provider="local",
-        is_guest=False,
-        role=role or "user",
-        is_active=bool(is_active),
-        daily_request_limit=daily_limit or 50,
-        requests_today=requests_today,
-    )
 
 
 # ---------------------------------------------------------------------------
-# Admin User Management Helpers
+# Admin User Management Helpers (PostgreSQL)
 # ---------------------------------------------------------------------------
 
 def admin_list_users() -> list[dict]:
     today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    cursor.execute("""
-        SELECT u.id, u.username, u.email, u.name, u.role, u.is_active, u.daily_request_limit, u.created_at,
-               COALESCE(uu.request_count, 0) as requests_today
-        FROM users u
-        LEFT JOIN user_usage uu ON u.id = uu.user_id AND uu.usage_date = ?
-        ORDER BY u.created_at DESC
-    """, (today_str,))
-    rows = cursor.fetchall()
-    conn.close()
+    try:
+        with get_sync_session() as session:
+            rows = session.execute(text("""
+                SELECT u.id, u.username, u.email, u.name, u.role, u.is_active, u.daily_request_limit, u.created_at,
+                       COALESCE(uu.request_count, 0) as requests_today
+                FROM users u
+                LEFT JOIN user_usage uu ON u.id = uu.user_id AND uu.usage_date = :udate
+                ORDER BY u.created_at DESC
+            """), {"udate": today_str}).all()
 
-    users = []
-    for r in rows:
-        users.append({
-            "id": r[0],
-            "username": r[1],
-            "email": r[2],
-            "name": r[3],
-            "role": r[4] or "user",
-            "is_active": bool(r[5]),
-            "daily_request_limit": r[6] or 50,
-            "created_at": r[7],
-            "requests_today": r[8],
-        })
-    return users
+            users = []
+            for r in rows:
+                users.append({
+                    "id": r[0],
+                    "username": r[1],
+                    "email": r[2],
+                    "name": r[3],
+                    "role": r[4] or "user",
+                    "is_active": bool(r[5]),
+                    "daily_request_limit": r[6] or 50,
+                    "created_at": int(r[7].timestamp()) if hasattr(r[7], "timestamp") else int(time.time()),
+                    "requests_today": r[8],
+                })
+            return users
+    except Exception as e:
+        logger.error(f"Error listing admin users: {e}")
+        return []
 
 
 def admin_update_user_role(target_id: str, new_role: str):
     if new_role not in ("admin", "user"):
         raise HTTPException(status_code=400, detail="Invalid role. Must be 'admin' or 'user'.")
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    cursor.execute("UPDATE users SET role = ? WHERE id = ?", (new_role, target_id))
-    if cursor.rowcount == 0:
-        conn.close()
-        raise HTTPException(status_code=404, detail="User not found.")
-    conn.commit()
-    conn.close()
+    with get_sync_session() as session:
+        res = session.execute(text("UPDATE users SET role = :role WHERE id = :uid"), {"role": new_role, "uid": target_id})
+        if res.rowcount == 0:
+            raise HTTPException(status_code=404, detail="User not found.")
+        session.commit()
 
 
 def admin_update_user_limit(target_id: str, new_limit: int):
     if new_limit < 1 or new_limit > 100000:
         raise HTTPException(status_code=400, detail="Limit must be between 1 and 100,000.")
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    cursor.execute("UPDATE users SET daily_request_limit = ? WHERE id = ?", (new_limit, target_id))
-    if cursor.rowcount == 0:
-        conn.close()
-        raise HTTPException(status_code=404, detail="User not found.")
-    conn.commit()
-    conn.close()
+    with get_sync_session() as session:
+        res = session.execute(text("UPDATE users SET daily_request_limit = :lim WHERE id = :uid"), {"lim": new_limit, "uid": target_id})
+        if res.rowcount == 0:
+            raise HTTPException(status_code=404, detail="User not found.")
+        session.commit()
 
 
 def admin_update_user_status(target_id: str, is_active: bool):
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    cursor.execute("UPDATE users SET is_active = ? WHERE id = ?", (1 if is_active else 0, target_id))
-    if cursor.rowcount == 0:
-        conn.close()
-        raise HTTPException(status_code=404, detail="User not found.")
-    conn.commit()
-    conn.close()
+    with get_sync_session() as session:
+        res = session.execute(text("UPDATE users SET is_active = :act WHERE id = :uid"), {"act": is_active, "uid": target_id})
+        if res.rowcount == 0:
+            raise HTTPException(status_code=404, detail="User not found.")
+        session.commit()
 
 
 def admin_delete_user(target_id: str) -> bool:
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    cursor.execute("DELETE FROM users WHERE id = ?", (target_id,))
-    if cursor.rowcount == 0:
-        conn.close()
-        raise HTTPException(status_code=404, detail="User not found.")
-    cursor.execute("DELETE FROM user_usage WHERE user_id = ?", (target_id,))
-    conn.commit()
-    conn.close()
-    return True
+    with get_sync_session() as session:
+        session.execute(text("DELETE FROM user_usage WHERE user_id = :uid"), {"uid": target_id})
+        res = session.execute(text("DELETE FROM users WHERE id = :uid"), {"uid": target_id})
+        if res.rowcount == 0:
+            raise HTTPException(status_code=404, detail="User not found.")
+        session.commit()
+        return True
 
 
 # ---------------------------------------------------------------------------
@@ -530,22 +474,30 @@ async def get_current_user(
 
     user_id = payload.get("id", "user")
 
-    # Fetch latest user data from DB if available
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    cursor.execute("SELECT role, is_active, daily_request_limit, name, email FROM users WHERE id = ?", (user_id,))
-    row = cursor.fetchone()
-    conn.close()
+    # Fetch latest user data from PostgreSQL if available
+    try:
+        with get_sync_session() as session:
+            row = session.execute(
+                text("SELECT role, is_active, daily_request_limit, name, email FROM users WHERE id = :uid"),
+                {"uid": user_id}
+            ).first()
 
-    if row:
-        db_role, db_active, db_limit, db_name, db_email = row
-        if not db_active:
-            raise HTTPException(status_code=403, detail="Your account has been deactivated by an administrator.")
-        role = db_role or "user"
-        daily_limit = db_limit or 50
-        name = db_name or payload.get("name", "Climber")
-        email = db_email or payload.get("email", "")
-    else:
+            if row:
+                db_role, db_active, db_limit, db_name, db_email = row
+                if not db_active:
+                    raise HTTPException(status_code=403, detail="Your account has been deactivated by an administrator.")
+                role = db_role or "user"
+                daily_limit = db_limit or 50
+                name = db_name or payload.get("name", "Climber")
+                email = db_email or payload.get("email", "")
+            else:
+                role = payload.get("role", "user")
+                daily_limit = payload.get("daily_request_limit", 50)
+                name = payload.get("name", "Climber")
+                email = payload.get("email", "")
+    except HTTPException:
+        raise
+    except Exception:
         role = payload.get("role", "user")
         daily_limit = payload.get("daily_request_limit", 50)
         name = payload.get("name", "Climber")
@@ -566,4 +518,5 @@ async def get_current_user(
         daily_request_limit=daily_limit,
         requests_today=requests_today,
     )
+
 

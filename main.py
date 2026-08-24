@@ -27,7 +27,17 @@ from typing_extensions import TypedDict
 
 load_dotenv()
 
+# VM & CPU Optimization: Set PyTorch execution threads to match VM cores
+try:
+    import torch
+    num_threads = int(os.getenv("TORCH_THREADS", "2"))
+    torch.set_num_threads(num_threads)
+    torch.set_num_interop_threads(num_threads)
+except Exception:
+    pass
+
 DEFAULT_QUESTION = "What is task decomposition in LLM agents?"
+
 
 
 class GraphState(TypedDict):
