@@ -92,9 +92,35 @@ def create_or_update_admin(
         print(f"   ID:       {user_id}")
         print(f"   Username: {username}")
         print(f"   Email:    {email}")
-        print(f"   Role:     {role}")
-
     conn.close()
+
+    # Sync with PostgreSQL if configured
+    try:
+        from app.db.database import get_db_session, is_postgres_configured
+        import asyncio
+        from sqlalchemy import text
+
+        if is_postgres_configured():
+            async def sync_pg():
+                async with get_db_session() as s:
+                    pg_check = await s.execute(text("SELECT id FROM users WHERE id = :uid OR username = :uname"), {"uid": user_id, "uname": username.lower()})
+                    existing = pg_check.first()
+                    if existing:
+                        await s.execute(
+                            text("UPDATE users SET username = :uname, email = :email, name = :name, password_hash = :hash, salt = :salt, role = :role, daily_request_limit = 999999 WHERE id = :uid"),
+                            {"uname": username.lower(), "email": email.lower(), "name": name, "hash": pw_hash, "salt": salt, "role": role, "uid": existing[0]}
+                        )
+                    else:
+                        from app.db.repositories.user_repo import DEFAULT_TENANT_ID
+                        await s.execute(
+                            text("INSERT INTO users (id, tenant_id, username, email, name, password_hash, salt, role, is_active, daily_request_limit) VALUES (:uid, :tid, :uname, :email, :name, :hash, :salt, :role, true, 999999)"),
+                            {"uid": user_id, "tid": DEFAULT_TENANT_ID, "uname": username.lower(), "email": email.lower(), "name": name, "hash": pw_hash, "salt": salt, "role": role}
+                        )
+            asyncio.run(sync_pg())
+            print(f"✅ Successfully synchronized admin user '{username}' to PostgreSQL.")
+    except Exception as pg_err:
+        pass
+
 
 
 def main():
