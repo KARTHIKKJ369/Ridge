@@ -7,6 +7,7 @@ import app.db.repositories.document_repo as document_repo
 import app.db.repositories.glossary_repo as glossary_repo
 import app.db.repositories.cache_repo as cache_repo
 import app.db.repositories.retrieval_repo as retrieval_repo
+import app.db.repositories.tenant_repo as tenant_repo
 
 __all__ = [
     "user_repo",
@@ -15,4 +16,6 @@ __all__ = [
     "glossary_repo",
     "cache_repo",
     "retrieval_repo",
+    "tenant_repo",
 ]
+

@@ -46,6 +46,7 @@ class GraphState(TypedDict):
     web_search_enabled: bool
     source_filter: str | None       # Scoped retrieval to specific document/source
     user_id: str | None             # Multi-tenant user isolation
+    tenant_id: str | None           # Multi-tenant organization isolation
     sub_queries: list[str]          # populated by decompose_node for multi-hop
     documents: list[str]
     documents_metadata: list[dict]
@@ -57,6 +58,7 @@ class GraphState(TypedDict):
     latency_ms: int
     doc_grades: list[dict]
     hallucination_grade: dict
+
 
 
 class DocGrade(BaseModel):
@@ -238,13 +240,20 @@ def clear_suggestions_cache() -> None:
     global _suggestions_store
     _suggestions_store = []
 
-def ingest_document(text_or_url: str, original_filename: str | None = None, user_id: str = "default") -> dict:
+def ingest_document(
+    text_or_url: str,
+    original_filename: str | None = None,
+    user_id: str = "default",
+    tenant_id: str | None = None,
+    is_shared: bool = False,
+) -> dict:
     import urllib.parse
     import os
+    import uuid
     from rag_ingest import load_and_split_source, _sub_chunk, semantic_split_documents
     from langchain_core.documents import Document
 
-    print(f"\n=== INGESTING ===\nUser: {user_id}\nInput: {text_or_url[:100]}...")
+    print(f"\n=== INGESTING ===\nUser: {user_id} | Tenant: {tenant_id} | Shared: {is_shared}\nInput: {text_or_url[:100]}...")
 
     # Check if URL
     is_url = False
@@ -318,7 +327,7 @@ def ingest_document(text_or_url: str, original_filename: str | None = None, user
 
     # Ingest directly into PostgreSQL with pgvector & TSVector
     from app.db.database import is_postgres_configured, get_db_session
-    from app.db.repositories import document_repo, glossary_repo
+    from app.db.repositories import document_repo, glossary_repo, tenant_repo
 
     if is_postgres_configured():
         try:
@@ -328,6 +337,9 @@ def ingest_document(text_or_url: str, original_filename: str | None = None, user
 
             async def _persist_pg_doc():
                 async with get_db_session() as session:
+                    t_uuid = uuid.UUID(tenant_id) if tenant_id else None
+                    kb_id = await tenant_repo.get_or_create_tenant_kb(session, t_uuid) if t_uuid else None
+
                     await document_repo.save_ingested_document(
                         session=session,
                         uploaded_by=user_id if user_id and user_id != "default" else None,
@@ -338,6 +350,8 @@ def ingest_document(text_or_url: str, original_filename: str | None = None, user
                         child_docs=docs_to_index,
                         embeddings_list=embeddings_list,
                         embedding_model_name=os.getenv("EMBEDDING_MODEL", "BAAI/bge-large-en-v1.5"),
+                        is_shared=is_shared,
+                        knowledge_base_id=kb_id,
                     )
 
             try:
@@ -350,6 +364,7 @@ def ingest_document(text_or_url: str, original_filename: str | None = None, user
         except Exception as pg_ingest_err:
             print(f"  [PostgreSQL] Ingestion error: {pg_ingest_err}")
             raise pg_ingest_err
+
 
 
 
@@ -475,12 +490,17 @@ def build_app():
         q = state["question"]
         src_filter = state.get("source_filter")
         user_id = state.get("user_id")
+        tenant_id = state.get("tenant_id")
+        import uuid
+        t_uuid = uuid.UUID(tenant_id) if tenant_id else None
 
         print(f"\n--- NODE: UNIFIED HYBRID RETRIEVE (Backend: {retriever_engine.backend}) ---")
         if src_filter:
             print(f"  [Source Scope Filter Active]: '{src_filter}'")
         if user_id:
             print(f"  [User Scope Filter Active]: '{user_id}'")
+        if tenant_id:
+            print(f"  [Tenant Scope Filter Active]: '{tenant_id}'")
 
         # Run async retrieval synchronously in LangGraph node
         import asyncio
@@ -491,15 +511,15 @@ def build_app():
                 with concurrent.futures.ThreadPoolExecutor() as pool:
                     candidates = pool.submit(
                         asyncio.run,
-                        retriever_engine.retrieve(query=q, user_id=user_id, source_filter=src_filter, k=50)
+                        retriever_engine.retrieve(query=q, user_id=user_id, tenant_id=t_uuid, source_filter=src_filter, k=50)
                     ).result()
             else:
                 candidates = loop.run_until_complete(
-                    retriever_engine.retrieve(query=q, user_id=user_id, source_filter=src_filter, k=50)
+                    retriever_engine.retrieve(query=q, user_id=user_id, tenant_id=t_uuid, source_filter=src_filter, k=50)
                 )
         except Exception:
             candidates = asyncio.run(
-                retriever_engine.retrieve(query=q, user_id=user_id, source_filter=src_filter, k=50)
+                retriever_engine.retrieve(query=q, user_id=user_id, tenant_id=t_uuid, source_filter=src_filter, k=50)
             )
 
         final_texts, final_metas, expanded_count = retriever_engine.rerank_and_expand(
@@ -508,6 +528,7 @@ def build_app():
             top_k=settings["retriever_k"],
             rerank_top_n=settings.get("rerank_top_n", 20),
         )
+
 
         return {
             "documents": final_texts,
@@ -1039,11 +1060,13 @@ def build_app():
                 cands = await retriever_engine.retrieve(
                     query=sq,
                     user_id=state.get("user_id"),
+                    tenant_id=t_uuid,
                     source_filter=state.get("source_filter"),
                     k=settings["retriever_fetch_k"],
                 )
                 all_candidates.extend(cands)
             return all_candidates
+
 
         try:
             loop = asyncio.get_event_loop()

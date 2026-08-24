@@ -3,7 +3,7 @@ Document Model
 """
 import uuid
 from datetime import datetime, timezone
-from sqlalchemy import String, Text, BigInteger, Integer, DateTime, ForeignKey, Index
+from sqlalchemy import String, Text, BigInteger, Integer, Boolean, DateTime, ForeignKey, Index
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -37,7 +37,9 @@ class Document(Base):
     source_url: Mapped[str] = mapped_column(Text, default="", nullable=False)
     content_hash: Mapped[str] = mapped_column(String(64), default="", nullable=False, index=True)
     status: Mapped[str] = mapped_column(String(32), default="indexed", nullable=False)  # pending, indexed, failed
+    is_shared: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),

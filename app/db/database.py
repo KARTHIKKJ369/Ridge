@@ -133,6 +133,14 @@ async def init_db() -> None:
             await conn.execute(text("CREATE EXTENSION IF NOT EXISTS pg_trgm;"))
             # Create tables
             await conn.run_sync(Base.metadata.create_all)
+            
+            # Idempotent Column Migrations for Multi-Tenant Support
+            await conn.execute(text("ALTER TABLE tenants ADD COLUMN IF NOT EXISTS slug VARCHAR(64) DEFAULT 'default' NOT NULL;"))
+            await conn.execute(text("ALTER TABLE tenants ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT TRUE NOT NULL;"))
+            await conn.execute(text("ALTER TABLE tenants ADD COLUMN IF NOT EXISTS max_users INTEGER DEFAULT 50 NOT NULL;"))
+            await conn.execute(text("ALTER TABLE documents ADD COLUMN IF NOT EXISTS is_shared BOOLEAN DEFAULT FALSE NOT NULL;"))
+            await conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS ix_tenants_slug ON tenants(slug);"))
+
             logger.info("  [PostgreSQL] Database tables & extensions initialized successfully.")
 
         # Seed default tenant and KB
@@ -143,13 +151,20 @@ async def init_db() -> None:
 
             DEFAULT_KB_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
             t_res = await session.execute(select(Tenant).where(Tenant.id == DEFAULT_TENANT_ID))
-            if not t_res.scalar_one_or_none():
+            existing_tenant = t_res.scalar_one_or_none()
+            if not existing_tenant:
                 session.add(Tenant(
                     id=DEFAULT_TENANT_ID,
                     name="Default Tenant",
+                    slug="default",
+                    is_active=True,
+                    max_users=999999,
                 ))
                 await session.flush()
-
+            else:
+                if not getattr(existing_tenant, "slug", None):
+                    existing_tenant.slug = "default"
+                    await session.flush()
 
             kb_res = await session.execute(select(KnowledgeBase).where(KnowledgeBase.id == DEFAULT_KB_ID))
             if not kb_res.scalar_one_or_none():
@@ -162,4 +177,5 @@ async def init_db() -> None:
                 await session.flush()
     except Exception as e:
         logger.error(f"  [PostgreSQL] Database initialization warning: {e}")
+
 

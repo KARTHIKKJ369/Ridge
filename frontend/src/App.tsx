@@ -1,4 +1,6 @@
 import React, { useState, useRef, useEffect, useImperativeHandle } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { FeedbackModal, type FeedbackTargetContext } from './components/FeedbackModal';
 import { 
   User, 
   Activity, 
@@ -24,6 +26,8 @@ import {
   Download, 
   Search, 
   MessageSquare, 
+  AlertCircle,
+
   Command, 
   Zap, 
   ShieldCheck, 
@@ -38,6 +42,8 @@ import {
   ArrowUp,
   LogOut,
   LogIn,
+  Mail,
+  Key,
   Square,
   Video,
   Image,
@@ -47,8 +53,14 @@ import {
   ZoomIn,
   ZoomOut,
   Maximize2,
-  Minimize2
+  Minimize2,
+  Building2,
+  UserPlus,
+  Eye,
+  EyeOff
 } from 'lucide-react';
+
+
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
@@ -743,10 +755,14 @@ type UserProfile = {
   provider?: string;
   is_guest?: boolean;
   role?: string;
+  tenant_id?: string;
+  tenant_name?: string;
+  tenant_slug?: string;
   is_active?: boolean;
   daily_request_limit?: number;
   requests_today?: number;
 };
+
 
 type AdminUser = {
   id: string;
@@ -758,6 +774,9 @@ type AdminUser = {
   daily_request_limit: number;
   created_at: number;
   requests_today: number;
+  tenant_id?: string;
+  tenant_name?: string;
+  tenant_slug?: string;
 };
 
 type AdminStats = {
@@ -766,7 +785,25 @@ type AdminStats = {
   total_requests_today: number;
   total_documents: number;
   total_chunks: number;
+  tenant_id?: string;
+  tenant_name?: string;
+  tenant_slug?: string;
+  is_superadmin?: boolean;
 };
+
+type TenantItem = {
+  id: string;
+  name: string;
+  slug: string;
+  is_active?: boolean;
+  max_users?: number;
+  user_count?: number;
+  doc_count?: number;
+  member_count?: number;
+  document_count?: number;
+};
+
+
 
 // ---------------------------------------------------------------------------
 // Per-User Scoped Session Helpers
@@ -919,7 +956,9 @@ interface ChatMessageItemProps {
   onHoverCitation: (hover: { msgId: string; index: number; target?: any; rect: DOMRect } | null) => void;
   onHighlightCitation: (highlight: string | null) => void;
   onFileClick: (path: string) => void;
+  onOpenFeedback?: (msg: Message) => void;
 }
+
 
 const ChatMessageItem = React.memo(({
   msg,
@@ -934,7 +973,9 @@ const ChatMessageItem = React.memo(({
   onHoverCitation,
   onHighlightCitation,
   onFileClick,
+  onOpenFeedback,
 }: ChatMessageItemProps) => {
+
   const isAssistant = msg.role === 'assistant';
   const msgTraces = msg.traces || [];
   const latestTraceWithGrades = [...msgTraces].reverse().find(t => t.doc_grades && t.doc_grades.length > 0);
@@ -1290,14 +1331,34 @@ const ChatMessageItem = React.memo(({
                 <button 
                   className={`msg-action-btn ${msg.liked === false ? 'active-dislike' : ''}`}
                   onClick={() => onReaction(msg.id, false)}
-                  title="Crux encountered"
-                  aria-label="Crux encountered"
+                  title="Crux or inaccuracy encountered"
+                  aria-label="Crux or inaccuracy encountered"
                 >
                   <ThumbsDown size={14} />
                 </button>
               </div>
+
+              {/* Inline Feedback Suggestion Card when Thumbs Down is clicked */}
+              {msg.liked === false && (
+                <div className="feedback-inline-suggestion">
+                  <div className="feedback-inline-info">
+                    <AlertCircle size={13} className="feedback-inline-icon" />
+                    <span>Report inaccuracy or issue with this answer?</span>
+                  </div>
+                  <button
+                    className="feedback-inline-btn"
+                    onClick={() => onOpenFeedback?.(msg)}
+                    type="button"
+                    title="Send specific feedback on this answer to administrators"
+                  >
+                    <MessageSquare size={12} />
+                    <span>Send Feedback to Admin</span>
+                  </button>
+                </div>
+              )}
             </div>
           )}
+
         </div>
       </div>
     </div>
@@ -1622,7 +1683,10 @@ const ChatInputDeck = React.forwardRef<ChatInputDeckRef, ChatInputDeckProps>(({
 });
 
 export default function App() {
+  const navigate = useNavigate();
+
   // Authentication & User State
+
   const [user, setUser] = useState<UserProfile | null>(() => {
     try {
       const saved = localStorage.getItem('ridge_user');
@@ -1644,6 +1708,42 @@ export default function App() {
   const [editingLimitUserId, setEditingLimitUserId] = useState<string | null>(null);
   const [tempLimitValue, setTempLimitValue] = useState<number>(50);
 
+  // Multi-select & Confirm Dialog State
+  const [selectedUserIds, setSelectedUserIds] = useState<Set<string>>(new Set());
+  const [isBulkDeleting, setIsBulkDeleting] = useState(false);
+  const [confirmDialog, setConfirmDialog] = useState<{
+    open: boolean;
+    title: string;
+    message: string;
+    danger?: boolean;
+    onConfirm: () => void;
+  }>({ open: false, title: '', message: '', onConfirm: () => {} });
+
+
+  // New Add Member & SuperAdmin Filter State
+  const [adminActiveTab, setAdminActiveTab] = useState<'users' | 'tenants'>('users');
+  const [isAddUserModalOpen, setIsAddUserModalOpen] = useState(false);
+  const [isCreateTenantModalOpen, setIsCreateTenantModalOpen] = useState(false);
+  const [adminTenantFilter, setAdminTenantFilter] = useState('');
+  const [adminTenantsList, setAdminTenantsList] = useState<TenantItem[]>([]);
+  const [newUsername, setNewUsername] = useState('');
+  const [newEmail, setNewEmail] = useState('');
+  const [newName, setNewName] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [newRole, setNewRole] = useState<'user' | 'admin'>('user');
+  const [newLimit, setNewLimit] = useState<number>(50);
+  const [newTenantId, setNewTenantId] = useState('');
+  const [showNewPassword, setShowNewPassword] = useState(false);
+  const [isCreatingUser, setIsCreatingUser] = useState(false);
+
+  // New Tenant Provisioning State
+  const [newTenantName, setNewTenantName] = useState('');
+  const [newTenantSlug, setNewTenantSlug] = useState('');
+  const [newTenantMaxUsers, setNewTenantMaxUsers] = useState<number>(50);
+  const [isCreatingTenant, setIsCreatingTenant] = useState(false);
+
+
+
   // Theme Management: Defaults to 'stone' (Stone & Summit)
   const [theme, setTheme] = useState<ThemeMode>(() => {
     return (localStorage.getItem('recall_theme') as ThemeMode) || 'stone';
@@ -1653,6 +1753,10 @@ export default function App() {
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [isArtifactsOpen, setIsArtifactsOpen] = useState(false);
   const [activeArtifactTab, setActiveArtifactTab] = useState<'trace' | 'knowledge' | 'grader'>('trace');
+  const [isFeedbackOpen, setIsFeedbackOpen] = useState(false);
+  const [feedbackTargetContext, setFeedbackTargetContext] = useState<FeedbackTargetContext | null>(null);
+
+
 
   // Multi-Session Chat State (User-scoped and persistent across reloads)
   const [sessions, setSessions] = useState<ChatSession[]>(() => {
@@ -2035,13 +2139,20 @@ export default function App() {
   };
 
   // Admin Management Functions
-  const fetchAdminData = async () => {
+  const fetchAdminData = async (tenantFilter?: string) => {
     setIsLoadingAdmin(true);
     try {
-      const [usersRes, statsRes] = await Promise.all([
-        fetchWithAuth('/api/admin/users'),
-        fetchWithAuth('/api/admin/stats')
-      ]);
+      const activeFilter = tenantFilter !== undefined ? tenantFilter : adminTenantFilter;
+      const url = activeFilter ? `/api/admin/users?tenant_id=${encodeURIComponent(activeFilter)}` : '/api/admin/users';
+      
+      const reqs: Promise<Response>[] = [
+        fetchWithAuth(url),
+        fetchWithAuth('/api/admin/stats'),
+        fetchWithAuth('/api/admin/tenants')
+      ];
+
+      const [usersRes, statsRes, tenantsRes] = await Promise.all(reqs);
+
       if (usersRes.ok) {
         const uData = await usersRes.json();
         setAdminUsers(uData.users || []);
@@ -2049,6 +2160,15 @@ export default function App() {
       if (statsRes.ok) {
         const sData = await statsRes.json();
         setAdminStats(sData);
+        if (sData.is_superadmin && user && user.role !== 'superadmin') {
+          const updatedUser = { ...user, role: 'superadmin' };
+          setUser(updatedUser);
+          localStorage.setItem('ridge_user', JSON.stringify(updatedUser));
+        }
+      }
+      if (tenantsRes && tenantsRes.ok) {
+        const tData = await tenantsRes.json();
+        setAdminTenantsList(tData.tenants || []);
       }
     } catch (e) {
       console.error('Failed to fetch admin data:', e);
@@ -2057,6 +2177,143 @@ export default function App() {
       setIsLoadingAdmin(false);
     }
   };
+
+  const handleToggleTenantStatus = async (tenantId: string, currentStatus: boolean) => {
+    const newStatus = !currentStatus;
+    try {
+      const res = await fetchWithAuth(`/api/admin/tenants/${tenantId}/status`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ is_active: newStatus })
+      });
+      if (res.ok) {
+        showToast(`Institution ${newStatus ? 'activated' : 'suspended'}`, 'success');
+        setAdminTenantsList(prev => prev.map(t => t.id === tenantId ? { ...t, is_active: newStatus } : t));
+      } else {
+        const err = await res.json();
+        showToast(err.detail || 'Failed to update institution status', 'error');
+      }
+    } catch (e) {
+      showToast('Error updating institution status', 'error');
+    }
+  };
+
+  const handleDeleteTenant = (tenantId: string, tenantName: string) => {
+    setConfirmDialog({
+      open: true,
+      title: 'Delete Institution',
+      message: `Permanently delete "${tenantName}" and ALL its members, uploaded documents, and indexed knowledge? This cannot be undone.`,
+      danger: true,
+      onConfirm: async () => {
+        setConfirmDialog(d => ({ ...d, open: false }));
+        try {
+          const res = await fetchWithAuth(`/api/admin/tenants/${tenantId}`, { method: 'DELETE' });
+          if (res.ok) {
+            showToast(`Institution '${tenantName}' deleted`, 'success');
+            setAdminTenantsList(prev => prev.filter(t => t.id !== tenantId));
+            if (adminTenantFilter === tenantId) setAdminTenantFilter('');
+            fetchAdminData();
+          } else {
+            const err = await res.json();
+            showToast(err.detail || 'Failed to delete institution', 'error');
+          }
+        } catch (e) {
+          showToast('Error deleting institution', 'error');
+        }
+      },
+    });
+  };
+
+
+  const handleCreateTenant = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newTenantName.trim() || !newTenantSlug.trim()) {
+      showToast('Institution name and slug code are required', 'error');
+      return;
+    }
+    setIsCreatingTenant(true);
+    try {
+      const res = await fetchWithAuth('/api/admin/tenants', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: newTenantName.trim(),
+          slug: newTenantSlug.trim().toLowerCase().replace(/[^a-z0-9-_]/g, ''),
+          max_users: Number(newTenantMaxUsers) || 50
+        })
+      });
+      if (res.ok) {
+        showToast(`Institution '${newTenantName}' created successfully!`, 'success');
+        setIsCreateTenantModalOpen(false);
+        setNewTenantName('');
+        setNewTenantSlug('');
+        setNewTenantMaxUsers(50);
+        fetchAdminData();
+      } else {
+        const err = await res.json();
+        showToast(err.detail || 'Failed to create institution', 'error');
+      }
+    } catch (e) {
+      showToast('Error creating institution', 'error');
+    } finally {
+      setIsCreatingTenant(false);
+    }
+  };
+
+
+  const handleCreateUser = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newUsername.trim() || !newEmail.trim() || !newPassword.trim()) {
+      showToast('Please fill in all required user fields', 'error');
+      return;
+    }
+
+    if (newPassword.length < 6) {
+      showToast('Password must be at least 6 characters', 'error');
+      return;
+    }
+
+    setIsCreatingUser(true);
+    try {
+      const payload: any = {
+        username: newUsername.trim(),
+        name: newName.trim() || newUsername.trim(),
+        email: newEmail.trim(),
+        password: newPassword,
+        role: newRole,
+        daily_request_limit: newRole === 'admin' ? 999999 : Number(newLimit) || 50,
+      };
+      if (user?.role === 'superadmin' && newTenantId) {
+        payload.tenant_id = newTenantId;
+      }
+
+      const res = await fetchWithAuth('/api/admin/users', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+
+      if (res.ok) {
+        showToast(`Climber '@${newUsername.trim()}' created successfully!`, 'success');
+        setIsAddUserModalOpen(false);
+        setNewUsername('');
+        setNewEmail('');
+        setNewName('');
+        setNewPassword('');
+        setNewRole('user');
+        setNewLimit(50);
+        fetchAdminData();
+      } else {
+        const err = await res.json();
+        showToast(err.detail || 'Failed to create user', 'error');
+      }
+    } catch (e) {
+      showToast('Error creating user account', 'error');
+    } finally {
+      setIsCreatingUser(false);
+    }
+  };
+
 
   const handleUpdateRole = async (targetId: string, currentRole: string) => {
     const newRole = currentRole === 'admin' ? 'user' : 'admin';
@@ -2118,26 +2375,63 @@ export default function App() {
     }
   };
 
-  const handleDeleteUser = async (targetId: string, username: string) => {
-    if (!window.confirm(`Are you sure you want to permanently delete user account '${username}' and all their uploaded documents?`)) {
+  const handleDeleteUser = (targetId: string, username: string) => {
+    setConfirmDialog({
+      open: true,
+      title: 'Delete Member Account',
+      message: `Permanently delete @${username} and all their uploaded documents? This cannot be undone.`,
+      danger: true,
+      onConfirm: async () => {
+        setConfirmDialog(d => ({ ...d, open: false }));
+        try {
+          const res = await fetchWithAuth(`/api/admin/users/${targetId}`, { method: 'DELETE' });
+          if (res.ok) {
+            showToast(`User '${username}' deleted`, 'success');
+            setAdminUsers(prev => prev.filter(u => u.id !== targetId));
+            setSelectedUserIds(prev => { const n = new Set(prev); n.delete(targetId); return n; });
+          } else {
+            const err = await res.json();
+            showToast(err.detail || 'Failed to delete user', 'error');
+          }
+        } catch (e) {
+          showToast('Error deleting user', 'error');
+        }
+      },
+    });
+  };
+
+  const handleBulkDeleteUsers = () => {
+    const ids = Array.from(selectedUserIds);
+    const deletable = adminUsers.filter(u => ids.includes(u.id) && u.role !== 'superadmin' && u.id !== user?.id);
+    if (deletable.length === 0) {
+      showToast('No deletable users selected (SuperAdmin and your own account are protected)', 'error');
       return;
     }
-    try {
-      const res = await fetchWithAuth(`/api/admin/users/${targetId}`, {
-        method: 'DELETE'
-      });
-      if (res.ok) {
-        showToast(`User '${username}' deleted`, 'success');
-        setAdminUsers(prev => prev.filter(u => u.id !== targetId));
-        fetchAdminData();
-      } else {
-        const err = await res.json();
-        showToast(err.detail || 'Failed to delete user', 'error');
-      }
-    } catch (e) {
-      showToast('Error deleting user', 'error');
-    }
+    setConfirmDialog({
+      open: true,
+      title: `Delete ${deletable.length} Member${deletable.length > 1 ? 's' : ''}`,
+      message: `Permanently delete ${deletable.length} selected member account${deletable.length > 1 ? 's' : ''} and all their data? This cannot be undone.`,
+      danger: true,
+      onConfirm: async () => {
+        setConfirmDialog(d => ({ ...d, open: false }));
+        setIsBulkDeleting(true);
+        try {
+          await Promise.all(
+            deletable.map(u => fetchWithAuth(`/api/admin/users/${u.id}`, { method: 'DELETE' }))
+          );
+          showToast(`${deletable.length} member${deletable.length > 1 ? 's' : ''} deleted`, 'success');
+          setSelectedUserIds(new Set());
+          fetchAdminData();
+        } catch (e) {
+          showToast('Error during bulk delete', 'error');
+        } finally {
+          setIsBulkDeleting(false);
+        }
+      },
+    });
   };
+
+
 
   // Fetch Suggestions & Knowledge Stats (Only hits API/cache; updates local storage)
   const fetchSuggestionsAndStats = async (forceRefresh = false) => {
@@ -2622,7 +2916,28 @@ export default function App() {
     }));
   };
 
+  const handleOpenFeedbackForMessage = (msg: Message) => {
+
+    const msgIdx = messages.findIndex(m => m.id === msg.id);
+    let userQuery = '';
+    if (msgIdx > 0) {
+      for (let i = msgIdx - 1; i >= 0; i--) {
+        if (messages[i].role === 'user') {
+          userQuery = messages[i].content;
+          break;
+        }
+      }
+    }
+    setFeedbackTargetContext({
+      query: userQuery,
+      answerSnippet: msg.content.slice(0, 300),
+      messageId: msg.id,
+    });
+    setIsFeedbackOpen(true);
+  };
+
   const clearCurrentChat = () => {
+
     updateCurrentMessages(() => []);
     showToast('Conversation cleared');
   };
@@ -3200,21 +3515,20 @@ export default function App() {
 
             {/* Session Action Cluster */}
             <div className="nav-group-actions">
-              {user?.role === 'admin' && (
+              {(user?.role === 'admin' || user?.role === 'superadmin') && (
                 <button 
-                  className={`nav-action-pill admin-pill ${isAdminModalOpen ? 'active' : ''}`}
-                  onClick={() => {
-                    setIsAdminModalOpen(true);
-                    fetchAdminData();
-                  }}
+                  className="nav-action-pill admin-pill"
+                  onClick={() => navigate('/admin')}
                   title="Open Ridge Administrator Portal"
                   aria-label="Admin console"
                   type="button"
                 >
                   <ShieldCheck size={15} />
-                  <span>Admin</span>
+                  <span>{user?.role === 'superadmin' ? 'SuperAdmin' : 'Admin'}</span>
                 </button>
               )}
+
+
 
               <button 
                 className="nav-action-pill glossary-pill"
@@ -3238,6 +3552,22 @@ export default function App() {
                 <Upload size={15} />
                 <span>Ingest</span>
               </button>
+
+              <button 
+                className="nav-action-pill feedback-pill"
+                onClick={() => {
+                  setFeedbackTargetContext(null);
+                  setIsFeedbackOpen(true);
+                }}
+                title="Send accuracy feedback or request help from administrators"
+                aria-label="Feedback"
+                type="button"
+              >
+                <MessageSquare size={15} />
+                <span>Feedback</span>
+              </button>
+
+
 
               {messages.length > 0 && (
                 <>
@@ -3319,13 +3649,12 @@ export default function App() {
 
                       <div className="dropdown-divider" />
 
-                      {user.role === 'admin' && (
+                      {(user.role === 'admin' || user.role === 'superadmin') && (
                         <button 
                           className="dropdown-action-btn admin-menu-btn" 
                           onClick={() => {
                             setIsUserDropdownOpen(false);
-                            setIsAdminModalOpen(true);
-                            fetchAdminData();
+                            navigate('/admin');
                           }} 
                           type="button"
                         >
@@ -3333,6 +3662,7 @@ export default function App() {
                           <span>Admin Console</span>
                         </button>
                       )}
+
 
                       <button className="dropdown-action-btn logout-btn" onClick={handleLogout} type="button">
                         <LogOut size={14} />
@@ -3448,7 +3778,9 @@ export default function App() {
                   }}
                   onCopy={(text, id) => copyToClipboard(text, id)}
                   onReaction={(id, liked) => handleReaction(id, liked)}
+                  onOpenFeedback={handleOpenFeedbackForMessage}
                   onHoverCitation={(h) => setHoveredCitation(h)}
+
                   onHighlightCitation={(h) => setActiveCitationHighlight(h)}
                   onFileClick={(path) => {
                     navigator.clipboard.writeText(path);
@@ -4213,8 +4545,27 @@ export default function App() {
                   <ShieldCheck size={18} />
                 </div>
                 <div>
-                  <h3>Ridge Command & User Management</h3>
-                  <p className="modal-subtitle-text">Manage climbers, permission roles, and daily inference quotas</p>
+                  <div className="admin-header-title-row">
+                    <h3>Enterprise Command & User Portal</h3>
+                    {adminStats?.tenant_name && (
+                      <span className="admin-enterprise-badge">
+                        <Building2 size={13} />
+                        <span>{adminStats.tenant_name}</span>
+                        {adminStats.tenant_slug && <span className="tenant-slug-tag">@{adminStats.tenant_slug}</span>}
+                      </span>
+                    )}
+                    {(user?.role === 'superadmin' || adminStats?.is_superadmin) && (
+                      <span className="superadmin-status-pill">
+                        <Crown size={12} />
+                        <span>SuperAdmin Global Mode</span>
+                      </span>
+                    )}
+                  </div>
+                  <p className="modal-subtitle-text">
+                    {(user?.role === 'superadmin' || adminStats?.is_superadmin)
+                      ? 'Global system management: provision institutions, assign roles, and inspect all tenant workspaces'
+                      : `Manage members, permission roles, and inference quotas for ${adminStats?.tenant_name || 'your enterprise'}`}
+                  </p>
                 </div>
               </div>
               <button className="modal-close-btn" onClick={() => setIsAdminModalOpen(false)} aria-label="Close">
@@ -4222,8 +4573,30 @@ export default function App() {
               </button>
             </div>
 
+            {/* SuperAdmin Navigation Tabs */}
+            {(user?.role === 'superadmin' || adminStats?.is_superadmin) && (
+              <div className="admin-subnav-tabs">
+                <button
+                  type="button"
+                  className={`admin-subnav-btn ${adminActiveTab === 'users' ? 'active' : ''}`}
+                  onClick={() => setAdminActiveTab('users')}
+                >
+                  <Users size={15} />
+                  <span>Climbers & Members ({adminUsers.length})</span>
+                </button>
+                <button
+                  type="button"
+                  className={`admin-subnav-btn ${adminActiveTab === 'tenants' ? 'active' : ''}`}
+                  onClick={() => setAdminActiveTab('tenants')}
+                >
+                  <Building2 size={15} />
+                  <span>Institutions & Enterprises ({adminTenantsList.length})</span>
+                </button>
+              </div>
+            )}
+
             <div className="admin-modal-body">
-              {/* Aggregate System Metrics */}
+              {/* Aggregate Enterprise / System Metrics */}
               {adminStats && (
                 <div className="admin-metrics-grid">
                   <div className="admin-metric-card">
@@ -4232,7 +4605,9 @@ export default function App() {
                     </div>
                     <div className="metric-info">
                       <span className="metric-value">{adminStats.total_users}</span>
-                      <span className="metric-label">{adminStats.active_users} Active Climbers</span>
+                      <span className="metric-label">
+                        {(user?.role === 'superadmin' || adminStats?.is_superadmin) ? `${adminStats.active_users} Total Active Climbers` : `${adminStats.active_users} Active Climbers`}
+                      </span>
                     </div>
                   </div>
 
@@ -4258,31 +4633,103 @@ export default function App() {
                 </div>
               )}
 
-              {/* Controls bar: Search & Refresh */}
-              <div className="admin-controls-bar">
-                <div className="admin-search-wrap">
-                  <Search size={15} className="search-icon" />
-                  <input
-                    type="text"
-                    placeholder="Filter by username, email, or role..."
-                    value={adminSearch}
-                    onChange={e => setAdminSearch(e.target.value)}
-                    className="admin-search-input"
-                  />
-                  {adminSearch && (
-                    <button className="clear-search-btn" onClick={() => setAdminSearch('')}>
-                      <X size={13} />
-                    </button>
-                  )}
-                </div>
-                <button className="admin-refresh-btn" onClick={fetchAdminData} disabled={isLoadingAdmin} title="Refresh User List">
-                  <RotateCw size={14} className={isLoadingAdmin ? 'spin-slow' : ''} />
-                  <span>Refresh</span>
-                </button>
-              </div>
+              {/* VIEW 1: CLIMBERS & MEMBERS TAB */}
+              {adminActiveTab === 'users' && (
+                <>
+                  {/* Controls bar: Search, Enterprise Switcher & Add User */}
+                  <div className="admin-controls-bar">
+                    <div className="admin-search-wrap">
+                      <Search size={15} className="search-icon" />
+                      <input
+                        type="text"
+                        placeholder="Filter by name, username, email, role, or enterprise..."
+                        value={adminSearch}
+                        onChange={e => setAdminSearch(e.target.value)}
+                        className="admin-search-input"
+                      />
+                      {adminSearch && (
+                        <button className="clear-search-btn" onClick={() => setAdminSearch('')}>
+                          <X size={13} />
+                        </button>
+                      )}
+                    </div>
+
+                    {(user?.role === 'superadmin' || adminStats?.is_superadmin) && adminTenantsList.length > 0 && (
+                      <div className="admin-tenant-switcher-wrap">
+                        <Building2 size={14} className="tenant-switch-icon" />
+                        <select
+                          className="admin-tenant-switcher-select"
+                          value={adminTenantFilter}
+                          onChange={e => {
+                            setAdminTenantFilter(e.target.value);
+                            fetchAdminData(e.target.value);
+                          }}
+                        >
+                          <option value="">All Enterprises (Global)</option>
+                          {adminTenantsList.map(t => (
+                            <option key={t.id} value={t.id}>
+                              {t.name} (@{t.slug})
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    )}
+
+                    <div className="admin-actions-group">
+                      <button
+                        className="admin-add-user-btn"
+                        onClick={() => {
+                          setIsAddUserModalOpen(true);
+                          setNewUsername('');
+                          setNewEmail('');
+                          setNewName('');
+                          setNewPassword('');
+                          setNewRole('user');
+                          setNewLimit(50);
+                          setNewTenantId(adminTenantFilter || user?.tenant_id || '');
+                        }}
+                        title="Directly add a new member"
+                      >
+                        <UserPlus size={14} />
+                        <span>Add Member</span>
+                      </button>
+
+                      <button
+                        className="admin-refresh-btn"
+                        onClick={() => fetchAdminData()}
+                        disabled={isLoadingAdmin}
+                        title="Refresh List"
+                      >
+                        <RotateCw size={14} className={isLoadingAdmin ? 'spin-slow' : ''} />
+                        <span>Refresh</span>
+                      </button>
+                    </div>
+                  </div>
+
 
               {/* Users Table */}
               <div className="admin-table-container">
+                {/* Bulk Action Bar */}
+                {selectedUserIds.size > 0 && (
+                  <div className="bulk-action-bar">
+                    <span className="bulk-count">{selectedUserIds.size} selected</span>
+                    <button
+                      className="bulk-delete-btn"
+                      onClick={handleBulkDeleteUsers}
+                      disabled={isBulkDeleting}
+                    >
+                      <Trash2 size={14} />
+                      <span>{isBulkDeleting ? 'Deleting...' : `Delete ${selectedUserIds.size}`}</span>
+                    </button>
+                    <button
+                      className="bulk-clear-btn"
+                      onClick={() => setSelectedUserIds(new Set())}
+                    >
+                      <X size={13} />
+                      <span>Clear</span>
+                    </button>
+                  </div>
+                )}
                 {isLoadingAdmin && adminUsers.length === 0 ? (
                   <div className="admin-loading-state">
                     <RotateCw size={24} className="spin-slow text-teal" />
@@ -4292,7 +4739,47 @@ export default function App() {
                   <table className="admin-users-table">
                     <thead>
                       <tr>
+                        <th className="checkbox-col">
+                          <input
+                            type="checkbox"
+                            className="admin-checkbox"
+                            title="Select all visible"
+                            checked={(() => {
+                              const visible = adminUsers.filter(u => {
+                                const q = adminSearch.toLowerCase();
+                                return (
+                                  u.username.toLowerCase().includes(q) ||
+                                  u.email.toLowerCase().includes(q) ||
+                                  (u.name && u.name.toLowerCase().includes(q)) ||
+                                  u.role.toLowerCase().includes(q)
+                                ) && u.role !== 'superadmin' && u.id !== user?.id;
+                              });
+                              return visible.length > 0 && visible.every(u => selectedUserIds.has(u.id));
+                            })()}
+                            onChange={e => {
+                              const visible = adminUsers.filter(u => {
+                                const q = adminSearch.toLowerCase();
+                                return (
+                                  u.username.toLowerCase().includes(q) ||
+                                  u.email.toLowerCase().includes(q) ||
+                                  (u.name && u.name.toLowerCase().includes(q)) ||
+                                  u.role.toLowerCase().includes(q)
+                                ) && u.role !== 'superadmin' && u.id !== user?.id;
+                              });
+                              if (e.target.checked) {
+                                setSelectedUserIds(prev => new Set([...prev, ...visible.map(u => u.id)]));
+                              } else {
+                                setSelectedUserIds(prev => {
+                                  const n = new Set(prev);
+                                  visible.forEach(u => n.delete(u.id));
+                                  return n;
+                                });
+                              }
+                            }}
+                          />
+                        </th>
                         <th>Climber</th>
+                        {(user?.role === 'superadmin' || adminStats?.is_superadmin) && !adminTenantFilter && <th>Enterprise</th>}
                         <th>Email</th>
                         <th>Role</th>
                         <th>Status</th>
@@ -4309,11 +4796,31 @@ export default function App() {
                             u.username.toLowerCase().includes(query) ||
                             u.email.toLowerCase().includes(query) ||
                             (u.name && u.name.toLowerCase().includes(query)) ||
-                            u.role.toLowerCase().includes(query)
+                            u.role.toLowerCase().includes(query) ||
+                            (u.tenant_name && u.tenant_name.toLowerCase().includes(query)) ||
+                            (u.tenant_slug && u.tenant_slug.toLowerCase().includes(query))
                           );
                         })
                         .map(u => (
-                          <tr key={u.id} className={!u.is_active ? 'user-row-inactive' : ''}>
+                          <tr key={u.id} className={`${!u.is_active ? 'user-row-inactive' : ''} ${selectedUserIds.has(u.id) ? 'user-row-selected' : ''}`}>
+                            <td className="checkbox-col">
+                              {u.role !== 'superadmin' && u.id !== user?.id ? (
+                                <input
+                                  type="checkbox"
+                                  className="admin-checkbox"
+                                  checked={selectedUserIds.has(u.id)}
+                                  onChange={e => {
+                                    setSelectedUserIds(prev => {
+                                      const n = new Set(prev);
+                                      e.target.checked ? n.add(u.id) : n.delete(u.id);
+                                      return n;
+                                    });
+                                  }}
+                                />
+                              ) : (
+                                <span className="checkbox-placeholder" />
+                              )}
+                            </td>
                             <td className="user-profile-cell">
                               <div className="user-table-avatar">
                                 {u.username.charAt(0).toUpperCase()}
@@ -4324,28 +4831,51 @@ export default function App() {
                               </div>
                             </td>
 
+                            {user?.role === 'superadmin' && !adminTenantFilter && (
+                              <td className="user-tenant-cell">
+                                <span className="tenant-table-badge" title={`Tenant: ${u.tenant_name || 'Default'}`}>
+                                  <Building2 size={12} />
+                                  <span>{u.tenant_name || 'Default'}</span>
+                                </span>
+                              </td>
+                            )}
+
                             <td className="user-email-cell">{u.email}</td>
 
                             <td>
-                              <button
-                                className={`role-chip-btn ${u.role === 'admin' ? 'admin' : 'user'}`}
-                                onClick={() => handleUpdateRole(u.id, u.role)}
-                                title={`Click to switch role to ${u.role === 'admin' ? 'user' : 'admin'}`}
-                              >
-                                {u.role === 'admin' ? <Crown size={12} /> : <User size={12} />}
-                                <span>{u.role === 'admin' ? 'Admin' : 'Climber'}</span>
-                              </button>
+                              {u.role === 'superadmin' ? (
+                                <span className="role-chip-static superadmin" title="Platform SuperAdmin">
+                                  <Crown size={12} />
+                                  <span>SuperAdmin</span>
+                                </span>
+                              ) : (
+                                <button
+                                  className={`role-chip-btn ${u.role === 'admin' ? 'admin' : 'user'}`}
+                                  onClick={() => handleUpdateRole(u.id, u.role)}
+                                  title={`Click to promote/demote between Admin and Member`}
+                                >
+                                  {u.role === 'admin' ? <Crown size={12} /> : <User size={12} />}
+                                  <span>{u.role === 'admin' ? 'Admin' : 'Member'}</span>
+                                </button>
+                              )}
                             </td>
 
                             <td>
-                              <button
-                                className={`status-chip-btn ${u.is_active ? 'active' : 'suspended'}`}
-                                onClick={() => handleUpdateStatus(u.id, u.is_active)}
-                                title={`Click to ${u.is_active ? 'suspend' : 'activate'} account`}
-                              >
-                                {u.is_active ? <UserCheck size={12} /> : <UserX size={12} />}
-                                <span>{u.is_active ? 'Active' : 'Suspended'}</span>
-                              </button>
+                              {u.role === 'superadmin' ? (
+                                <span className="status-chip-static active">
+                                  <UserCheck size={12} />
+                                  <span>Active</span>
+                                </span>
+                              ) : (
+                                <button
+                                  className={`status-chip-btn ${u.is_active ? 'active' : 'suspended'}`}
+                                  onClick={() => handleUpdateStatus(u.id, u.is_active)}
+                                  title={`Click to ${u.is_active ? 'suspend' : 'activate'} account`}
+                                >
+                                  {u.is_active ? <UserCheck size={12} /> : <UserX size={12} />}
+                                  <span>{u.is_active ? 'Active' : 'Suspended'}</span>
+                                </button>
+                              )}
                             </td>
 
                             <td>
@@ -4356,7 +4886,7 @@ export default function App() {
                                     value={tempLimitValue}
                                     onChange={e => setTempLimitValue(Math.max(1, parseInt(e.target.value) || 1))}
                                     min={1}
-                                    max={10000}
+                                    max={1000000}
                                     className="quota-edit-input"
                                     autoFocus
                                   />
@@ -4379,13 +4909,15 @@ export default function App() {
                                 <div
                                   className="quota-display-badge"
                                   onClick={() => {
-                                    setEditingLimitUserId(u.id);
-                                    setTempLimitValue(u.daily_request_limit || 50);
+                                    if (u.role !== 'superadmin') {
+                                      setEditingLimitUserId(u.id);
+                                      setTempLimitValue(u.daily_request_limit || 50);
+                                    }
                                   }}
-                                  title="Click to change daily quota limit"
+                                  title={u.role === 'superadmin' ? 'Unlimited SuperAdmin quota' : 'Click to change daily quota limit'}
                                 >
-                                  <span>{u.role === 'admin' ? 'Unlimited' : `${u.daily_request_limit} / day`}</span>
-                                  <Sliders size={12} className="quota-edit-icon" />
+                                  <span>{u.role === 'superadmin' || u.role === 'admin' ? 'Unlimited' : `${u.daily_request_limit} / day`}</span>
+                                  {u.role !== 'superadmin' && <Sliders size={12} className="quota-edit-icon" />}
                                 </div>
                               )}
                             </td>
@@ -4399,8 +4931,14 @@ export default function App() {
                               <button
                                 className="user-delete-action-btn"
                                 onClick={() => handleDeleteUser(u.id, u.username)}
-                                disabled={u.id === user?.id}
-                                title={u.id === user?.id ? 'Cannot delete active account' : 'Delete user and purge data'}
+                                disabled={u.id === user?.id || u.role === 'superadmin'}
+                                title={
+                                  u.id === user?.id
+                                    ? 'Cannot delete your own account'
+                                    : u.role === 'superadmin'
+                                    ? 'Cannot delete SuperAdmin'
+                                    : 'Delete user and purge data'
+                                }
                               >
                                 <Trash2 size={14} />
                               </button>
@@ -4411,13 +4949,483 @@ export default function App() {
                   </table>
                 )}
               </div>
+            </>
+          )}
+
+          {/* VIEW 2: INSTITUTIONS & ENTERPRISES TAB (SuperAdmin only) */}
+          {adminActiveTab === 'tenants' && (
+            <>
+              <div className="admin-controls-bar">
+                <div className="admin-search-wrap">
+                  <Search size={15} className="search-icon" />
+                  <input
+                    type="text"
+                    placeholder="Search institutions by name or slug..."
+                    value={adminSearch}
+                    onChange={e => setAdminSearch(e.target.value)}
+                    className="admin-search-input"
+                  />
+                  {adminSearch && (
+                    <button className="clear-search-btn" onClick={() => setAdminSearch('')}>
+                      <X size={13} />
+                    </button>
+                  )}
+                </div>
+
+                <div className="admin-actions-group">
+                  <button
+                    className="admin-add-user-btn"
+                    onClick={() => {
+                      setIsCreateTenantModalOpen(true);
+                      setNewTenantName('');
+                      setNewTenantSlug('');
+                      setNewTenantMaxUsers(50);
+                    }}
+                    title="Provision a new enterprise institution workspace"
+                  >
+                    <Building2 size={14} />
+                    <span>Provision Institution</span>
+                  </button>
+
+                  <button
+                    className="admin-refresh-btn"
+                    onClick={() => fetchAdminData()}
+                    disabled={isLoadingAdmin}
+                    title="Refresh List"
+                  >
+                    <RotateCw size={14} className={isLoadingAdmin ? 'spin-slow' : ''} />
+                    <span>Refresh</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Institutions Table */}
+              <div className="admin-table-container">
+                <table className="admin-users-table">
+                  <thead>
+                    <tr>
+                      <th>Institution</th>
+                      <th>Slug Code</th>
+                      <th>Status</th>
+                      <th>Capacity</th>
+                      <th>Documents</th>
+                      <th>Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {adminTenantsList
+                      .filter(t => {
+                        const query = adminSearch.toLowerCase();
+                        return (
+                          t.name.toLowerCase().includes(query) ||
+                          t.slug.toLowerCase().includes(query)
+                        );
+                      })
+                      .map(t => (
+                        <tr key={t.id} className={t.is_active === false ? 'user-row-inactive' : ''}>
+                          <td className="user-profile-cell">
+                            <div className="user-table-avatar text-teal">
+                              <Building2 size={15} />
+                            </div>
+                            <div className="user-name-stack">
+                              <span className="u-name">{t.name}</span>
+                              {t.slug === 'default' && <span className="tenant-default-badge">Primary System Root</span>}
+                            </div>
+                          </td>
+
+                          <td>
+                            <span className="tenant-slug-mono">@{t.slug}</span>
+                          </td>
+
+                          <td>
+                            {t.slug === 'default' ? (
+                              <span className="status-chip-static active">
+                                <ShieldCheck size={12} />
+                                <span>System Root</span>
+                              </span>
+                            ) : (
+                              <button
+                                className={`status-chip-btn ${t.is_active !== false ? 'active' : 'suspended'}`}
+                                onClick={() => handleToggleTenantStatus(t.id, t.is_active !== false)}
+                                title={`Click to ${t.is_active !== false ? 'suspend' : 'activate'} institution`}
+                              >
+                                {t.is_active !== false ? <Check size={12} /> : <X size={12} />}
+                                <span>{t.is_active !== false ? 'Active' : 'Suspended'}</span>
+                              </button>
+                            )}
+                          </td>
+
+                          <td>
+                            <span className="tenant-capacity-badge">
+                              {t.user_count || 0} / {t.max_users || 50} climbers
+                            </span>
+                          </td>
+
+                          <td className="usage-cell">
+                            <span className="usage-number">{t.doc_count || 0}</span>
+                            <span className="usage-sub">docs</span>
+                          </td>
+
+                          <td className="actions-cell">
+                            <div className="tenant-actions-row">
+                              <button
+                                className="btn-ghost-sm"
+                                onClick={() => {
+                                  setAdminTenantFilter(t.id);
+                                  setAdminActiveTab('users');
+                                  fetchAdminData(t.id);
+                                }}
+                                title="View members belonging to this institution"
+                              >
+                                <Users size={13} />
+                                <span>Members</span>
+                              </button>
+                              {t.slug !== 'default' && (
+                                <button
+                                  className="user-delete-action-btn"
+                                  onClick={() => handleDeleteTenant(t.id, t.name)}
+                                  title="Permanently delete institution and purge all data"
+                                >
+                                  <Trash2 size={14} />
+                                </button>
+                              )}
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                  </tbody>
+                </table>
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  )}
+
+  {/* Global Custom Confirm Dialog */}
+  {confirmDialog.open && (
+    <div className="confirm-backdrop" onClick={() => setConfirmDialog(d => ({ ...d, open: false }))}>
+      <div className="confirm-card" onClick={e => e.stopPropagation()}>
+        <div className={`confirm-icon-ring ${confirmDialog.danger ? 'danger' : 'neutral'}`}>
+          <Trash2 size={22} />
+        </div>
+        <h3 className="confirm-title">{confirmDialog.title}</h3>
+        <p className="confirm-message">{confirmDialog.message}</p>
+        <div className="confirm-actions">
+          <button
+            className="confirm-btn-cancel"
+            onClick={() => setConfirmDialog(d => ({ ...d, open: false }))}
+          >
+            Cancel
+          </button>
+          <button
+            className={`confirm-btn-ok ${confirmDialog.danger ? 'danger' : ''}`}
+            onClick={confirmDialog.onConfirm}
+          >
+            {confirmDialog.danger ? (
+              <>
+                <Trash2 size={14} />
+                <span>Delete permanently</span>
+              </>
+            ) : (
+              <span>Confirm</span>
+            )}
+          </button>
+        </div>
+      </div>
+    </div>
+  )}
+
+  {/* Create New Institution Modal Dialog (SuperAdmin) */}
+  {isCreateTenantModalOpen && (
+    <div className="recall-modal-backdrop add-user-backdrop" onClick={() => setIsCreateTenantModalOpen(false)}>
+      <div className="recall-modal-card add-user-card" onClick={e => e.stopPropagation()}>
+        <div className="modal-header">
+          <div className="modal-title-wrap">
+            <div className="admin-summit-badge">
+              <Building2 size={18} />
             </div>
+            <div>
+              <h3>Provision Institution Enterprise</h3>
+              <p className="modal-subtitle-text">Create a dedicated multi-tenant workspace with isolated knowledge bases</p>
+            </div>
+          </div>
+          <button className="modal-close-btn" onClick={() => setIsCreateTenantModalOpen(false)} aria-label="Close">
+            <X size={18} />
+          </button>
+        </div>
+
+        <form onSubmit={handleCreateTenant} className="add-user-modal-body">
+          <div className="auth-input-group">
+            <label>Institution Name</label>
+            <div className="auth-input-field-wrap">
+              <Building2 size={16} className="input-field-icon" />
+              <input
+                type="text"
+                placeholder="e.g. Stanford AI Institute"
+                value={newTenantName}
+                onChange={e => {
+                  setNewTenantName(e.target.value);
+                  if (!newTenantSlug) {
+                    setNewTenantSlug(e.target.value.toLowerCase().replace(/[^a-z0-9]/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, ''));
+                  }
+                }}
+                required
+                autoFocus
+              />
+            </div>
+          </div>
+
+          <div className="add-user-form-row">
+            <div className="auth-input-group">
+              <label>Organization Slug Code</label>
+              <div className="auth-input-field-wrap">
+                <span className="auth-input-prefix">@</span>
+                <input
+                  type="text"
+                  placeholder="stanford-ai"
+                  value={newTenantSlug}
+                  onChange={e => setNewTenantSlug(e.target.value.toLowerCase().replace(/[^a-z0-9-_]/g, ''))}
+                  required
+                />
+              </div>
+            </div>
+
+            <div className="auth-input-group">
+              <label>Max Climber Capacity</label>
+              <div className="auth-input-field-wrap">
+                <Users size={16} className="input-field-icon" />
+                <input
+                  type="number"
+                  min={1}
+                  max={10000}
+                  value={newTenantMaxUsers}
+                  onChange={e => setNewTenantMaxUsers(Math.max(1, parseInt(e.target.value) || 50))}
+                  required
+                />
+              </div>
+            </div>
+          </div>
+
+          <div className="add-user-footer-actions">
+            <button
+              type="button"
+              className="btn-ghost"
+              onClick={() => setIsCreateTenantModalOpen(false)}
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              className="recall-btn-primary"
+              disabled={isCreatingTenant}
+            >
+              {isCreatingTenant ? (
+                <>
+                  <RotateCw size={15} className="spin-slow" />
+                  <span>Provisioning...</span>
+                </>
+              ) : (
+                <>
+                  <Building2 size={15} />
+                  <span>Create Institution</span>
+                </>
+              )}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  )}
+
+
+      {/* Add New Member Modal Dialog */}
+      {isAddUserModalOpen && (
+        <div className="recall-modal-backdrop add-user-backdrop" onClick={() => setIsAddUserModalOpen(false)}>
+          <div className="recall-modal-card add-user-card" onClick={e => e.stopPropagation()}>
+            <div className="modal-header">
+              <div className="modal-title-wrap">
+                <div className="admin-summit-badge">
+                  <UserPlus size={18} />
+                </div>
+                <div>
+                  <h3>Provision Enterprise Climber</h3>
+                  <p className="modal-subtitle-text">Create a new account in your enterprise workspace</p>
+                </div>
+              </div>
+              <button className="modal-close-btn" onClick={() => setIsAddUserModalOpen(false)} aria-label="Close">
+                <X size={18} />
+              </button>
+            </div>
+
+            <form onSubmit={handleCreateUser} className="add-user-modal-body">
+              {user?.role === 'superadmin' && adminTenantsList.length > 0 && (
+                <div className="auth-input-group">
+                  <label>Assign to Enterprise</label>
+                  <div className="auth-select-wrap">
+                    <Building2 size={16} className="input-field-icon" />
+                    <select
+                      className="auth-tenant-select"
+                      value={newTenantId || user?.tenant_id}
+                      onChange={e => setNewTenantId(e.target.value)}
+                    >
+                      {adminTenantsList.map(t => (
+                        <option key={t.id} value={t.id}>
+                          {t.name} (@{t.slug})
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+              )}
+
+              <div className="add-user-form-row">
+                <div className="auth-input-group">
+                  <label>Username</label>
+                  <div className="auth-input-field-wrap">
+                    <User size={16} className="input-field-icon" />
+                    <input
+                      type="text"
+                      placeholder="e.g. climber_alex"
+                      value={newUsername}
+                      onChange={e => setNewUsername(e.target.value)}
+                      required
+                      minLength={3}
+                      autoFocus
+                    />
+                  </div>
+                </div>
+
+                <div className="auth-input-group">
+                  <label>Full Name</label>
+                  <div className="auth-input-field-wrap">
+                    <User size={16} className="input-field-icon" />
+                    <input
+                      type="text"
+                      placeholder="e.g. Alex Mercer"
+                      value={newName}
+                      onChange={e => setNewName(e.target.value)}
+                    />
+                  </div>
+                </div>
+              </div>
+
+              <div className="auth-input-group">
+                <label>Email Address</label>
+                <div className="auth-input-field-wrap">
+                  <Mail size={16} className="input-field-icon" />
+                  <input
+                    type="email"
+                    placeholder="alex@enterprise.com"
+                    value={newEmail}
+                    onChange={e => setNewEmail(e.target.value)}
+                    required
+                  />
+                </div>
+              </div>
+
+              <div className="auth-input-group">
+                <label>Initial Password (Min. 6 chars)</label>
+                <div className="auth-input-field-wrap">
+                  <Key size={16} className="input-field-icon" />
+                  <input
+                    type={showNewPassword ? 'text' : 'password'}
+                    placeholder="••••••••"
+                    value={newPassword}
+                    onChange={e => setNewPassword(e.target.value)}
+                    required
+                    minLength={6}
+                  />
+                  <button
+                    type="button"
+                    className="auth-eye-toggle-btn"
+                    onClick={() => setShowNewPassword(!showNewPassword)}
+                    tabIndex={-1}
+                  >
+                    {showNewPassword ? <EyeOff size={15} /> : <Eye size={15} />}
+                  </button>
+                </div>
+              </div>
+
+              <div className="add-user-form-row">
+                <div className="auth-input-group">
+                  <label>Permission Role</label>
+                  <div className="auth-select-wrap">
+                    <select
+                      className="auth-tenant-select"
+                      value={newRole}
+                      onChange={e => setNewRole(e.target.value as 'user' | 'admin')}
+                    >
+                      <option value="user">Member (Climber)</option>
+                      <option value="admin">Enterprise Admin</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div className="auth-input-group">
+                  <label>Daily Request Limit</label>
+                  <div className="auth-input-field-wrap">
+                    <Sliders size={16} className="input-field-icon" />
+                    <input
+                      type="number"
+                      min={1}
+                      max={1000000}
+                      value={newRole === 'admin' ? 999999 : newLimit}
+                      onChange={e => setNewLimit(Math.max(1, parseInt(e.target.value) || 50))}
+                      disabled={newRole === 'admin'}
+                    />
+                  </div>
+                </div>
+              </div>
+
+              <div className="add-user-footer-actions">
+                <button
+                  type="button"
+                  className="btn-ghost"
+                  onClick={() => setIsAddUserModalOpen(false)}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="recall-btn-primary"
+                  disabled={isCreatingUser}
+                >
+                  {isCreatingUser ? (
+                    <>
+                      <RotateCw size={15} className="spin-slow" />
+                      <span>Creating Member...</span>
+                    </>
+                  ) : (
+                    <>
+                      <UserPlus size={15} />
+                      <span>Provision Member Account</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}
 
+
+      {/* Climber Feedback & Accuracy Inquiry Modal */}
+      <FeedbackModal
+        isOpen={isFeedbackOpen}
+        onClose={() => {
+          setIsFeedbackOpen(false);
+          setFeedbackTargetContext(null);
+        }}
+        conversationId={activeSessionId}
+        targetContext={feedbackTargetContext}
+      />
+
+
       {/* Authentication Modal (ID + Password Login & Registration) */}
       <AuthModal
+
         isOpen={isAuthModalOpen}
         onClose={() => setIsAuthModalOpen(false)}
         onSuccess={(newUser, token) => {

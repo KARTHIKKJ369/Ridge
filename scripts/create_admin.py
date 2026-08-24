@@ -40,7 +40,7 @@ def create_or_update_admin(
     password: str = "Kichu@5120",
     email: str = "admin@ridge.ai",
     name: str = "Ridge Administrator",
-    role: str = "admin",
+    role: str = "superadmin",
 ):
     salt = secrets.token_hex(16)
     pw_hash = hash_password(password, salt)
@@ -94,7 +94,7 @@ def main():
     parser.add_argument("--password", default="Kichu@5120", help="Admin password (default: Kichu@5120)")
     parser.add_argument("--email", default="admin@ridge.ai", help="Admin email (default: admin@ridge.ai)")
     parser.add_argument("--name", default="Ridge Administrator", help="Display name")
-    parser.add_argument("--role", default="admin", choices=["admin", "user"], help="User role")
+    parser.add_argument("--role", default="superadmin", choices=["superadmin", "admin", "user"], help="User role")
 
     args = parser.parse_args()
     create_or_update_admin(
@@ -104,6 +104,7 @@ def main():
         name=args.name,
         role=args.role,
     )
+
 
 
 if __name__ == "__main__":

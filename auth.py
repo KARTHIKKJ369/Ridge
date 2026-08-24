@@ -79,7 +79,10 @@ class UserProfile(BaseModel):
     avatar_url: str = ""
     provider: str = "local"
     is_guest: bool = False
-    role: str = "user"
+    role: str = "user"  # "superadmin" | "admin" | "user" | "guest"
+    tenant_id: str = str(DEFAULT_TENANT_ID)
+    tenant_name: str = "Default Tenant"
+    tenant_slug: str = "default"
     is_active: bool = True
     daily_request_limit: int = 50
     requests_today: int = 0
@@ -89,6 +92,27 @@ class RegisterRequest(BaseModel):
     username: str = Field(..., min_length=3, max_length=50)
     email: str = Field(..., min_length=5)
     password: str = Field(..., min_length=6)
+    name: Optional[str] = None
+    tenant_slug: Optional[str] = None
+
+
+class RegisterInstitutionRequest(BaseModel):
+    institution_name: str = Field(..., min_length=2, max_length=100)
+    slug: str = Field(..., min_length=2, max_length=64)
+    admin_name: str = Field(..., min_length=2, max_length=100)
+    admin_username: str = Field(..., min_length=3, max_length=50)
+    admin_email: str = Field(..., min_length=5)
+    admin_password: str = Field(..., min_length=6)
+
+
+class AdminCreateUserRequest(BaseModel):
+    username: str = Field(..., min_length=3, max_length=50)
+    email: str = Field(..., min_length=5)
+    password: str = Field(..., min_length=6)
+    name: Optional[str] = None
+    role: str = "user"
+    daily_request_limit: int = 50
+    tenant_id: Optional[str] = None
 
 
 class LoginRequest(BaseModel):
@@ -110,7 +134,7 @@ def _hash_password(password: str, salt: str) -> str:
 
 
 def init_db():
-    """Initializes and seeds default admin in PostgreSQL."""
+    """Initializes and seeds default admin and tenant in PostgreSQL."""
     try:
         with get_sync_session() as session:
             # Check for existing admin
@@ -125,14 +149,22 @@ def init_db():
                 session.execute(
                     text("""
                         INSERT INTO users (id, tenant_id, username, email, name, password_hash, salt, role, is_active, daily_request_limit, created_at, updated_at)
-                        VALUES (:uid, :tid, 'admin', 'admin@ridge.ai', 'Ridge Administrator', :hash, :salt, 'admin', true, 999999, NOW(), NOW())
+                        VALUES (:uid, :tid, 'admin', 'admin@ridge.ai', 'Ridge Administrator', :hash, :salt, 'superadmin', true, 999999, NOW(), NOW())
                         ON CONFLICT (username) DO NOTHING
                     """),
                     {"uid": admin_id, "tid": DEFAULT_TENANT_ID, "hash": pw_hash, "salt": salt}
                 )
                 session.commit()
+            else:
+                # Ensure existing admin is elevated to superadmin
+                session.execute(
+                    text("UPDATE users SET role = 'superadmin', daily_request_limit = 999999 WHERE username = 'admin'")
+                )
+                session.commit()
+
     except Exception as e:
         logger.warning(f"Auth DB init notice: {e}")
+
 
 
 def get_user_usage_today(user_id: str) -> int:
@@ -221,6 +253,7 @@ def register_user(req: RegisterRequest) -> UserProfile:
     username = req.username.strip().lower()
     email = req.email.strip().lower()
     name = req.username.strip()
+    req_slug = (req.tenant_slug or "default").strip().lower()
 
     if len(req.password) < 6:
         raise HTTPException(status_code=400, detail="Password must be at least 6 characters.")
@@ -231,21 +264,50 @@ def register_user(req: RegisterRequest) -> UserProfile:
 
     try:
         with get_sync_session() as session:
-            # Check if any users exist
-            cnt_row = session.execute(text("SELECT count(*) FROM users")).first()
-            user_count = cnt_row[0] if cnt_row else 0
-            role = "admin" if (user_count == 0 or username in ("admin", "testadmin") or email.startswith("admin@")) else "user"
-            daily_limit = 100 if role == "admin" else 50
+            # 1. Resolve Tenant
+            t_row = session.execute(
+                text("SELECT id, name, slug, is_active, max_users FROM tenants WHERE slug = :slug"),
+                {"slug": req_slug}
+            ).first()
+
+            if not t_row:
+                raise HTTPException(status_code=400, detail=f"Organization '{req_slug}' not found.")
+
+            target_tenant_id, target_tenant_name, target_tenant_slug, is_active, max_users = t_row
+            if not is_active:
+                raise HTTPException(status_code=403, detail="This organization has been deactivated.")
+
+            # Check tenant user capacity
+            u_count_row = session.execute(
+                text("SELECT count(*) FROM users WHERE tenant_id = :tid"),
+                {"tid": target_tenant_id}
+            ).first()
+            tenant_user_count = u_count_row[0] if u_count_row else 0
+            if tenant_user_count >= (max_users or 50):
+                raise HTTPException(status_code=400, detail="This organization has reached its maximum member capacity.")
+
+            # Role assignment
+            all_users_count = session.execute(text("SELECT count(*) FROM users")).scalar() or 0
+            if all_users_count == 0 or username in ("admin", "superadmin"):
+                role = "superadmin"
+            elif tenant_user_count == 0:
+                role = "admin"
+            else:
+                role = "user"
+
+            daily_limit = 999999 if role in ("superadmin", "admin") else 50
 
             session.execute(
                 text("""
                     INSERT INTO users (id, tenant_id, username, email, name, password_hash, salt, role, is_active, daily_request_limit, created_at, updated_at)
                     VALUES (:uid, :tid, :uname, :email, :name, :hash, :salt, :role, true, :limit, NOW(), NOW())
                 """),
-                {"uid": user_id, "tid": DEFAULT_TENANT_ID, "uname": username, "email": email, "name": name, "hash": password_hash, "salt": salt, "role": role, "limit": daily_limit}
+                {"uid": user_id, "tid": target_tenant_id, "uname": username, "email": email, "name": name, "hash": password_hash, "salt": salt, "role": role, "limit": daily_limit}
             )
             session.commit()
 
+    except HTTPException:
+        raise
     except Exception as e:
         err_msg = str(e).lower()
         if "username" in err_msg or "unique" in err_msg:
@@ -261,10 +323,112 @@ def register_user(req: RegisterRequest) -> UserProfile:
         provider="local",
         is_guest=False,
         role=role,
+        tenant_id=str(target_tenant_id),
+        tenant_name=target_tenant_name,
+        tenant_slug=target_tenant_slug,
         is_active=True,
         daily_request_limit=daily_limit,
         requests_today=0,
     )
+
+
+def register_institution(req: RegisterInstitutionRequest) -> UserProfile:
+    import uuid
+    inst_name = req.institution_name.strip()
+    slug = req.slug.strip().lower()
+    uname = req.admin_username.strip().lower()
+    email = req.admin_email.strip().lower()
+    name = req.admin_name.strip()
+
+    if len(req.admin_password) < 6:
+        raise HTTPException(status_code=400, detail="Password must be at least 6 characters.")
+
+    try:
+        with get_sync_session() as session:
+            # 1. Check slug uniqueness
+            existing_t = session.execute(
+                text("SELECT id FROM tenants WHERE slug = :slug"),
+                {"slug": slug}
+            ).first()
+            if existing_t:
+                raise HTTPException(status_code=400, detail=f"Institution slug '{slug}' is already taken.")
+
+            # 2. Check username/email uniqueness
+            existing_u = session.execute(
+                text("SELECT id FROM users WHERE username = :uname OR email = :email"),
+                {"uname": uname, "email": email}
+            ).first()
+            if existing_u:
+                raise HTTPException(status_code=400, detail="Username or email is already registered.")
+
+            # 3. Create Tenant
+            tenant_id = uuid.uuid4()
+            session.execute(
+                text("""
+                    INSERT INTO tenants (id, name, slug, is_active, max_users, created_at, updated_at)
+                    VALUES (:tid, :name, :slug, true, 50, NOW(), NOW())
+                """),
+                {"tid": tenant_id, "name": inst_name, "slug": slug}
+            )
+
+            # 4. Create primary KB for Tenant
+            kb_id = uuid.uuid4()
+            session.execute(
+                text("""
+                    INSERT INTO knowledge_bases (id, tenant_id, name, description, created_at, updated_at)
+                    VALUES (:kbid, :tid, :name, :desc, NOW(), NOW())
+                """),
+                {
+                    "kbid": kb_id,
+                    "tid": tenant_id,
+                    "name": f"{inst_name} Knowledge Base",
+                    "desc": f"Primary knowledge base for {inst_name}",
+                }
+            )
+
+            # 5. Create Admin User
+            salt = secrets.token_hex(16)
+            pw_hash = _hash_password(req.admin_password, salt)
+            user_id = f"usr_{secrets.token_hex(8)}"
+
+            session.execute(
+                text("""
+                    INSERT INTO users (id, tenant_id, username, email, name, password_hash, salt, role, is_active, daily_request_limit, created_at, updated_at)
+                    VALUES (:uid, :tid, :uname, :email, :name, :hash, :salt, 'admin', true, 999999, NOW(), NOW())
+                """),
+                {
+                    "uid": user_id,
+                    "tid": tenant_id,
+                    "uname": uname,
+                    "email": email,
+                    "name": name,
+                    "hash": pw_hash,
+                    "salt": salt,
+                }
+            )
+            session.commit()
+
+            return UserProfile(
+                id=user_id,
+                username=uname,
+                email=email,
+                name=name,
+                avatar_url="",
+                provider="local",
+                is_guest=False,
+                role="admin",
+                tenant_id=str(tenant_id),
+                tenant_name=inst_name,
+                tenant_slug=slug,
+                is_active=True,
+                daily_request_limit=999999,
+                requests_today=0,
+            )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error registering institution: {e}")
+        raise HTTPException(status_code=400, detail=f"Failed to register institution: {e}")
 
 
 def authenticate_user(req: LoginRequest) -> UserProfile:
@@ -272,14 +436,22 @@ def authenticate_user(req: LoginRequest) -> UserProfile:
     try:
         with get_sync_session() as session:
             row = session.execute(
-                text("SELECT id, username, email, name, password_hash, salt, role, is_active, daily_request_limit FROM users WHERE username = :ident OR email = :ident"),
+                text("""
+                    SELECT u.id, u.username, u.email, u.name, u.password_hash, u.salt, u.role, u.is_active, u.daily_request_limit,
+                           t.id as tenant_id, t.name as tenant_name, t.slug as tenant_slug
+                    FROM users u
+                    JOIN tenants t ON u.tenant_id = t.id
+                    WHERE u.username = :ident OR u.email = :ident
+                """),
                 {"ident": identifier}
             ).first()
 
             if not row:
                 raise HTTPException(status_code=401, detail="Invalid username or password.")
 
-            user_id, username, email, name, stored_hash, salt, role, is_active, daily_limit = row
+            (user_id, username, email, name, stored_hash, salt, role, is_active, daily_limit,
+             tenant_id, tenant_name, tenant_slug) = row
+
             test_hash = _hash_password(req.password, salt)
 
             if not secrets.compare_digest(stored_hash, test_hash):
@@ -299,6 +471,9 @@ def authenticate_user(req: LoginRequest) -> UserProfile:
                 provider="local",
                 is_guest=False,
                 role=role or "user",
+                tenant_id=str(tenant_id),
+                tenant_name=tenant_name or "Default Tenant",
+                tenant_slug=tenant_slug or "default",
                 is_active=bool(is_active),
                 daily_request_limit=daily_limit or 50,
                 requests_today=requests_today,
@@ -310,21 +485,45 @@ def authenticate_user(req: LoginRequest) -> UserProfile:
         raise HTTPException(status_code=401, detail="Invalid username or password.")
 
 
+
 # ---------------------------------------------------------------------------
-# Admin User Management Helpers (PostgreSQL)
+# Admin User Management Helpers (PostgreSQL - Tenant Scoped)
 # ---------------------------------------------------------------------------
 
-def admin_list_users() -> list[dict]:
+def admin_list_users(current_user: UserProfile, tenant_filter: Optional[str] = None) -> list[dict]:
+    import uuid
     today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    is_superadmin = current_user.role == "superadmin"
+
     try:
         with get_sync_session() as session:
-            rows = session.execute(text("""
+            query = """
                 SELECT u.id, u.username, u.email, u.name, u.role, u.is_active, u.daily_request_limit, u.created_at,
-                       COALESCE(uu.request_count, 0) as requests_today
+                       COALESCE(uu.request_count, 0) as requests_today,
+                       t.id as tenant_id, t.name as tenant_name, t.slug as tenant_slug
                 FROM users u
+                LEFT JOIN tenants t ON u.tenant_id = t.id
                 LEFT JOIN user_usage uu ON u.id = uu.user_id AND uu.usage_date = :udate
-                ORDER BY u.created_at DESC
-            """), {"udate": today_str}).all()
+            """
+            params: dict = {"udate": today_str}
+
+            if not is_superadmin:
+                query += " WHERE u.tenant_id = :tid"
+                params["tid"] = uuid.UUID(current_user.tenant_id)
+            elif tenant_filter and tenant_filter.strip():
+                tf = tenant_filter.strip()
+                try:
+                    tf_uuid = uuid.UUID(tf)
+                    query += " WHERE (u.tenant_id = :tf_uuid OR t.slug = :tf)"
+                    params["tf_uuid"] = tf_uuid
+                    params["tf"] = tf
+                except Exception:
+                    query += " WHERE t.slug = :tf"
+                    params["tf"] = tf
+
+            query += " ORDER BY u.created_at DESC"
+
+            rows = session.execute(text(query), params).all()
 
             users = []
             for r in rows:
@@ -338,6 +537,9 @@ def admin_list_users() -> list[dict]:
                     "daily_request_limit": r[6] or 50,
                     "created_at": int(r[7].timestamp()) if hasattr(r[7], "timestamp") else int(time.time()),
                     "requests_today": r[8],
+                    "tenant_id": str(r[9]) if r[9] else "",
+                    "tenant_name": r[10] or "Default",
+                    "tenant_slug": r[11] or "default",
                 })
             return users
     except Exception as e:
@@ -345,42 +547,186 @@ def admin_list_users() -> list[dict]:
         return []
 
 
-def admin_update_user_role(target_id: str, new_role: str):
-    if new_role not in ("admin", "user"):
+def admin_create_user(admin_user: UserProfile, req: AdminCreateUserRequest) -> UserProfile:
+    import uuid
+    uname = req.username.strip().lower()
+    email = req.email.strip().lower()
+    name = (req.name or req.username).strip()
+    role = req.role.strip().lower()
+
+    if role not in ("admin", "user", "superadmin"):
+        raise HTTPException(status_code=400, detail="Invalid role. Must be 'user' or 'admin'.")
+    if role == "superadmin" and admin_user.role != "superadmin":
+        raise HTTPException(status_code=403, detail="Only SuperAdmin can grant SuperAdmin role.")
+
+    # Determine tenant
+    if admin_user.role == "superadmin" and req.tenant_id:
+        try:
+            target_tenant_id = uuid.UUID(req.tenant_id)
+        except Exception:
+            raise HTTPException(status_code=400, detail="Invalid tenant_id UUID.")
+    else:
+        target_tenant_id = uuid.UUID(admin_user.tenant_id)
+
+    try:
+        with get_sync_session() as session:
+            t_row = session.execute(
+                text("SELECT name, slug, is_active, max_users FROM tenants WHERE id = :tid"),
+                {"tid": target_tenant_id}
+            ).first()
+            if not t_row:
+                raise HTTPException(status_code=404, detail="Enterprise not found.")
+            t_name, t_slug, is_active, max_users = t_row
+            if not is_active:
+                raise HTTPException(status_code=403, detail="Enterprise has been deactivated.")
+
+            u_count = session.execute(
+                text("SELECT count(*) FROM users WHERE tenant_id = :tid"),
+                {"tid": target_tenant_id}
+            ).scalar() or 0
+            if u_count >= (max_users or 50):
+                raise HTTPException(status_code=400, detail="Enterprise has reached maximum member capacity.")
+
+            existing = session.execute(
+                text("SELECT id FROM users WHERE username = :uname OR email = :email"),
+                {"uname": uname, "email": email}
+            ).first()
+            if existing:
+                raise HTTPException(status_code=400, detail="Username or email is already registered.")
+
+            salt = secrets.token_hex(16)
+            pw_hash = _hash_password(req.password, salt)
+            user_id = f"usr_{secrets.token_hex(8)}"
+            limit = 999999 if role in ("superadmin", "admin") else max(1, req.daily_request_limit)
+
+            session.execute(
+                text("""
+                    INSERT INTO users (id, tenant_id, username, email, name, password_hash, salt, role, is_active, daily_request_limit, created_at, updated_at)
+                    VALUES (:uid, :tid, :uname, :email, :name, :hash, :salt, :role, true, :limit, NOW(), NOW())
+                """),
+                {"uid": user_id, "tid": target_tenant_id, "uname": uname, "email": email, "name": name, "hash": pw_hash, "salt": salt, "role": role, "limit": limit}
+            )
+            session.commit()
+
+            return UserProfile(
+                id=user_id,
+                username=uname,
+                email=email,
+                name=name,
+                avatar_url="",
+                provider="local",
+                is_guest=False,
+                role=role,
+                tenant_id=str(target_tenant_id),
+                tenant_name=t_name,
+                tenant_slug=t_slug,
+                is_active=True,
+                daily_request_limit=limit,
+                requests_today=0,
+            )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error creating user: {e}")
+        raise HTTPException(status_code=400, detail=f"Failed to create user: {e}")
+
+
+def admin_update_user_role(admin_user: UserProfile, target_id: str, new_role: str):
+    role_clean = new_role.strip().lower()
+    if role_clean not in ("admin", "user", "superadmin"):
         raise HTTPException(status_code=400, detail="Invalid role. Must be 'admin' or 'user'.")
+    if role_clean == "superadmin" and admin_user.role != "superadmin":
+        raise HTTPException(status_code=403, detail="Only SuperAdmin can grant SuperAdmin role.")
+
     with get_sync_session() as session:
-        res = session.execute(text("UPDATE users SET role = :role WHERE id = :uid"), {"role": new_role, "uid": target_id})
-        if res.rowcount == 0:
+        target = session.execute(
+            text("SELECT id, role, tenant_id FROM users WHERE id = :uid"),
+            {"uid": target_id}
+        ).first()
+        if not target:
             raise HTTPException(status_code=404, detail="User not found.")
+
+        t_uid, t_role, t_tenant_id = target
+        if t_role == "superadmin" and admin_user.role != "superadmin":
+            raise HTTPException(status_code=403, detail="Cannot modify SuperAdmin account.")
+        if admin_user.role != "superadmin" and str(t_tenant_id) != str(admin_user.tenant_id):
+            raise HTTPException(status_code=403, detail="You can only manage users within your own enterprise.")
+
+        session.execute(
+            text("UPDATE users SET role = :role, updated_at = NOW() WHERE id = :uid"),
+            {"role": role_clean, "uid": target_id}
+        )
         session.commit()
 
 
-def admin_update_user_limit(target_id: str, new_limit: int):
-    if new_limit < 1 or new_limit > 100000:
-        raise HTTPException(status_code=400, detail="Limit must be between 1 and 100,000.")
+def admin_update_user_limit(admin_user: UserProfile, target_id: str, new_limit: int):
+    if new_limit < 1 or new_limit > 1000000:
+        raise HTTPException(status_code=400, detail="Limit must be between 1 and 1,000,000.")
+
     with get_sync_session() as session:
-        res = session.execute(text("UPDATE users SET daily_request_limit = :lim WHERE id = :uid"), {"lim": new_limit, "uid": target_id})
-        if res.rowcount == 0:
+        target = session.execute(
+            text("SELECT id, role, tenant_id FROM users WHERE id = :uid"),
+            {"uid": target_id}
+        ).first()
+        if not target:
             raise HTTPException(status_code=404, detail="User not found.")
+
+        t_uid, t_role, t_tenant_id = target
+        if admin_user.role != "superadmin" and str(t_tenant_id) != str(admin_user.tenant_id):
+            raise HTTPException(status_code=403, detail="You can only manage users within your own enterprise.")
+
+        session.execute(
+            text("UPDATE users SET daily_request_limit = :lim, updated_at = NOW() WHERE id = :uid"),
+            {"lim": new_limit, "uid": target_id}
+        )
         session.commit()
 
 
-def admin_update_user_status(target_id: str, is_active: bool):
+def admin_update_user_status(admin_user: UserProfile, target_id: str, is_active: bool):
     with get_sync_session() as session:
-        res = session.execute(text("UPDATE users SET is_active = :act WHERE id = :uid"), {"act": is_active, "uid": target_id})
-        if res.rowcount == 0:
+        target = session.execute(
+            text("SELECT id, role, tenant_id FROM users WHERE id = :uid"),
+            {"uid": target_id}
+        ).first()
+        if not target:
             raise HTTPException(status_code=404, detail="User not found.")
+
+        t_uid, t_role, t_tenant_id = target
+        if t_role == "superadmin":
+            raise HTTPException(status_code=403, detail="Cannot deactivate SuperAdmin account.")
+        if admin_user.role != "superadmin" and str(t_tenant_id) != str(admin_user.tenant_id):
+            raise HTTPException(status_code=403, detail="You can only manage users within your own enterprise.")
+
+        session.execute(
+            text("UPDATE users SET is_active = :act, updated_at = NOW() WHERE id = :uid"),
+            {"act": is_active, "uid": target_id}
+        )
         session.commit()
 
 
-def admin_delete_user(target_id: str) -> bool:
+def admin_delete_user(admin_user: UserProfile, target_id: str) -> bool:
+    if target_id == admin_user.id:
+        raise HTTPException(status_code=400, detail="Cannot delete your own account.")
+
     with get_sync_session() as session:
+        target = session.execute(
+            text("SELECT id, role, tenant_id FROM users WHERE id = :uid"),
+            {"uid": target_id}
+        ).first()
+        if not target:
+            raise HTTPException(status_code=404, detail="User not found.")
+
+        t_uid, t_role, t_tenant_id = target
+        if t_role == "superadmin":
+            raise HTTPException(status_code=403, detail="Cannot delete SuperAdmin account.")
+        if admin_user.role != "superadmin" and str(t_tenant_id) != str(admin_user.tenant_id):
+            raise HTTPException(status_code=403, detail="You can only delete users within your own enterprise.")
+
         session.execute(text("DELETE FROM user_usage WHERE user_id = :uid"), {"uid": target_id})
-        res = session.execute(text("DELETE FROM users WHERE id = :uid"), {"uid": target_id})
-        if res.rowcount == 0:
-            raise HTTPException(status_code=404, detail="User not found.")
+        session.execute(text("DELETE FROM users WHERE id = :uid"), {"uid": target_id})
         session.commit()
         return True
+
 
 
 # ---------------------------------------------------------------------------
@@ -476,26 +822,42 @@ async def get_current_user(
     user_id = payload.get("id", "user")
 
     # Fetch latest user data from PostgreSQL if available
+    tenant_id = str(DEFAULT_TENANT_ID)
+    tenant_name = "Default Tenant"
+    tenant_slug = "default"
+
     try:
         with get_sync_session() as session:
             row = session.execute(
-                text("SELECT role, is_active, daily_request_limit, name, email FROM users WHERE id = :uid"),
+                text("""
+                    SELECT u.role, u.is_active, u.daily_request_limit, u.name, u.email,
+                           t.id as tenant_id, t.name as tenant_name, t.slug as tenant_slug
+                    FROM users u
+                    JOIN tenants t ON u.tenant_id = t.id
+                    WHERE u.id = :uid
+                """),
                 {"uid": user_id}
             ).first()
 
             if row:
-                db_role, db_active, db_limit, db_name, db_email = row
+                db_role, db_active, db_limit, db_name, db_email, t_id, t_name, t_slug = row
                 if not db_active:
                     raise HTTPException(status_code=403, detail="Your account has been deactivated by an administrator.")
                 role = db_role or "user"
                 daily_limit = db_limit or 50
                 name = db_name or payload.get("name", "Climber")
                 email = db_email or payload.get("email", "")
+                tenant_id = str(t_id)
+                tenant_name = t_name or "Default Tenant"
+                tenant_slug = t_slug or "default"
             else:
                 role = payload.get("role", "user")
                 daily_limit = payload.get("daily_request_limit", 50)
                 name = payload.get("name", "Climber")
                 email = payload.get("email", "")
+                tenant_id = str(payload.get("tenant_id", DEFAULT_TENANT_ID))
+                tenant_name = payload.get("tenant_name", "Default Tenant")
+                tenant_slug = payload.get("tenant_slug", "default")
     except HTTPException:
         raise
     except Exception:
@@ -503,6 +865,9 @@ async def get_current_user(
         daily_limit = payload.get("daily_request_limit", 50)
         name = payload.get("name", "Climber")
         email = payload.get("email", "")
+        tenant_id = str(payload.get("tenant_id", DEFAULT_TENANT_ID))
+        tenant_name = payload.get("tenant_name", "Default Tenant")
+        tenant_slug = payload.get("tenant_slug", "default")
 
     requests_today = get_user_usage_today(user_id)
 
@@ -515,9 +880,13 @@ async def get_current_user(
         provider=payload.get("provider", "local"),
         is_guest=payload.get("is_guest", False),
         role=role,
+        tenant_id=tenant_id,
+        tenant_name=tenant_name,
+        tenant_slug=tenant_slug,
         is_active=True,
         daily_request_limit=daily_limit,
         requests_today=requests_today,
     )
+
 
 

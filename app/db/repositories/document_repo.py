@@ -64,6 +64,7 @@ async def save_ingested_document(
     mime_type: str = "text/plain",
     file_size: int = 0,
     content_hash: str = "",
+    is_shared: bool = False,
     knowledge_base_id: Optional[uuid.UUID] = None,
 ) -> Document:
     """
@@ -108,8 +109,10 @@ async def save_ingested_document(
         source_url=source_url,
         content_hash=content_hash,
         status="indexed",
+        is_shared=is_shared,
         version=1,
     )
+
 
     session.add(doc)
     await session.flush()
@@ -302,3 +305,114 @@ async def clear_all_kb(
         )
     res = await session.execute(stmt)
     return res.rowcount
+
+
+async def get_document_by_id(session: AsyncSession, doc_id: uuid.UUID) -> Optional[Document]:
+    """Fetch document by UUID."""
+    res = await session.execute(select(Document).where(Document.id == doc_id))
+    return res.scalar_one_or_none()
+
+
+async def toggle_document_sharing(
+    session: AsyncSession,
+    doc_id: uuid.UUID,
+    is_shared: bool,
+    user_id: Optional[str] = None,
+    is_admin: bool = False,
+) -> Optional[Document]:
+    """Toggles a document between private and organization-shared."""
+    doc = await get_document_by_id(session, doc_id)
+    if not doc:
+        return None
+
+    # Check permission (must be uploader or admin)
+    if not is_admin and user_id and doc.uploaded_by != user_id:
+        return None
+
+    doc.is_shared = is_shared
+    await session.flush()
+    return doc
+
+
+async def list_admin_documents(
+    session: AsyncSession,
+    tenant_id: Optional[uuid.UUID] = None,
+    limit: int = 100,
+    offset: int = 0,
+) -> list[dict]:
+    """Lists all documents with chunk counts, uploader username, and tenant metadata."""
+    from app.db.models.tenant import Tenant
+    from app.db.models.user import User
+
+    query = (
+        select(
+            Document,
+            KnowledgeBase.tenant_id.label("kb_tenant_id"),
+            Tenant.name.label("tenant_name"),
+            Tenant.slug.label("tenant_slug"),
+            User.username.label("uploader_username"),
+            User.name.label("uploader_name"),
+            func.count(DocumentChunk.id).label("chunk_count"),
+        )
+        .join(KnowledgeBase, Document.knowledge_base_id == KnowledgeBase.id)
+        .outerjoin(Tenant, KnowledgeBase.tenant_id == Tenant.id)
+        .outerjoin(User, Document.uploaded_by == User.id)
+        .outerjoin(DocumentChunk, DocumentChunk.document_id == Document.id)
+    )
+
+    if tenant_id:
+        query = query.where(KnowledgeBase.tenant_id == tenant_id)
+
+    query = (
+        query.group_by(
+            Document.id,
+            KnowledgeBase.tenant_id,
+            Tenant.name,
+            Tenant.slug,
+            User.username,
+            User.name,
+        )
+        .order_by(Document.created_at.desc())
+        .limit(limit)
+        .offset(offset)
+    )
+
+    res = await session.execute(query)
+    rows = res.all()
+
+    docs = []
+    for doc, kb_tid, t_name, t_slug, u_username, u_name, c_count in rows:
+        docs.append({
+            "id": str(doc.id),
+            "filename": doc.filename,
+            "file_size": doc.file_size,
+            "mime_type": doc.mime_type,
+            "source_type": doc.source_type,
+            "source_url": doc.source_url,
+            "is_shared": doc.is_shared,
+            "status": doc.status,
+            "chunk_count": c_count or 0,
+            "uploaded_by": doc.uploaded_by or "system",
+            "uploader_username": u_username or "system",
+            "uploader_name": u_name or "System Administrator",
+            "tenant_id": str(kb_tid) if kb_tid else "",
+            "tenant_name": t_name or "Default",
+            "tenant_slug": t_slug or "default",
+            "created_at": doc.created_at.isoformat() if doc.created_at else "",
+        })
+    return docs
+
+
+async def bulk_delete_documents(
+    session: AsyncSession,
+    doc_ids: list[uuid.UUID],
+) -> int:
+    """Bulk deletes multiple documents and their cascaded chunks/embeddings."""
+    if not doc_ids:
+        return 0
+    stmt = delete(Document).where(Document.id.in_(doc_ids))
+    res = await session.execute(stmt)
+    await session.flush()
+    return res.rowcount
+
+

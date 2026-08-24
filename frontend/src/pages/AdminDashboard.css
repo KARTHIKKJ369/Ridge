@@ -1,0 +1,1005 @@
+/* ==========================================================================
+   Recall CRAG: Admin Dashboard — Design System Unified Styles
+   Seamlessly inherits themes: Stone & Summit (Light) | Chalk & Void | Rust & Ridge
+   ========================================================================== */
+
+.admin-page-container {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  width: 100vw;
+  background-color: var(--recall-bg);
+  color: var(--recall-text-primary);
+  overflow: hidden;
+  font-family: var(--font-sans);
+}
+
+/* --------------------------------------------------------------------------
+   1. Admin Top Navbar (Matches .recall-navbar exactly)
+   -------------------------------------------------------------------------- */
+.admin-top-navbar {
+  height: 64px;
+  min-height: 64px;
+  background-color: var(--recall-surface);
+  border-bottom: 1px solid var(--recall-border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 20px;
+  z-index: 50;
+  box-shadow: var(--shadow-sm);
+}
+
+.admin-nav-left {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.admin-brand-link {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  text-decoration: none;
+  color: var(--recall-text-primary);
+  font-weight: 700;
+  font-size: 1.15rem;
+  letter-spacing: -0.02em;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  padding: 0;
+}
+
+.admin-brand-icon {
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-sm, 8px);
+  background: var(--recall-accent-gradient);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #ffffff;
+  box-shadow: 0 2px 8px var(--recall-accent-glow);
+}
+
+.admin-page-tag {
+  font-size: 0.72rem;
+  padding: 2px 8px;
+  background: var(--recall-accent-subtle);
+  color: var(--recall-accent);
+  border: 1px solid var(--recall-border-strong);
+  border-radius: var(--radius-full, 9999px);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.admin-enterprise-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  background: var(--recall-surface-elevated);
+  border: 1px solid var(--recall-border);
+  border-radius: var(--radius-full, 9999px);
+  font-size: 0.76rem;
+  font-weight: 600;
+  color: var(--recall-text-secondary);
+}
+
+.superadmin-status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 10px;
+  background: rgba(234, 179, 8, 0.12);
+  border: 1px solid rgba(234, 179, 8, 0.3);
+  color: #b45309;
+  border-radius: var(--radius-full, 9999px);
+  font-size: 0.74rem;
+  font-weight: 700;
+}
+
+[data-theme="void"] .superadmin-status-pill,
+[data-theme="rust"] .superadmin-status-pill {
+  color: #facc15;
+}
+
+.admin-nav-right {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.admin-system-health-pill {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 12px;
+  background: var(--recall-success-subtle);
+  border: 1px solid rgba(22, 163, 74, 0.25);
+  border-radius: var(--radius-full, 9999px);
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--recall-success);
+}
+
+.health-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--recall-success);
+  box-shadow: 0 0 8px var(--recall-success);
+  animation: pulseHealth 2s infinite;
+}
+
+@keyframes pulseHealth {
+  0% { transform: scale(0.95); opacity: 0.8; }
+  50% { transform: scale(1.25); opacity: 1; }
+  100% { transform: scale(0.95); opacity: 0.8; }
+}
+
+.admin-back-chat-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 14px;
+  background: var(--recall-surface-elevated);
+  border: 1px solid var(--recall-border);
+  border-radius: var(--radius-sm, 8px);
+  color: var(--recall-text-primary);
+  font-size: 0.82rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  text-decoration: none;
+}
+
+.admin-back-chat-btn:hover {
+  background: var(--recall-surface-hover);
+  border-color: var(--recall-accent);
+  color: var(--recall-accent);
+  transform: translateX(-2px);
+}
+
+.admin-user-profile-badge {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 10px;
+  background: var(--recall-surface-elevated);
+  border: 1px solid var(--recall-border);
+  border-radius: var(--radius-sm, 8px);
+  font-size: 0.82rem;
+  font-weight: 500;
+  color: var(--recall-text-primary);
+}
+
+.admin-user-avatar {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: var(--recall-accent);
+  color: #ffffff;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.75rem;
+}
+
+/* --------------------------------------------------------------------------
+   2. Main Layout (Sidebar + Content Canvas)
+   -------------------------------------------------------------------------- */
+.admin-main-body {
+  display: flex;
+  flex: 1;
+  overflow: hidden;
+}
+
+.admin-sidebar {
+  width: 250px;
+  min-width: 250px;
+  background-color: var(--recall-bg-sidebar);
+  border-right: 1px solid var(--recall-border);
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  padding: 18px 14px;
+  overflow-y: auto;
+}
+
+.admin-sidebar-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.admin-nav-category-label {
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--recall-text-muted);
+  padding: 12px 10px 4px;
+  font-weight: 700;
+}
+
+.admin-tab-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm, 8px);
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--recall-text-secondary);
+  font-size: 0.85rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  width: 100%;
+  text-align: left;
+}
+
+.admin-tab-item:hover {
+  background: var(--recall-surface-hover);
+  color: var(--recall-text-primary);
+}
+
+.admin-tab-item.active {
+  background: var(--recall-surface);
+  color: var(--recall-accent);
+  border-color: var(--recall-border-strong);
+  font-weight: 600;
+  box-shadow: var(--shadow-sm);
+}
+
+.admin-tab-item .tab-badge {
+  margin-left: auto;
+  font-size: 0.72rem;
+  font-weight: 700;
+  min-width: 30px;
+  height: 20px;
+  padding: 0 8px;
+  border-radius: var(--radius-full, 9999px);
+  background: var(--recall-surface-elevated);
+  color: var(--recall-text-muted);
+  border: 1px solid var(--recall-border);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  white-space: nowrap;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+  transition: all var(--transition-fast);
+}
+
+
+.admin-tab-item:hover .tab-badge {
+  color: var(--recall-text-primary);
+  border-color: var(--recall-border-strong);
+}
+
+.admin-tab-item.active .tab-badge {
+  background: var(--recall-accent-subtle);
+  color: var(--recall-accent);
+  border-color: var(--recall-accent);
+}
+
+.admin-tab-item .tab-badge.feedback-badge {
+  background: var(--recall-warning-subtle);
+  color: var(--recall-warning);
+  border: 1px solid rgba(245, 158, 11, 0.35);
+  box-shadow: 0 0 6px rgba(245, 158, 11, 0.2);
+}
+
+
+
+.admin-sidebar-footer {
+  padding-top: 16px;
+  border-top: 1px solid var(--recall-border);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.admin-theme-switch-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.admin-theme-label {
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--recall-text-muted);
+  font-weight: 700;
+}
+
+.admin-tenant-context-card {
+  padding: 10px 12px;
+  background: var(--recall-surface);
+  border-radius: var(--radius-sm, 8px);
+  border: 1px solid var(--recall-border);
+  font-size: 0.76rem;
+}
+
+.context-label {
+  color: var(--recall-text-muted);
+  display: block;
+  font-size: 0.66rem;
+  text-transform: uppercase;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+}
+
+.context-name {
+  font-weight: 600;
+  color: var(--recall-accent);
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 2px;
+}
+
+/* --------------------------------------------------------------------------
+   3. Content Canvas Area
+   -------------------------------------------------------------------------- */
+.admin-content-canvas {
+  flex: 1;
+  overflow-y: auto;
+  padding: 28px 36px 60px;
+  background-color: var(--recall-bg);
+}
+
+.admin-view-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 24px;
+  flex-wrap: wrap;
+  gap: 16px;
+}
+
+.view-title-wrap h1 {
+  font-size: 1.55rem;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  color: var(--recall-text-primary);
+  margin: 0;
+  font-family: var(--font-sans);
+}
+
+.view-subtitle {
+  font-size: 0.86rem;
+  color: var(--recall-text-muted);
+  margin: 4px 0 0;
+}
+
+.view-actions-wrap {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+/* --------------------------------------------------------------------------
+   4. Analytics & Overview Dashboard Tab
+   -------------------------------------------------------------------------- */
+.admin-kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 16px;
+  margin-bottom: 24px;
+}
+
+.admin-kpi-card {
+  background: var(--recall-surface);
+  border: 1px solid var(--recall-border);
+  border-radius: var(--radius-md, 12px);
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  box-shadow: var(--shadow-sm);
+  transition: transform var(--transition-fast), border-color var(--transition-fast), box-shadow var(--transition-fast);
+}
+
+.admin-kpi-card:hover {
+  transform: translateY(-2px);
+  border-color: var(--recall-border-strong);
+  box-shadow: var(--shadow-md);
+}
+
+.kpi-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.kpi-title {
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: var(--recall-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.kpi-icon-wrap {
+  width: 36px;
+  height: 36px;
+  border-radius: var(--radius-sm, 8px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.kpi-icon-wrap.blue { background: var(--recall-accent-subtle); color: var(--recall-accent); }
+.kpi-icon-wrap.green { background: var(--recall-success-subtle); color: var(--recall-success); }
+.kpi-icon-wrap.purple { background: rgba(139, 92, 246, 0.12); color: #8b5cf6; }
+.kpi-icon-wrap.amber { background: var(--recall-warning-subtle); color: var(--recall-warning); }
+
+.kpi-value {
+  font-size: 1.95rem;
+  font-weight: 800;
+  letter-spacing: -0.03em;
+  color: var(--recall-text-primary);
+  line-height: 1;
+}
+
+.kpi-sub {
+  font-size: 0.76rem;
+  color: var(--recall-text-muted);
+}
+
+.analytics-cards-row {
+  display: grid;
+  grid-template-columns: 2fr 1fr;
+  gap: 20px;
+  margin-bottom: 24px;
+}
+
+@media (max-width: 1024px) {
+  .analytics-cards-row {
+    grid-template-columns: 1fr;
+  }
+}
+
+.analytics-panel {
+  background: var(--recall-surface);
+  border: 1px solid var(--recall-border);
+  border-radius: var(--radius-md, 12px);
+  padding: 22px;
+  box-shadow: var(--shadow-sm);
+}
+
+.panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 18px;
+}
+
+.panel-title {
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: var(--recall-text-primary);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.activity-bar-chart {
+  display: flex;
+  align-items: flex-end;
+  gap: 16px;
+  height: 180px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--recall-border);
+}
+
+.chart-bar-group {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  height: 100%;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.chart-bar-pill {
+  width: 100%;
+  max-width: 38px;
+  border-radius: var(--radius-xs, 6px) var(--radius-xs, 6px) 2px 2px;
+  background: var(--recall-accent-gradient);
+  transition: all var(--transition-fast);
+  position: relative;
+  cursor: pointer;
+  min-height: 8px;
+}
+
+.chart-bar-pill:hover {
+  filter: brightness(1.15);
+  box-shadow: 0 0 12px var(--recall-accent-glow);
+}
+
+.chart-bar-tooltip {
+  position: absolute;
+  top: -30px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--recall-text-primary);
+  color: var(--recall-surface);
+  font-size: 0.72rem;
+  padding: 3px 8px;
+  border-radius: var(--radius-xs, 6px);
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.15s ease;
+  font-weight: 600;
+  box-shadow: var(--shadow-md);
+  z-index: 10;
+}
+
+.chart-bar-pill:hover .chart-bar-tooltip {
+  opacity: 1;
+}
+
+.chart-day-label {
+  font-size: 0.72rem;
+  color: var(--recall-text-muted);
+  font-weight: 600;
+}
+
+.top-users-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.top-user-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px;
+  background: var(--recall-surface-elevated);
+  border-radius: var(--radius-sm, 8px);
+  border: 1px solid var(--recall-border);
+  transition: background var(--transition-fast);
+}
+
+.top-user-row:hover {
+  background: var(--recall-surface-hover);
+}
+
+.top-user-info {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.top-user-avatar {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: var(--recall-accent-subtle);
+  color: var(--recall-accent);
+  font-size: 0.74rem;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.top-user-names {
+  display: flex;
+  flex-direction: column;
+}
+
+.top-u-name {
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--recall-text-primary);
+}
+
+.top-u-tenant {
+  font-size: 0.7rem;
+  color: var(--recall-text-muted);
+}
+
+.top-user-count {
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: var(--recall-accent);
+  font-family: var(--font-mono);
+}
+
+/* --------------------------------------------------------------------------
+   5. Climbers & Members Table Tab + Checkboxes
+   -------------------------------------------------------------------------- */
+.admin-table-card {
+  background: var(--recall-surface);
+  border: 1px solid var(--recall-border);
+  border-radius: var(--radius-md, 12px);
+  box-shadow: var(--shadow-sm);
+  overflow: hidden;
+}
+
+.admin-toolbar-row {
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--recall-border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+  background: var(--recall-surface);
+}
+
+.admin-search-box {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 12px;
+  height: 40px;
+  background: var(--recall-surface-elevated);
+  border: 1px solid var(--recall-border);
+  border-radius: var(--radius-sm, 8px);
+  min-width: 280px;
+  transition: border-color var(--transition-fast);
+}
+
+.admin-search-box:focus-within {
+  border-color: var(--recall-border-focus);
+}
+
+.admin-search-box input {
+  background: transparent;
+  border: none;
+  outline: none;
+  color: var(--recall-text-primary);
+  font-size: 0.85rem;
+  width: 100%;
+}
+
+.admin-tenant-filter-select {
+  height: 40px;
+  padding: 0 12px;
+  background: var(--recall-surface-elevated);
+  border: 1px solid var(--recall-border);
+  border-radius: var(--radius-sm, 8px);
+  color: var(--recall-text-primary);
+  font-size: 0.85rem;
+  outline: none;
+  cursor: pointer;
+  font-weight: 500;
+}
+
+/* Floating Bulk Selection Action Banner */
+.admin-bulk-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 20px;
+  background: var(--recall-accent-subtle);
+  border-bottom: 1px solid var(--recall-border-strong);
+  animation: slideDownFade 0.2s ease-out;
+}
+
+.bulk-count-badge {
+  font-size: 0.84rem;
+  font-weight: 700;
+  color: var(--recall-accent);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.bulk-actions-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.btn-bulk-delete {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+  border-radius: var(--radius-xs, 6px);
+  background: var(--recall-error-subtle);
+  border: 1px solid rgba(220, 38, 38, 0.35);
+  color: var(--recall-error);
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.btn-bulk-delete:hover:not(:disabled) {
+  background: rgba(220, 38, 38, 0.2);
+  border-color: var(--recall-error);
+}
+
+.btn-bulk-clear {
+  padding: 6px 12px;
+  border-radius: var(--radius-xs, 6px);
+  background: var(--recall-surface);
+  border: 1px solid var(--recall-border);
+  color: var(--recall-text-muted);
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+
+.btn-bulk-clear:hover {
+  background: var(--recall-surface-hover);
+  color: var(--recall-text-primary);
+}
+
+/* Custom Checkbox Design */
+.admin-custom-checkbox {
+  width: 18px;
+  height: 18px;
+  border-radius: 4px;
+  border: 1.5px solid var(--recall-border-strong);
+  background: var(--recall-surface-elevated);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all var(--transition-fast);
+  margin: 0 auto;
+}
+
+.admin-custom-checkbox:hover {
+  border-color: var(--recall-accent);
+}
+
+.admin-custom-checkbox.checked {
+  background: var(--recall-accent);
+  border-color: var(--recall-accent);
+  color: #ffffff;
+}
+
+/* Full Width Table */
+.admin-full-table {
+  width: 100%;
+  border-collapse: collapse;
+  text-align: left;
+}
+
+.admin-full-table th {
+  padding: 12px 18px;
+  background: var(--recall-surface-elevated);
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--recall-text-muted);
+  border-bottom: 1px solid var(--recall-border);
+  font-weight: 700;
+}
+
+.admin-full-table td {
+  padding: 14px 18px;
+  font-size: 0.85rem;
+  border-bottom: 1px solid var(--recall-border);
+  vertical-align: middle;
+}
+
+.admin-full-table tr:hover {
+  background: var(--recall-surface-hover);
+}
+
+.admin-full-table tr.selected {
+  background: var(--recall-accent-subtle) !important;
+}
+
+.climber-cell {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.climber-avatar-circle {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: var(--recall-accent-gradient);
+  color: #ffffff;
+  font-weight: 700;
+  font-size: 0.8rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.climber-names {
+  display: flex;
+  flex-direction: column;
+}
+
+.climber-name-text {
+  font-weight: 600;
+  color: var(--recall-text-primary);
+}
+
+.climber-username-text {
+  font-size: 0.72rem;
+  color: var(--recall-text-muted);
+  font-family: var(--font-mono);
+}
+
+/* --------------------------------------------------------------------------
+   6. Institutions Tab (Grid & Table)
+   -------------------------------------------------------------------------- */
+.institutions-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 20px;
+}
+
+.institution-card {
+  background: var(--recall-surface);
+  border: 1px solid var(--recall-border);
+  border-radius: var(--radius-md, 12px);
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 16px;
+  box-shadow: var(--shadow-sm);
+  transition: transform var(--transition-fast), border-color var(--transition-fast), box-shadow var(--transition-fast);
+}
+
+.institution-card:hover {
+  transform: translateY(-2px);
+  border-color: var(--recall-border-strong);
+  box-shadow: var(--shadow-md);
+}
+
+.inst-card-top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+}
+
+.inst-card-title {
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: var(--recall-text-primary);
+}
+
+.inst-slug-pill {
+  font-size: 0.72rem;
+  font-family: var(--font-mono);
+  color: var(--recall-accent);
+  background: var(--recall-accent-subtle);
+  padding: 2px 8px;
+  border-radius: var(--radius-xs, 6px);
+  border: 1px solid var(--recall-border-strong);
+  display: inline-block;
+  margin-top: 4px;
+}
+
+.inst-card-metrics {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  padding: 12px 0;
+  border-top: 1px solid var(--recall-border);
+  border-bottom: 1px solid var(--recall-border);
+}
+
+.inst-metric-stat {
+  font-size: 0.75rem;
+  color: var(--recall-text-muted);
+}
+
+.inst-metric-stat strong {
+  display: block;
+  font-size: 1.1rem;
+  font-weight: 700;
+  color: var(--recall-text-primary);
+}
+
+.inst-card-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+/* --------------------------------------------------------------------------
+   7. Standard Admin Buttons
+   -------------------------------------------------------------------------- */
+.btn-primary-admin {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 16px;
+  border-radius: var(--radius-sm, 8px);
+  background: var(--recall-accent);
+  color: #ffffff;
+  font-size: 0.84rem;
+  font-weight: 600;
+  border: none;
+  cursor: pointer;
+  box-shadow: 0 2px 8px var(--recall-accent-glow);
+  transition: all var(--transition-fast);
+}
+
+.btn-primary-admin:hover {
+  background: var(--recall-accent-secondary);
+  transform: translateY(-1px);
+}
+
+.btn-secondary-admin {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  border-radius: var(--radius-sm, 8px);
+  background: var(--recall-surface-elevated);
+  border: 1px solid var(--recall-border);
+  color: var(--recall-text-primary);
+  font-size: 0.84rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.btn-secondary-admin:hover {
+  background: var(--recall-surface-hover);
+}
+
+.admin-subnav-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+  border-radius: var(--radius-sm, 8px);
+  background: var(--recall-surface-elevated);
+  border: 1px solid var(--recall-border);
+  color: var(--recall-text-secondary);
+  font-size: 0.78rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.admin-subnav-btn:hover {
+  background: var(--recall-surface-hover);
+  color: var(--recall-text-primary);
+}
+
+.admin-subnav-btn.active {
+  background: var(--recall-accent-subtle);
+  border-color: var(--recall-border-strong);
+  color: var(--recall-accent);
+}
+
+.btn-ghost-sm {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 10px;
+  border-radius: var(--radius-xs, 6px);
+  background: transparent;
+  border: 1px solid var(--recall-border);
+  color: var(--recall-text-secondary);
+  font-size: 0.76rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.btn-ghost-sm:hover {
+  background: var(--recall-surface-hover);
+  color: var(--recall-text-primary);
+}
+
+
+

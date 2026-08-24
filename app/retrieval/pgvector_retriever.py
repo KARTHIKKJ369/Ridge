@@ -31,11 +31,12 @@ class PgvectorRetriever(BaseRetriever):
         self,
         query: str,
         user_id: Optional[str] = None,
+        tenant_id: Optional[uuid.UUID] = None,
         source_filter: Optional[str] = None,
         k: int = 50,
     ) -> list[RetrievalCandidate]:
         """
-        Executes hybrid dense + sparse retrieval in PostgreSQL:
+        Executes hybrid dense + sparse retrieval in PostgreSQL with strict tenant isolation:
         1. Dense pgvector cosine distance search (<=>)
         2. PostgreSQL FTS plainto_tsquery search
         3. Reciprocal Rank Fusion (RRF)
@@ -63,11 +64,18 @@ class PgvectorRetriever(BaseRetriever):
                     d.filename,
                     d.source_url,
                     d.uploaded_by,
+                    d.is_shared,
                     e.embedding <=> CAST(:query_vec AS vector) AS distance
                 FROM document_chunks c
                 JOIN chunk_embeddings e ON c.id = e.chunk_id
                 JOIN documents d ON c.document_id = d.id
-                WHERE (CAST(:user_id AS VARCHAR) IS NULL OR d.uploaded_by = CAST(:user_id AS VARCHAR))
+                JOIN knowledge_bases kb ON d.knowledge_base_id = kb.id
+                WHERE (CAST(:tenant_id AS UUID) IS NULL OR kb.tenant_id = CAST(:tenant_id AS UUID))
+                  AND (
+                      CAST(:user_id AS VARCHAR) IS NULL 
+                      OR d.uploaded_by = CAST(:user_id AS VARCHAR) 
+                      OR d.is_shared = true
+                  )
                   AND (CAST(:source_filter AS VARCHAR) IS NULL OR d.filename = CAST(:source_filter AS VARCHAR) OR d.source_url = CAST(:source_filter AS VARCHAR) OR LOWER(d.filename) = LOWER(CAST(:source_filter AS VARCHAR)))
                 ORDER BY distance ASC
                 LIMIT :limit;
@@ -77,6 +85,7 @@ class PgvectorRetriever(BaseRetriever):
                 dense_sql,
                 {
                     "query_vec": str(q_vec),
+                    "tenant_id": tenant_id,
                     "user_id": user_id if is_scoped_user else None,
                     "source_filter": source_filter if is_filtered_source else None,
                     "limit": k,
@@ -99,14 +108,18 @@ class PgvectorRetriever(BaseRetriever):
                         d.filename,
                         d.source_url,
                         d.uploaded_by,
+                        d.is_shared,
                         ts_rank_cd(c.search_vector, plainto_tsquery('english', :query)) AS rank_score
                     FROM document_chunks c
                     JOIN documents d ON c.document_id = d.id
+                    JOIN knowledge_bases kb ON d.knowledge_base_id = kb.id
                     WHERE c.search_vector @@ plainto_tsquery('english', :query)
-                      AND (CAST(:user_id AS VARCHAR) IS NULL OR d.uploaded_by = CAST(:user_id AS VARCHAR))
-
-
-
+                      AND (CAST(:tenant_id AS UUID) IS NULL OR kb.tenant_id = CAST(:tenant_id AS UUID))
+                      AND (
+                          CAST(:user_id AS VARCHAR) IS NULL 
+                          OR d.uploaded_by = CAST(:user_id AS VARCHAR) 
+                          OR d.is_shared = true
+                      )
                       AND (CAST(:source_filter AS VARCHAR) IS NULL OR d.filename = CAST(:source_filter AS VARCHAR) OR d.source_url = CAST(:source_filter AS VARCHAR) OR LOWER(d.filename) = LOWER(CAST(:source_filter AS VARCHAR)))
                     ORDER BY rank_score DESC
                     LIMIT 30;
@@ -116,6 +129,7 @@ class PgvectorRetriever(BaseRetriever):
                     sparse_sql,
                     {
                         "query": query,
+                        "tenant_id": tenant_id,
                         "user_id": user_id if is_scoped_user else None,
                         "source_filter": source_filter if is_filtered_source else None,
                     },
@@ -123,6 +137,7 @@ class PgvectorRetriever(BaseRetriever):
                 sparse_rows = sparse_res.all()
             except Exception as fts_err:
                 logger.warning(f"PostgreSQL FTS note: {fts_err}")
+
 
 
             # 3. Reciprocal Rank Fusion (RRF)

@@ -3,7 +3,7 @@ Tenant Model
 """
 import uuid
 from datetime import datetime, timezone
-from sqlalchemy import String, DateTime
+from sqlalchemy import String, Boolean, Integer, DateTime
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -19,6 +19,9 @@ class Tenant(Base):
         default=uuid.uuid4,
     )
     name: Mapped[str] = mapped_column(String(255), nullable=False)
+    slug: Mapped[str] = mapped_column(String(64), unique=True, nullable=False, default="default", index=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    max_users: Mapped[int] = mapped_column(Integer, default=50, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),
@@ -30,6 +33,7 @@ class Tenant(Base):
         onupdate=lambda: datetime.now(timezone.utc),
         nullable=False,
     )
+
 
     # Relationships
     users = relationship("User", back_populates="tenant", cascade="all, delete-orphan")

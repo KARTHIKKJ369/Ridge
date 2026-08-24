@@ -14,6 +14,7 @@ from app.db.models.citation import MessageCitation
 from app.db.models.retrieval import RetrievalRun, RetrievalResult
 from app.db.models.glossary import GlossaryTerm
 from app.db.models.query_cache import QueryCache
+from app.db.models.feedback import Feedback
 
 __all__ = [
     "Tenant",
@@ -30,4 +31,6 @@ __all__ = [
     "RetrievalResult",
     "GlossaryTerm",
     "QueryCache",
+    "Feedback",
 ]
+

@@ -6,8 +6,10 @@ applies FlashRank cross-encoder re-ranking, and performs Small-to-Big parent exp
 """
 import os
 import time
+import uuid
 import logging
 from typing import Optional
+
 
 from app.db.database import is_postgres_configured
 from app.retrieval.interface import BaseRetriever, RetrievalCandidate
@@ -33,6 +35,7 @@ class UnifiedRetriever(BaseRetriever):
         self,
         query: str,
         user_id: Optional[str] = None,
+        tenant_id: Optional[uuid.UUID] = None,
         source_filter: Optional[str] = None,
         k: int = 50,
     ) -> list[RetrievalCandidate]:
@@ -42,9 +45,11 @@ class UnifiedRetriever(BaseRetriever):
         return await self._pg_retriever.retrieve(
             query=query,
             user_id=user_id,
+            tenant_id=tenant_id,
             source_filter=source_filter,
             k=k,
         )
+
 
 
     def rerank_and_expand(
