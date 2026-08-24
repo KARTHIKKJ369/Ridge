@@ -382,7 +382,8 @@ def ingest_document(text_or_url: str, original_filename: str | None = None, user
         except Exception as e:
             print(f"Error launching background suggestions: {e}")
 
-    return {"status": "success", "chunks_added": len(doc_splits)}
+    return {"status": "success", "chunks_added": len(docs_to_index)}
+
 
 
 def generate_suggestions(text: str):
