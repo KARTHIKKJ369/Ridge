@@ -31,12 +31,10 @@ async def get_or_create_default_kb(session: AsyncSession) -> uuid.UUID:
         tenant = Tenant(
             id=DEFAULT_TENANT_ID,
             name="Default Tenant",
-            slug="default",
-            plan="enterprise",
-            is_active=True,
         )
         session.add(tenant)
         await session.flush()
+
 
     res = await session.execute(select(KnowledgeBase).where(KnowledgeBase.id == DEFAULT_KB_ID))
     kb = res.scalar_one_or_none()

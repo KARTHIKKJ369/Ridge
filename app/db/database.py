@@ -5,6 +5,7 @@ Provides asynchronous and synchronous SQLAlchemy sessions for PostgreSQL with pg
 """
 
 import os
+import uuid
 import logging
 from typing import AsyncGenerator
 from contextlib import asynccontextmanager
@@ -16,8 +17,9 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 from sqlalchemy.orm import DeclarativeBase
-from sqlalchemy import text, create_engine
+from sqlalchemy import text, create_engine, select
 from sqlalchemy.orm import sessionmaker
+
 
 load_dotenv()
 
@@ -145,11 +147,9 @@ async def init_db() -> None:
                 session.add(Tenant(
                     id=DEFAULT_TENANT_ID,
                     name="Default Tenant",
-                    slug="default",
-                    plan="enterprise",
-                    is_active=True,
                 ))
                 await session.flush()
+
 
             kb_res = await session.execute(select(KnowledgeBase).where(KnowledgeBase.id == DEFAULT_KB_ID))
             if not kb_res.scalar_one_or_none():
