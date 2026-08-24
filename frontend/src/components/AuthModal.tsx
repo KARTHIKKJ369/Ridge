@@ -153,7 +153,8 @@ export const AuthModal: React.FC<AuthModalProps> = ({
             <p>
               {tab === 'login'
                 ? 'Enter your credentials to unlock your verified knowledge ascents.'
-                : 'Register a local account to secure your ChromaDB knowledge crag.'}
+                : 'Register an account to secure your knowledge crag and documents.'}
+
             </p>
           </div>
 

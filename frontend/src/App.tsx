@@ -3626,7 +3626,8 @@ export default function App() {
                   <div className="pane-empty-state">
                     <Database size={32} className="text-muted" />
                     <h4>Knowledge Base Empty</h4>
-                    <p>No documents or chunks are currently stored in ChromaDB. Anchor a file, URL, or YouTube video to get started.</p>
+                    <p>No documents or chunks are currently stored in PostgreSQL. Anchor a file, URL, or YouTube video to get started.</p>
+
                     <button 
                       className="recall-btn-primary"
                       style={{ marginTop: '12px', padding: '6px 14px', fontSize: '0.8rem' }}
