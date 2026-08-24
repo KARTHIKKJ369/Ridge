@@ -1718,7 +1718,6 @@ export default function App() {
         const res = await fetchWithAuth('/api/conversations?limit=50');
         if (res.ok && isMounted) {
           const data = await res.json();
-          if (data.conversations && data.conversations.length > 0) {
             setSessions(prev => {
               const serverSessions: ChatSession[] = data.conversations.map((c: any) => {
                 const existing = prev.find(p => p.id === c.id);
@@ -1730,25 +1729,26 @@ export default function App() {
                 };
               });
               const localDrafts = prev.filter(p => !p.id.includes('-') && p.messages.length === 0);
-              const combined = [...localDrafts, ...serverSessions];
-              return combined.length > 0 ? combined : prev;
+              const draftList = localDrafts.length > 0 ? localDrafts : [createFreshSession()];
+              return [...draftList, ...serverSessions];
             });
 
             setActiveSessionId(curr => {
-              const hasActive = data.conversations.some((c: any) => c.id === curr);
-              const targetId = hasActive ? curr : data.conversations[0].id;
-              // Preload active messages from server
-              fetchWithAuth(`/api/conversations/${targetId}/messages`).then(async (mRes) => {
-                if (mRes.ok && isMounted) {
-                  const mData = await mRes.json();
-                  if (mData.messages && mData.messages.length > 0) {
-                    setSessions(sPrev => sPrev.map(s => s.id === targetId ? { ...s, messages: mData.messages } : s));
+              const isServerConv = data.conversations.some((c: any) => c.id === curr);
+              if (isServerConv) {
+                // Preload active messages from server if user was already viewing this conversation
+                fetchWithAuth(`/api/conversations/${curr}/messages`).then(async (mRes) => {
+                  if (mRes.ok && isMounted) {
+                    const mData = await mRes.json();
+                    if (mData.messages && mData.messages.length > 0) {
+                      setSessions(sPrev => sPrev.map(s => s.id === curr ? { ...s, messages: mData.messages } : s));
+                    }
                   }
-                }
-              }).catch(() => {});
-              return targetId;
+                }).catch(() => {});
+              }
+              return curr;
             });
-          }
+
         }
       } catch (err) {
         console.warn('Could not fetch server conversations:', err);
