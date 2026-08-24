@@ -90,6 +90,19 @@ app.add_middleware(
 rag_app = get_app()
 
 
+@app.on_event("startup")
+async def on_startup():
+    """Initializes PostgreSQL + pgvector schema automatically on startup."""
+    if is_postgres_configured():
+        try:
+            from app.db.database import init_db
+            await init_db()
+            logger.info("✓ PostgreSQL + pgvector schema verified and initialized.")
+        except Exception as e:
+            logger.warning(f"Database auto-init notice: {e}")
+
+
+
 class ChatRequest(BaseModel):
     question: str
     web_search_enabled: bool = True

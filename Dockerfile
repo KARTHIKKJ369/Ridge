@@ -24,14 +24,16 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy backend source files
 COPY *.py ./
+COPY app/ ./app/
 COPY scripts/ ./scripts/
+COPY alembic.ini ./
 
-# Copy env defaults (actual secrets are injected via HF Space Secrets at runtime)
+# Copy env defaults (actual secrets are injected via runtime environment)
 COPY .env.example .env
 
 # Pre-download the sentence-transformers embedding model into the image
-# so the first query doesn't time out waiting for the download
-RUN python -c "from langchain_huggingface import HuggingFaceEmbeddings; HuggingFaceEmbeddings(model_name='sentence-transformers/all-MiniLM-L6-v2')"
+RUN python -c "from langchain_huggingface import HuggingFaceEmbeddings; HuggingFaceEmbeddings(model_name='BAAI/bge-large-en-v1.5')"
+
 
 # Copy compiled React frontend
 COPY --from=frontend-builder /app/frontend/dist ./frontend/dist

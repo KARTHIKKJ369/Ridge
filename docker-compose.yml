@@ -23,8 +23,13 @@ services:
       - .env
     environment:
       - DATABASE_URL=postgresql+asyncpg://ridge:ridge@postgres:5432/ridge
+      - DATABASE_URL_SYNC=postgresql://ridge:ridge@postgres:5432/ridge
+      - RETRIEVAL_BACKEND=pgvector
+      - EMBEDDING_MODEL=BAAI/bge-large-en-v1.5
+      - EMBEDDING_DIMENSION=1024
     depends_on:
       - postgres
+
     volumes:
       - app_data:/app/data
     restart: unless-stopped
