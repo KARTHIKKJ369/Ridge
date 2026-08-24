@@ -789,7 +789,7 @@ async def get_glossary_terms(user: UserProfile = Depends(get_current_user)):
             sync_glossary_with_active_sources(active_sources)
 
         terms_list = get_glossary_for_user(
-            user_id=None if is_admin else user.id,
+            user_id=user.id,
             active_sources=active_sources if active_sources else set()
         )
         return {"total": len(terms_list), "glossary": terms_list}
@@ -800,14 +800,9 @@ async def get_glossary_terms(user: UserProfile = Depends(get_current_user)):
 
 @app.get("/api/stats")
 async def get_stats(user: UserProfile = Depends(get_current_user)):
-    is_admin = user.role == "admin"
     async with get_db_session() as session:
-        if is_admin:
-            doc_stmt = select(func.count(Document.id))
-            chunk_stmt = select(func.count(DocumentChunk.id))
-        else:
-            doc_stmt = select(func.count(Document.id)).where(Document.uploaded_by == user.id)
-            chunk_stmt = select(func.count(DocumentChunk.id)).join(Document).where(Document.uploaded_by == user.id)
+        doc_stmt = select(func.count(Document.id)).where(Document.uploaded_by == user.id)
+        chunk_stmt = select(func.count(DocumentChunk.id)).join(Document).where(Document.uploaded_by == user.id)
         
         doc_count = (await session.execute(doc_stmt)).scalar() or 0
         chunk_count = (await session.execute(chunk_stmt)).scalar() or 0
@@ -831,11 +826,8 @@ async def get_kb_sources(all_users: bool = False, user: UserProfile = Depends(ge
         async with get_db_session() as session:
             stmt = select(Document).order_by(Document.created_at.desc())
             if not show_all:
-                stmt = stmt.where(or_(
-                    Document.uploaded_by == user.id,
-                    Document.uploaded_by.in_(['shared', 'default', 'admin', 'usr_de4adc48053eccbc']),
-                    Document.uploaded_by.is_(None)
-                ))
+                stmt = stmt.where(Document.uploaded_by == user.id)
+
 
 
             
