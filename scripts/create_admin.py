@@ -11,6 +11,10 @@ Usage:
 
 import os
 import sys
+
+# Ensure repository root is on sys.path
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 import time
 import hashlib
 import secrets
@@ -19,6 +23,7 @@ import argparse
 from sqlalchemy import text
 from app.db.database import get_sync_session, is_postgres_configured
 from app.db.repositories.user_repo import DEFAULT_TENANT_ID
+
 
 
 def hash_password(password: str, salt: str) -> str:
