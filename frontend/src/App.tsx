@@ -403,13 +403,17 @@ const MermaidDiagram = ({ chart }: { chart: string }) => {
 
 const cleanMarkdownContent = (content: string) => {
   if (!content) return '';
-  // 0. Normalize exotic Unicode whitespace characters (e.g. \u202F, \u00A0, \u2000-\u200B) to standard ASCII space
-  let text = content.replace(/[\u202F\u00A0\u2000-\u200B\u2028\u2029\uFEFF]/g, ' ');
+  // 0. Strip leading JSON preambles (e.g. {"conflict": false, "summary": ""})
+  let text = content.replace(/^\s*\{[\s\S]*?"summary":\s*"[^"]*"\s*\}\s*/g, '');
 
-  // 0.1 Fix collapsed Markdown tables where table rows lack newlines
+  // 0.1 Normalize exotic Unicode whitespace characters (e.g. \u202F, \u00A0, \u2000-\u200B) to standard ASCII space
+  text = text.replace(/[\u202F\u00A0\u2000-\u200B\u2028\u2029\uFEFF]/g, ' ');
+
+  // 0.2 Fix collapsed Markdown tables where table rows lack newlines
   text = text.replace(/(\|[-:]+[-| :]*)\|([^\n\-\|])/g, '$1|\n| $2');
   text = text.replace(/(\|[^|\n]+)\|(\|[-:]+[-| :]*\|)/g, '$1|\n$2');
   text = text.replace(/\|[ \t]*\|/g, '|\n|');
+
 
   // 1. Convert standard LaTeX block \[ ... \] to $$ ... $$
   text = text.replace(/\\\[([\s\S]*?)\\\]/g, '\n\n$$\n$1\n$$\n\n');
@@ -1677,7 +1681,13 @@ export default function App() {
     return userSessions[0]?.id || 'default-session';
   });
 
+  const activeSessionIdRef = useRef<string>(activeSessionId);
+  useEffect(() => {
+    activeSessionIdRef.current = activeSessionId;
+  }, [activeSessionId]);
+
   const currentUserIdRef = useRef<string>(user?.id || 'guest');
+
 
   // Synchronize and isolate sessions when user account changes (login, logout, switch)
   useEffect(() => {
@@ -2212,9 +2222,31 @@ export default function App() {
     showToast('Started new research ascent', 'info');
   };
 
+  const handleSelectSession = async (sid: string) => {
+    setActiveSessionId(sid);
+    const target = sessions.find(s => s.id === sid);
+    if (target && target.messages.length === 0 && user && !user.is_guest && sid.includes('-')) {
+      try {
+        const res = await fetchWithAuth(`/api/conversations/${sid}/messages`);
+        if (res.ok) {
+          const data = await res.json();
+          if (data.messages && data.messages.length > 0) {
+            setSessions(prev => prev.map(s => s.id === sid ? { ...s, messages: data.messages } : s));
+          }
+        }
+      } catch (err) {
+        console.warn('Could not load conversation messages:', err);
+      }
+    }
+    if (window.innerWidth < 768) setIsSidebarOpen(false);
+  };
+
   const handleDeleteSession = (id: string, e: React.MouseEvent) => {
     e.stopPropagation();
-    if (sessions.length === 1) {
+    if (user && !user.is_guest && id.includes('-')) {
+      fetchWithAuth(`/api/conversations/${id}`, { method: 'DELETE' }).catch(err => console.warn(err));
+    }
+    if (sessions.length <= 1) {
       const fresh: ChatSession = {
         id: Date.now().toString(),
         title: 'New Research Ascent',
@@ -2233,9 +2265,16 @@ export default function App() {
     showToast('Ascent deleted', 'info');
   };
 
-  const updateCurrentMessages = (updater: (prevMsgs: Message[]) => Message[]) => {
+
+  const updateCurrentMessages = (
+    updater: (prevMsgs: Message[]) => Message[],
+    targetSessionId?: string,
+    targetMsgId?: string
+  ) => {
     setSessions(prev => prev.map(s => {
-      if (s.id === activeSessionId) {
+      const targetId = targetSessionId || activeSessionIdRef.current;
+      const isTarget = s.id === targetId || (targetMsgId ? s.messages.some(m => m.id === targetMsgId) : false);
+      if (isTarget) {
         const updated = updater(s.messages);
         let newTitle = s.title;
         if ((s.title === 'New Research Ascent' || s.title === 'Initial Ascent') && updated.length > 0 && updated[0].role === 'user') {
@@ -2250,6 +2289,8 @@ export default function App() {
   // Chat Execution Stream
   const handleSend = async (customQuery?: string) => {
     if (!customQuery || !customQuery.trim() || isLoading) return;
+
+    let currentTargetSessionId = activeSessionIdRef.current;
 
     const userMessage: Message = {
       id: Date.now().toString(),
@@ -2268,7 +2309,7 @@ export default function App() {
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
     };
 
-    updateCurrentMessages(prev => [...prev, userMessage, assistantMessage]);
+    updateCurrentMessages(prev => [...prev, userMessage, assistantMessage], currentTargetSessionId, assistantId);
     setIsLoading(true);
     setExpandedThinking(prev => ({ ...prev, [assistantId]: true }));
 
@@ -2282,7 +2323,8 @@ export default function App() {
         body: JSON.stringify({ 
           question: userMessage.content,
           web_search_enabled: webSearchEnabled,
-          source_filter: selectedSourceFilter !== 'all' ? selectedSourceFilter : undefined
+          source_filter: selectedSourceFilter !== 'all' ? selectedSourceFilter : undefined,
+          conversation_id: currentTargetSessionId && currentTargetSessionId.includes('-') ? currentTargetSessionId : undefined,
         }),
         signal: abortController.signal,
       });
@@ -2311,7 +2353,14 @@ export default function App() {
             try {
               const data = JSON.parse(dataStr);
 
-              if (data.type === 'token' && typeof data.token === 'string') {
+              if (data.type === 'conversation_info' && data.conversation_id) {
+                const oldId = currentTargetSessionId;
+                const newServerConvId = data.conversation_id;
+                currentTargetSessionId = newServerConvId;
+                activeSessionIdRef.current = newServerConvId;
+                setActiveSessionId(newServerConvId);
+                setSessions(prev => prev.map(s => (s.id === oldId || s.messages.some(m => m.id === assistantId)) ? { ...s, id: newServerConvId } : s));
+              } else if (data.type === 'token' && typeof data.token === 'string') {
                 updateCurrentMessages(prev => prev.map(msg => {
                   if (msg.id === assistantId) {
                     return {
@@ -2320,7 +2369,7 @@ export default function App() {
                     };
                   }
                   return msg;
-                }));
+                }), currentTargetSessionId, assistantId);
               } else {
                 updateCurrentMessages(prev => prev.map(msg => {
                   if (msg.id === assistantId) {
@@ -2338,7 +2387,7 @@ export default function App() {
                     return newMsg;
                   }
                   return msg;
-                }));
+                }), currentTargetSessionId, assistantId);
               }
             } catch (e) {
               console.error('Failed to parse SSE payload:', dataStr);
@@ -2346,6 +2395,7 @@ export default function App() {
           }
         }
       }
+
     } catch (error: any) {
       if (error.name === 'AbortError' || error.message?.includes('aborted')) {
         console.log('Ascent streaming aborted by user');
@@ -2356,16 +2406,18 @@ export default function App() {
         msg.id === assistantId
           ? { ...msg, content: `Error: ${error.message || 'Could not complete ascent.'}` }
           : msg
-      ));
+      ), currentTargetSessionId, assistantId);
       showToast('Error during pipeline ascent', 'error');
     } finally {
       abortControllerRef.current = null;
       updateCurrentMessages(prev => prev.map(msg =>
         msg.id === assistantId ? { ...msg, isStreaming: false } : msg
-      ));
+      ), currentTargetSessionId, assistantId);
       setIsLoading(false);
     }
   };
+
+
 
   // Multi-File Ingestion Queue Handlers
   const handleAddFilesToQueue = (files: FileList | File[]) => {
@@ -2955,10 +3007,7 @@ export default function App() {
               <div 
                 key={s.id} 
                 className={`session-item ${s.id === activeSessionId ? 'active' : ''}`}
-                onClick={() => {
-                  setActiveSessionId(s.id);
-                  if (window.innerWidth < 768) setIsSidebarOpen(false);
-                }}
+                onClick={() => handleSelectSession(s.id)}
                 title={s.title}
               >
                 <MessageSquare size={14} className="session-icon" />
@@ -3015,9 +3064,10 @@ export default function App() {
           </div>
 
           <div className="footer-meta">
-            <span>ChromaDB · FlashRank · LangGraph · Groq</span>
+            <span>PostgreSQL & pgvector · FlashRank · LangGraph · Groq</span>
           </div>
         </div>
+
       </aside>
 
       {/* Main Chat Workspace */}

@@ -1,6 +1,6 @@
 # 🏔️ Ridge CRAG Benchmark Report
 
-**Generated:** 2026-08-18 13:05:34
+**Generated:** 2026-08-24 17:21:58
 **Dataset:** `Ridge CRAG Standard Evaluation Benchmark` (v1.0.0)
 
 ---
@@ -10,11 +10,11 @@
 | Metric | Score | Target Standard | Status |
 | :--- | :---: | :---: | :---: |
 | **Context Recall** | **61.7%** | > 80% | ⚠️ Needs Review |
-| **Faithfulness (Audit)** | **100.0%** | > 85% | ✅ Pass |
-| **Answer Relevance** | **83.3%** | > 80% | ✅ Pass |
-| **Grader Decision Accuracy** | **80.0%** | > 90% | ⚠️ Needs Review |
-| **Graph Routing Correctness** | **80.0%** | 100% | ✅ Pass |
-| **Average End-to-End Latency** | **39892 ms** | < 4000 ms | ⚡ Accelerated |
+| **Faithfulness (Audit)** | **40.0%** | > 85% | ⚠️ Needs Review |
+| **Answer Relevance** | **80.0%** | > 80% | ✅ Pass |
+| **Grader Decision Accuracy** | **100.0%** | > 90% | ✅ Pass |
+| **Graph Routing Correctness** | **100.0%** | 100% | ✅ Pass |
+| **Average End-to-End Latency** | **21571 ms** | < 4000 ms | ⚡ Accelerated |
 
 ---
 
@@ -22,11 +22,11 @@
 
 | ID | Category | Question | Context Recall | Faithfulness | Relevance | Latency | Status |
 | :--- | :--- | :--- | :---: | :---: | :---: | :---: | :---: |
-| `tc_001` | **in_domain_profile** | *"who is karthik"* | 100.0% | 100.0% | 100.0% | 11186ms | ✅ |
-| `tc_002` | **in_domain_technical** | *"what are the heuristics to reduce tree operation time in disjoint sets"* | 100.0% | 100.0% | 100.0% | 31568ms | ✅ |
-| `tc_003` | **out_of_context_general** | *"what is the big bang theory in astrophysics"* | 33.3% | 100.0% | 66.7% | 67916ms | ✅ |
-| `tc_004` | **gibberish_filter** | *"euhygvdvg vbhsd"* | 0.0% | 100.0% | 50.0% | 50451ms | ⚠️ |
-| `tc_005` | **query_reformulation** | *"dsu optimization algorithms"* | 75.0% | 100.0% | 100.0% | 38339ms | ✅ |
+| `tc_001` | **in_domain_profile** | *"who is karthik"* | 100.0% | 0.0% | 100.0% | 6958ms | ✅ |
+| `tc_002` | **in_domain_technical** | *"what are the heuristics to reduce tree operation time in disjoint sets"* | 100.0% | 100.0% | 100.0% | 25921ms | ✅ |
+| `tc_003` | **out_of_context_general** | *"what is the big bang theory in astrophysics"* | 33.3% | 0.0% | 100.0% | 29902ms | ✅ |
+| `tc_004` | **gibberish_filter** | *"euhygvdvg vbhsd"* | 0.0% | 100.0% | 0.0% | 21139ms | ⚠️ |
+| `tc_005` | **query_reformulation** | *"dsu optimization algorithms"* | 75.0% | 0.0% | 100.0% | 23934ms | ✅ |
 
 ---
 

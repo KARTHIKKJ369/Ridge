@@ -17,12 +17,12 @@ import time
 from typing import Literal
 
 from dotenv import load_dotenv
-from langchain_chroma import Chroma
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_groq import ChatGroq
 from langgraph.graph import END, StateGraph
 from pydantic import BaseModel, Field
 from typing_extensions import TypedDict
+
 
 
 load_dotenv()
@@ -84,7 +84,7 @@ def get_settings() -> dict:
 
 
 def clean_llm_response(text: str) -> str:
-    """Strip reasoning/thought blocks, normalize raw html break tags, convert citation tokens, and clean whitespace."""
+    """Strip reasoning/thought blocks, normalize raw html break tags, convert citation tokens, format equations, and clean whitespace."""
     if not text:
         return ""
     if "</think>" in text:
@@ -98,6 +98,17 @@ def clean_llm_response(text: str) -> str:
     text = re.sub(r"<br\s*/?>\s*•", "\n- ", text, flags=re.IGNORECASE)
     text = re.sub(r"<br\s*/?>\s*-", "\n- ", text, flags=re.IGNORECASE)
     text = re.sub(r"<br\s*/?>", "\n\n", text, flags=re.IGNORECASE)
+
+    # Fix collapsed Markdown tables where row newlines were omitted
+    text = re.sub(r"(\|[-:]+[-| :]*)\|([^\n\-\|])", r"\1|\n| \2", text)
+    text = re.sub(r"\|[ \t]*\|", "|\n|", text)
+
+    # Standardize LaTeX display equations with $$ ... $$
+    text = re.sub(r"\\\[([\s\S]*?)\\\]", r"\n\n$$\n\1\n$$\n\n", text)
+    text = re.sub(r"\\\(([\s\S]*?)\\\)", r"$\1$", text)
+    # Convert multiline single $ blocks to $$ blocks
+    text = re.sub(r"(?:^|\n)[ \t]*\$[ \t]*\n([\s\S]*?)\n[ \t]*\$[ \t]*(?=\n|$)", r"\n\n$$\n\1\n$$\n\n", text)
+
     return text.strip()
 
 
@@ -196,72 +207,10 @@ def get_embeddings(model_name: str | None = None) -> HuggingFaceEmbeddings:
     return _embeddings_cache[key]
 
 
-def get_vectorstore():
-    """Return Chroma vector store instance, supporting local persistence and Chroma Cloud."""
-    settings = get_settings()
-    embeddings = get_embeddings(settings["embedding_model"])
-    chroma_host = os.getenv("CHROMA_CLOUD_HOST")
-    
-    if chroma_host:
-        import chromadb
-        token = os.getenv("CHROMA_CLOUD_TOKEN", "")
-        headers = {"X-Chroma-Token": token} if token else None
-        client = chromadb.HttpClient(
-            host=chroma_host,
-            port=int(os.getenv("CHROMA_CLOUD_PORT", "8000")),
-            headers=headers,
-        )
-        return Chroma(
-            client=client,
-            collection_name=os.getenv("CHROMA_COLLECTION_NAME", "ridge_kb"),
-            embedding_function=embeddings,
-        )
-    return Chroma(
-        persist_directory=settings["chroma_dir"],
-        embedding_function=embeddings,
-    )
-
-
-# ---------------------------------------------------------------------------
-# BM25 In-Memory Cache with Invalidation
-# ---------------------------------------------------------------------------
-_bm25_cache: dict = {"index": None, "docs": None, "metas": None}
-
-def _build_bm25():
-    """Fetch all Chroma docs and build a BM25Okapi index. Cached until invalidated."""
-    vectorstore = get_vectorstore()
-    try:
-        all_chroma = vectorstore.get()
-        docs = all_chroma.get("documents", []) or []
-        metas = all_chroma.get("metadatas", []) or [{}] * len(docs)
-        if docs:
-            tokenized = [re.findall(r"\w+", d.lower()) for d in docs]
-            from rank_bm25 import BM25Okapi
-            _bm25_cache.update({"index": BM25Okapi(tokenized), "docs": docs, "metas": metas})
-            print(f"  [BM25 Cache] Built index over {len(docs)} documents.")
-        else:
-            _bm25_cache.update({"index": None, "docs": [], "metas": []})
-    except Exception as e:
-        print(f"  [BM25 Cache] Build note: {e}")
-        _bm25_cache.update({"index": None, "docs": [], "metas": []})
-
-def get_bm25():
-    """Return cached (index, docs, metas), building if needed."""
-    if _bm25_cache["index"] is None and _bm25_cache["docs"] is None:
-        _build_bm25()
-    return _bm25_cache["index"], _bm25_cache["docs"] or [], _bm25_cache["metas"] or []
-
-def invalidate_bm25():
-    """Call this after any ingestion to force a BM25 rebuild on the next query."""
-    _bm25_cache["index"] = None
-    _bm25_cache["docs"] = None
-    _bm25_cache["metas"] = None
-    print("  [BM25 Cache] Invalidated — will rebuild on next query.")
-
-
 # ---------------------------------------------------------------------------
 # Suggestions In-Memory Store
 # ---------------------------------------------------------------------------
+
 _suggestions_store: list[str] = []
 
 def get_suggestions_cache() -> list[str]:
@@ -323,9 +272,6 @@ def ingest_document(text_or_url: str, original_filename: str | None = None, user
         print(f"  Semantic chunking fallback (char-split): {sc_err}")
         doc_splits = raw_splits
 
-    print(f"Created {len(doc_splits)} chunks. Storing in Chroma...")
-    vectorstore = get_vectorstore()
-
     # --- Small-to-Big: create child chunks for indexing, keep parents in store ---
     from parent_store import make_parent_id, save_parents
     from langchain_text_splitters import RecursiveCharacterTextSplitter
@@ -351,25 +297,72 @@ def ingest_document(text_or_url: str, original_filename: str | None = None, user
             child.metadata = {**parent_doc.metadata, "parent_id": pid, "user_id": user_id}
             child_docs.append(child)
 
-    # Save parents to persistent JSON store
+    # Save parents to persistent JSON/SQLite store for S2B lookup
     try:
         save_parents(parent_records)
     except Exception as ps_err:
         print(f"  ParentStore note: {ps_err}")
 
-    # Index child chunks (fine-grained) into Chroma
     docs_to_index = child_docs if child_docs else doc_splits
     print(f"  Small-to-Big: {len(doc_splits)} parent chunks -> {len(docs_to_index)} child chunks indexed for user {user_id}.")
-    vectorstore.add_documents(docs_to_index)
-    invalidate_bm25()
-    print("Ingestion complete.")
+
+    # Ingest directly into PostgreSQL with pgvector & TSVector
+    from app.db.database import is_postgres_configured, get_db_session
+    from app.db.repositories import document_repo, glossary_repo
+
+    if is_postgres_configured():
+        try:
+            import asyncio
+            embeddings_list = embedder.embed_documents([d.page_content for d in docs_to_index])
+
+            async def _persist_pg_doc():
+                async with get_db_session() as session:
+                    await document_repo.save_ingested_document(
+                        session=session,
+                        uploaded_by=user_id if user_id and user_id != "default" else None,
+                        filename=original_filename or (text_or_url if not is_url else text_or_url),
+                        source_type="url" if is_url else ("file" if os.path.exists(text_or_url) else "text"),
+                        source_url=text_or_url if is_url else "",
+                        parent_records=parent_records,
+                        child_docs=docs_to_index,
+                        embeddings_list=embeddings_list,
+                        embedding_model_name=os.getenv("EMBEDDING_MODEL", "BAAI/bge-large-en-v1.5"),
+                    )
+
+            try:
+                loop = asyncio.get_running_loop()
+                loop.create_task(_persist_pg_doc())
+            except RuntimeError:
+                asyncio.run(_persist_pg_doc())
+            print("  [PostgreSQL] Successfully saved document, chunks, and pgvector embeddings.")
+        except Exception as pg_ingest_err:
+            print(f"  [PostgreSQL] Ingestion note: {pg_ingest_err}")
+
 
     # Extract & Index domain acronyms into glossary
     try:
-        from glossary import index_text_glossary
+        from glossary import index_text_glossary, extract_acronyms_from_text
         full_text = " ".join(d.page_content for d in doc_splits)
         source_name = original_filename or text_or_url
         index_text_glossary(full_text, source_name, user_id=user_id)
+
+        # Dual-write to PostgreSQL glossary
+        if is_postgres_configured():
+            extracted = extract_acronyms_from_text(full_text, source_name)
+            if extracted:
+                async def _persist_pg_glossary():
+                    async with get_db_session() as session:
+                        await glossary_repo.index_glossary_terms(
+                            session=session,
+                            terms_map=extracted,
+                            source_name=source_name,
+                            user_id=user_id,
+                        )
+                try:
+                    loop = asyncio.get_running_loop()
+                    loop.create_task(_persist_pg_glossary())
+                except RuntimeError:
+                    asyncio.run(_persist_pg_glossary())
     except Exception as ge:
         print(f"Glossary indexing note: {ge}")
     
@@ -383,6 +376,7 @@ def ingest_document(text_or_url: str, original_filename: str | None = None, user
             print(f"Error launching background suggestions: {e}")
 
     return {"status": "success", "chunks_added": len(doc_splits)}
+
 
 def generate_suggestions(text: str):
     import json
@@ -429,17 +423,7 @@ def generate_suggestions(text: str):
 def build_app():
     settings = get_settings()
 
-    print("Initializing Memory and Brain...")
-    vectorstore = get_vectorstore()
-
-    retriever = vectorstore.as_retriever(
-        search_type="mmr",
-        search_kwargs={
-            "k": 50,  # Fetch more for re-ranking
-            "fetch_k": settings["retriever_fetch_k"],
-            "lambda_mult": settings["retriever_lambda_mult"],
-        },
-    )
+    print("Initializing Ridge Brain (PostgreSQL + pgvector)...")
 
     from flashrank import Ranker, RerankRequest
     ranker = Ranker(model_name=settings["rerank_model"], cache_dir="./.flashrank_cache")
@@ -452,6 +436,7 @@ def build_app():
         temperature=0.0,
         max_tokens=900,
         max_retries=2,
+        tags=["auxiliary_model"],
     )
     llm_generate = ChatGroq(
         api_key=settings["groq_api_key"],
@@ -459,146 +444,60 @@ def build_app():
         temperature=0.1,
         max_tokens=800,
         max_retries=1,
+        tags=["generation_stream"],
     )
+
+
+    from app.retrieval.hybrid import UnifiedRetriever
+    retriever_engine = UnifiedRetriever(backend=os.getenv("RETRIEVAL_BACKEND", "pgvector"))
+
 
     def retrieve(state: GraphState) -> dict:
         t0 = time.time()
-        print("\n--- NODE: HYBRID RETRIEVE (BM25 + Chroma HNSW + RRF) ---")
         q = state["question"]
         src_filter = state.get("source_filter")
         user_id = state.get("user_id")
-        is_filtered = bool(src_filter and src_filter.strip().lower() not in ("", "all", "all sources", "none"))
-        has_user_scope = bool(user_id and user_id not in ("admin", "system", "all"))
-        if is_filtered:
+
+        print(f"\n--- NODE: UNIFIED HYBRID RETRIEVE (Backend: {retriever_engine.backend}) ---")
+        if src_filter:
             print(f"  [Source Scope Filter Active]: '{src_filter}'")
-        if has_user_scope:
+        if user_id:
             print(f"  [User Scope Filter Active]: '{user_id}'")
 
-        # Build Chroma metadata filter
-        chroma_filter = None
-        if is_filtered and has_user_scope:
-            chroma_filter = {"$and": [{"source": src_filter}, {"user_id": user_id}]}
-        elif is_filtered:
-            chroma_filter = {"source": src_filter}
-        elif has_user_scope:
-            chroma_filter = {"user_id": user_id}
-
-        # 1. Dense MMR Vector Search from Chroma (with metadata filter)
-        if chroma_filter:
-            try:
-                dense_docs = vectorstore.similarity_search(q, k=50, filter=chroma_filter)
-            except Exception:
-                dense_docs = retriever.invoke(q)
-                if is_filtered:
-                    dense_docs = [d for d in dense_docs if d.metadata.get("source") == src_filter or src_filter.lower() in str(d.metadata.get("source", "")).lower()]
-                if has_user_scope:
-                    dense_docs = [d for d in dense_docs if d.metadata.get("user_id") == user_id]
-        else:
-            dense_docs = retriever.invoke(q)
-
-        dense_texts = [d.page_content for d in dense_docs]
-        dense_metas = [d.metadata for d in dense_docs]
-
-        # 2. Sparse BM25 Search over Chroma Collection (filtered by source & user_id)
-        sparse_candidates = []
+        # Run async retrieval synchronously in LangGraph node
+        import asyncio
         try:
-            bm25, raw_docs, raw_metas = get_bm25()
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                import concurrent.futures
+                with concurrent.futures.ThreadPoolExecutor() as pool:
+                    candidates = pool.submit(
+                        asyncio.run,
+                        retriever_engine.retrieve(query=q, user_id=user_id, source_filter=src_filter, k=50)
+                    ).result()
+            else:
+                candidates = loop.run_until_complete(
+                    retriever_engine.retrieve(query=q, user_id=user_id, source_filter=src_filter, k=50)
+                )
+        except Exception:
+            candidates = asyncio.run(
+                retriever_engine.retrieve(query=q, user_id=user_id, source_filter=src_filter, k=50)
+            )
 
-            if (is_filtered or has_user_scope) and raw_docs:
-                filtered_docs = []
-                filtered_metas = []
-                for d, m in zip(raw_docs, raw_metas):
-                    m_src = str(m.get("source", "")) if m else ""
-                    m_uid = str(m.get("user_id", "")) if m else ""
-                    match_src = (not is_filtered) or (m_src == src_filter or src_filter.lower() in m_src.lower())
-                    match_user = (not has_user_scope) or (m_uid == str(user_id))
-                    if match_src and match_user:
-                        filtered_docs.append(d)
-                        filtered_metas.append(m)
-                if filtered_docs:
-                    from rank_bm25 import BM25Okapi
-                    tokenized_corpus = [re.findall(r"\w+", doc.lower()) for doc in filtered_docs]
-                    bm25 = BM25Okapi(tokenized_corpus)
-                    raw_docs, raw_metas = filtered_docs, filtered_metas
-                else:
-                    bm25 = None
-                    raw_docs, raw_metas = [], []
-
-            if bm25 and raw_docs:
-                tokenized_query = re.findall(r"\w+", q.lower())
-                if tokenized_query:
-                    scores = bm25.get_scores(tokenized_query)
-                    top_indices = sorted(range(len(scores)), key=lambda i: scores[i], reverse=True)[:30]
-                    for idx in top_indices:
-                        if scores[idx] > 0.0:
-                            sparse_candidates.append({
-                                "text": raw_docs[idx],
-                                "meta": raw_metas[idx] if idx < len(raw_metas) else {},
-                                "bm25_score": float(scores[idx])
-                            })
-        except Exception as bm25_err:
-            print(f"BM25 retrieval note: {bm25_err}")
-
-        # 3. Reciprocal Rank Fusion (RRF)
-        # RRF_score(doc) = 1 / (60 + dense_rank) + 1 / (60 + sparse_rank)
-        rrf_scores: dict[str, float] = {}
-        doc_registry: dict[str, tuple[str, dict]] = {}
-
-        for rank, text in enumerate(dense_texts):
-            doc_id = text.strip()[:180]
-            doc_registry[doc_id] = (text, dense_metas[rank] if rank < len(dense_metas) else {})
-            rrf_scores[doc_id] = rrf_scores.get(doc_id, 0.0) + (1.0 / (60.0 + rank + 1))
-
-        for rank, item in enumerate(sparse_candidates):
-            doc_id = item["text"].strip()[:180]
-            if doc_id not in doc_registry:
-                doc_registry[doc_id] = (item["text"], item["meta"])
-            rrf_scores[doc_id] = rrf_scores.get(doc_id, 0.0) + (1.0 / (60.0 + rank + 1))
-
-        rerank_top_n = settings.get("rerank_top_n", 20)
-        sorted_fused = sorted(rrf_scores.keys(), key=lambda k: rrf_scores[k], reverse=True)
-        fused_texts = [doc_registry[k][0] for k in sorted_fused[:rerank_top_n]]
-        fused_metas = [doc_registry[k][1] for k in sorted_fused[:rerank_top_n]]
-
-        print(f"Hybrid candidates: {len(dense_texts)} dense + {len(sparse_candidates)} sparse -> {len(fused_texts)} fused.")
-
-        # 4. FlashRank Cross-Encoder Re-Ranking
-        final_texts = []
-        final_metas = []
-        if fused_texts:
-            print("--- RE-RANKING WITH FLASHRANK CROSS-ENCODER ---")
-            passages = [{"id": i, "text": doc, "meta": fused_metas[i]} for i, doc in enumerate(fused_texts)]
-            rerankrequest = RerankRequest(query=state["question"], passages=passages)
-            rerank_results = ranker.rerank(rerankrequest)
-            
-            rerank_results = sorted(rerank_results, key=lambda x: x["score"], reverse=True)
-            for res in rerank_results[:settings["retriever_k"]]:
-                final_texts.append(res["text"])
-                final_metas.append(res["meta"])
-                final_metas[-1]["score"] = float(res["score"])
-            print(f"Kept top {len(final_texts)} documents after FlashRank.")
-        else:
-            final_texts = fused_texts
-            final_metas = fused_metas
-
-        # --- Small-to-Big Expansion: swap child chunks for their parent sections ---
-        expanded_count = 0
-        try:
-            from parent_store import expand_documents
-            exp_texts, exp_metas = expand_documents(final_texts, final_metas)
-            expanded_count = sum(1 for m in exp_metas if m.get("expanded_from_child"))
-            if expanded_count:
-                print(f"  Small-to-Big: expanded {expanded_count}/{len(exp_texts)} child chunks to parent sections.")
-            final_texts, final_metas = exp_texts, exp_metas
-        except Exception as s2b_err:
-            print(f"  Small-to-Big expansion note: {s2b_err}")
+        final_texts, final_metas, expanded_count = retriever_engine.rerank_and_expand(
+            query=q,
+            candidates=candidates,
+            top_k=settings["retriever_k"],
+            rerank_top_n=settings.get("rerank_top_n", 20),
+        )
 
         return {
             "documents": final_texts,
             "documents_metadata": final_metas,
             "expanded_count": expanded_count,
-            "latency_ms": int((time.time() - t0) * 1000)
+            "latency_ms": int((time.time() - t0) * 1000),
         }
+
 
     def grade_documents(state: GraphState) -> dict:
         t0 = time.time()

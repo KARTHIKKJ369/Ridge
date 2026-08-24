@@ -1,4 +1,17 @@
 services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: ridge-postgres
+    environment:
+      POSTGRES_DB: ridge
+      POSTGRES_USER: ridge
+      POSTGRES_PASSWORD: ridge
+    ports:
+      - "5433:5432"
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    restart: unless-stopped
+
   ridge:
     build:
       context: .
@@ -8,11 +21,16 @@ services:
       - "7860:7860"
     env_file:
       - .env
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://ridge:ridge@postgres:5432/ridge
+    depends_on:
+      - postgres
     volumes:
-      - chroma_data:/app/chroma_db
       - app_data:/app/data
     restart: unless-stopped
 
 volumes:
-  chroma_data:
+  pg_data:
   app_data:
+
+

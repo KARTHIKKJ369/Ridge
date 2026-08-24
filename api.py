@@ -1,9 +1,11 @@
 import json
 import logging
-from typing import AsyncGenerator
+from typing import AsyncGenerator, Optional
 import os
 import tempfile
 import shutil
+import time
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, UploadFile, File, Request, Depends, status
 from fastapi.responses import StreamingResponse, FileResponse, RedirectResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -26,14 +28,44 @@ from auth import (
     LoginRequest,
     UserProfile,
 )
+from app.db.database import (
+    init_db as init_postgres_db,
+    is_postgres_configured,
+    get_db_session,
+)
+from app.db.models import Document, DocumentChunk
+from sqlalchemy import select, func, delete, or_
+
+from app.db.repositories import (
+    user_repo,
+    conversation_repo,
+    document_repo,
+    glossary_repo,
+    cache_repo,
+    retrieval_repo,
+)
+
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    if is_postgres_configured():
+        try:
+            await init_postgres_db()
+            logger.info("✓ PostgreSQL & pgvector schema initialized on startup.")
+        except Exception as e:
+            logger.warning(f"Note on DB startup init: {e}")
+    yield
+
+
 app = FastAPI(
     title="Ridge API",
-    description="High-performance Corrective RAG (CRAG) platform with LangGraph state machine, ChromaDB, FlashRank, and Groq LLMs.",
-    version="2.0.0",
+    description="High-performance Corrective RAG (CRAG) platform with LangGraph state machine, PostgreSQL/pgvector, FlashRank, and Groq LLMs.",
+    version="2.1.0",
+    lifespan=lifespan,
 )
 
 ALLOWED_ORIGINS = [
@@ -51,19 +83,31 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
-    allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
+    allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type"],
 )
 
 rag_app = get_app()
 
+
 class ChatRequest(BaseModel):
     question: str
     web_search_enabled: bool = True
     source_filter: str | None = None
+    conversation_id: str | None = None
+
 
 class IngestRequest(BaseModel):
     text_or_url: str
+
+
+class CreateConversationRequest(BaseModel):
+    title: str = "New Research Ascent"
+
+
+class UpdateConversationRequest(BaseModel):
+    title: Optional[str] = None
+    summary: Optional[str] = None
 
 
 # ---------------------------------------------------------------------------
@@ -127,46 +171,245 @@ def logout():
 
 
 # ---------------------------------------------------------------------------
+# Conversation & Chat Persistence Endpoints (Protected)
+# ---------------------------------------------------------------------------
+
+@app.get("/api/conversations")
+async def list_conversations(
+    limit: int = 50,
+    offset: int = 0,
+    user: UserProfile = Depends(get_current_user),
+):
+    """Lists persistent conversations for the authenticated user."""
+    if not is_postgres_configured():
+        return {"conversations": []}
+    async with get_db_session() as session:
+        convs = await conversation_repo.list_conversations(session, user.id, limit=limit, offset=offset)
+        return {"conversations": convs}
+
+
+@app.post("/api/conversations")
+async def create_conversation_endpoint(
+    req: CreateConversationRequest = CreateConversationRequest(),
+    user: UserProfile = Depends(get_current_user),
+):
+    """Creates a new persistent conversation."""
+    if not is_postgres_configured():
+        return {"id": str(int(time.time() * 1000)), "title": req.title, "createdAt": int(time.time() * 1000)}
+    async with get_db_session() as session:
+        conv = await conversation_repo.create_conversation(session, user.id, title=req.title)
+        return {
+            "id": str(conv.id),
+            "title": conv.title,
+            "createdAt": int(conv.created_at.timestamp() * 1000),
+            "updatedAt": int(conv.updated_at.timestamp() * 1000),
+            "messages": [],
+        }
+
+
+@app.get("/api/conversations/{conv_id}")
+async def get_conversation_endpoint(
+    conv_id: str,
+    user: UserProfile = Depends(get_current_user),
+):
+    """Gets conversation metadata by ID."""
+    if not is_postgres_configured():
+        return {"id": conv_id, "title": "Research Ascent"}
+    async with get_db_session() as session:
+        conv = await conversation_repo.get_conversation(session, conv_id, user_id=user.id)
+        if not conv:
+            raise HTTPException(status_code=404, detail="Conversation not found.")
+        return {
+            "id": str(conv.id),
+            "title": conv.title,
+            "summary": conv.summary,
+            "createdAt": int(conv.created_at.timestamp() * 1000),
+            "updatedAt": int(conv.updated_at.timestamp() * 1000),
+        }
+
+
+@app.patch("/api/conversations/{conv_id}")
+async def update_conversation_endpoint(
+    conv_id: str,
+    req: UpdateConversationRequest,
+    user: UserProfile = Depends(get_current_user),
+):
+    """Updates conversation title or summary."""
+    if not is_postgres_configured():
+        return {"status": "updated", "id": conv_id}
+    async with get_db_session() as session:
+        ok = await conversation_repo.update_conversation(
+            session, conv_id, user.id, title=req.title, summary=req.summary
+        )
+        if not ok:
+            raise HTTPException(status_code=404, detail="Conversation not found or unauthorized.")
+        return {"status": "updated", "id": conv_id}
+
+
+@app.delete("/api/conversations/{conv_id}")
+async def delete_conversation_endpoint(
+    conv_id: str,
+    user: UserProfile = Depends(get_current_user),
+):
+    """Deletes a persistent conversation and its messages."""
+    if not is_postgres_configured():
+        return {"status": "deleted", "id": conv_id}
+    async with get_db_session() as session:
+        ok = await conversation_repo.delete_conversation(session, conv_id, user.id)
+        if not ok:
+            raise HTTPException(status_code=404, detail="Conversation not found or unauthorized.")
+        return {"status": "deleted", "id": conv_id}
+
+
+@app.get("/api/conversations/{conv_id}/messages")
+async def get_conversation_messages_endpoint(
+    conv_id: str,
+    user: UserProfile = Depends(get_current_user),
+):
+    """Returns the message history and citations for a conversation."""
+    if not is_postgres_configured():
+        return {"messages": []}
+    async with get_db_session() as session:
+        msgs = await conversation_repo.get_conversation_messages(session, conv_id, user_id=user.id)
+        return {"messages": msgs}
+
+
+# ---------------------------------------------------------------------------
 # Corrective RAG Chat & Knowledge Ingestion Endpoints (Protected)
 # ---------------------------------------------------------------------------
 
-async def generate_chat_events(question: str, user: UserProfile, web_search_enabled: bool = True, source_filter: str | None = None) -> AsyncGenerator[str, None]:
+
+async def generate_chat_events(
+    question: str,
+    user: UserProfile,
+    web_search_enabled: bool = True,
+    source_filter: str | None = None,
+    conversation_id: str | None = None,
+) -> AsyncGenerator[str, None]:
+    t_start = time.time()
+    db_conv_id = conversation_id
+    user_msg_id = None
+    captured_traces = []
+
+    # ── Persistent Conversation & User Message Initialization ────────────────
+    if is_postgres_configured():
+        try:
+            async with get_db_session() as session:
+                if not db_conv_id:
+                    # Auto-create new conversation
+                    title_candidate = question.strip()[:60]
+                    new_conv = await conversation_repo.create_conversation(
+                        session, user_id=user.id, title=title_candidate or "New Research Ascent"
+                    )
+                    db_conv_id = str(new_conv.id)
+                else:
+                    # Verify existence
+                    existing_conv = await conversation_repo.get_conversation(session, db_conv_id, user_id=user.id)
+                    if not existing_conv:
+                        new_conv = await conversation_repo.create_conversation(
+                            session, user_id=user.id, title=question.strip()[:60] or "New Research Ascent"
+                        )
+                        db_conv_id = str(new_conv.id)
+
+                # Persist User Message
+                u_msg = await conversation_repo.add_message(
+                    session=session,
+                    conversation_id=db_conv_id,
+                    role="user",
+                    content=question,
+                    status="completed",
+                )
+                user_msg_id = u_msg.id
+        except Exception as db_init_err:
+            logger.warning(f"Note creating conversation record: {db_init_err}")
+
+    # Emit conversation ID trace event if we have one
+    if db_conv_id:
+        yield f"data: {json.dumps({'type': 'conversation_info', 'conversation_id': db_conv_id})}\n\n"
+
     # ── 0. Semantic Vector Query Cache Lookup ──────────────────────────────────
     try:
-        from query_cache import get_cached_response
         from main import get_embeddings
         embedder = get_embeddings()
-        cached = get_cached_response(question, embedder, threshold=0.96, source_filter=source_filter)
+        q_emb = embedder.embed_query(question)
+        cached = None
+
+        # Check pgvector query cache first
+        if is_postgres_configured():
+            try:
+                async with get_db_session() as session:
+                    cached = await cache_repo.get_cached_response(
+                        session=session,
+                        query=question,
+                        query_vector=q_emb,
+                        threshold=0.96,
+                        source_filter=source_filter,
+                    )
+            except Exception as pg_cache_err:
+                logger.warning(f"pgvector query cache note: {pg_cache_err}")
+
+        # Fallback to local query cache if not found
+        if not cached:
+            from query_cache import get_cached_response as get_local_cached_response
+            cached = get_local_cached_response(question, embedder, threshold=0.96, source_filter=source_filter)
+
         if cached:
             match_pct = int(round(cached.get("similarity", 0.99) * 100))
             # Emit instant cache hit trace
             yield f"data: {json.dumps({'type': 'trace', 'node': 'cache_hit_node', 'message': f'⚡ Semantic Cache Hit ({match_pct}% query match) — Instant Verified Ascent', 'latency_ms': 2})}\n\n"
             
-            # Stream cached answer
-            ans = cached.get("answer", "")
+            # Stream clean cached answer
+            import re
+            ans = re.sub(r'^\s*\{[\s\S]*?"summary":\s*"[^"]*"\s*\}\s*', '', cached.get("answer", "")).strip()
             yield f"data: {json.dumps({'type': 'token', 'token': ans})}\n\n"
             
+            conf = cached.get("confidence") or {
+                "score": 98,
+                "level": "HIGH",
+                "breakdown": {
+                    "grader_consensus": 100.0,
+                    "source_trust": "Semantic Vector Cache (Verified)",
+                    "relevant_chunks": 4,
+                    "reformulation_loops": 0,
+                    "faithfulness": "Verified Cache Hit"
+                }
+            }
+            conflict_data = cached.get("conflict_data") or {"detected": False, "summary": "", "sources": []}
+
             # Emit final trace
             final_trace = {
                 "type": "trace",
                 "node": "generate_node",
                 "message": "Loaded verified answer from Semantic Cache",
                 "answer": ans,
-                "confidence": cached.get("confidence") or {
-                    "score": 98,
-                    "level": "HIGH",
-                    "breakdown": {
-                        "grader_consensus": 100.0,
-                        "source_trust": "Semantic Vector Cache (Verified)",
-                        "relevant_chunks": 4,
-                        "reformulation_loops": 0,
-                        "faithfulness": "Verified Cache Hit"
-                    }
-                },
-                "conflict_data": cached.get("conflict_data") or {"detected": False, "summary": "", "sources": []},
+                "confidence": conf,
+                "conflict_data": conflict_data,
                 "latency_ms": 2
             }
             yield f"data: {json.dumps(final_trace)}\n\n"
+
+
+            # Persist Cached Assistant Message
+            if is_postgres_configured() and db_conv_id:
+                try:
+                    async with get_db_session() as session:
+                        await conversation_repo.add_message(
+                            session=session,
+                            conversation_id=db_conv_id,
+                            role="assistant",
+                            content=ans,
+                            model="semantic_cache",
+                            status="completed",
+                            latency_ms=2,
+                            metadata_json={
+                                "confidence": conf,
+                                "conflict_data": conflict_data,
+                                "traces": [final_trace],
+                            },
+                        )
+                except Exception as save_cached_err:
+                    logger.warning(f"Error persisting cached assistant message: {save_cached_err}")
+
             yield "data: [DONE]\n\n"
             return
     except Exception as cache_err:
@@ -191,17 +434,23 @@ async def generate_chat_events(question: str, user: UserProfile, web_search_enab
         accumulated_answer = ""
         last_confidence = {}
         last_conflict = {}
+        last_doc_grades = []
+        last_retrieved_docs = []
+        rewritten_query_str = ""
+
         async for event in rag_app.astream_events(initial_state, version="v2"):
             kind = event.get("event")
             node_name = event.get("metadata", {}).get("langgraph_node")
 
-            # 1. Live token-by-token streaming from ChatGroq during generate_node
-            if kind == "on_chat_model_stream" and node_name == "generate_node":
+            # 1. Live token-by-token streaming from ChatGroq exclusively during synthesis
+            tags = event.get("tags") or []
+            if kind == "on_chat_model_stream" and "generation_stream" in tags:
                 chunk = event.get("data", {}).get("chunk")
                 content = chunk.content if hasattr(chunk, "content") else str(chunk)
                 if content:
                     accumulated_answer += content
                     yield f"data: {json.dumps({'type': 'token', 'token': content})}\n\n"
+
 
             # 2. Node completion & trace telemetry events
             elif kind == "on_chain_end" and event.get("name") in [
@@ -233,6 +482,7 @@ async def generate_chat_events(question: str, user: UserProfile, web_search_enab
                 elif curr_node == "retrieve_node":
                     docs = output.get("documents", [])
                     expanded = output.get("expanded_count", 0)
+                    last_retrieved_docs = docs
                     base_msg = f"Retrieved {len(docs)} documents"
                     if expanded:
                         base_msg += f" · {expanded} expanded via Small-to-Big"
@@ -243,21 +493,29 @@ async def generate_chat_events(question: str, user: UserProfile, web_search_enab
                 elif curr_node == "grade_node":
                     decision = output.get("generation", "unknown")
                     docs = output.get("documents", [])
+                    grades = output.get("doc_grades", [])
+                    last_doc_grades = grades
                     trace_data["message"] = f"Grading decision: {decision} ({len(docs)} docs relevant)"
-                    trace_data["doc_grades"] = output.get("doc_grades", [])
+                    trace_data["doc_grades"] = grades
 
                 elif curr_node == "web_search_node":
                     docs = output.get("documents", [])
+                    grades = output.get("doc_grades", [])
+                    if grades:
+                        last_doc_grades.extend(grades)
                     trace_data["message"] = f"Performed web search ({len(docs)} sources retrieved)"
                     trace_data["documents"] = docs
-                    trace_data["doc_grades"] = output.get("doc_grades", [])
+                    trace_data["doc_grades"] = grades
 
                 elif curr_node == "rewrite_node":
                     new_q = output.get("question", "")
+                    rewritten_query_str = new_q
                     trace_data["message"] = f"Rewrote query to: {new_q}"
 
                 elif curr_node == "generate_node":
                     gen = output.get("generation", "")
+                    if gen and not accumulated_answer:
+                        accumulated_answer = gen
                     conf = output.get("confidence", {})
                     conflict_data = output.get("conflict_data", {})
                     last_confidence = conf
@@ -269,6 +527,7 @@ async def generate_chat_events(question: str, user: UserProfile, web_search_enab
                     if conflict_data:
                         trace_data["conflict_data"] = conflict_data
 
+
                 elif curr_node == "check_hallucination_node":
                     h_grade = output.get("hallucination_grade", {})
                     conf = output.get("confidence", {})
@@ -279,22 +538,95 @@ async def generate_chat_events(question: str, user: UserProfile, web_search_enab
                     if conf:
                         trace_data["confidence"] = conf
 
+                captured_traces.append(trace_data)
                 yield f"data: {json.dumps(trace_data)}\n\n"
 
-        # ── Store high-confidence result in Semantic Cache ───────────────────
-        if accumulated_answer and last_confidence.get("score", 0) >= 60:
+        total_latency = int((time.time() - t_start) * 1000)
+        import re
+        clean_final_answer = re.sub(r'^\s*\{[\s\S]*?"summary":\s*"[^"]*"\s*\}\s*', '', accumulated_answer).strip()
+
+        # ── Persist Assistant Message, Citations & Observability to PostgreSQL ─
+        if is_postgres_configured() and db_conv_id and clean_final_answer:
+            try:
+                async with get_db_session() as session:
+                    # 1. Add Assistant Message
+                    ast_msg = await conversation_repo.add_message(
+                        session=session,
+                        conversation_id=db_conv_id,
+                        role="assistant",
+                        content=clean_final_answer,
+                        model=os.getenv("GROQ_MODEL", "openai/gpt-oss-120b"),
+                        status="completed",
+                        latency_ms=total_latency,
+                        metadata_json={
+                            "traces": captured_traces,
+                            "confidence": last_confidence,
+                            "conflict_data": last_conflict,
+                        },
+                    )
+
+                    # 2. Add Structured Citations
+                    relevant_grades = [g for g in last_doc_grades if g.get("score") == "yes"]
+                    for idx, g in enumerate(relevant_grades, start=1):
+                        await conversation_repo.add_citation(
+                            session=session,
+                            message_id=ast_msg.id,
+                            citation_index=idx,
+                            relevance_score=float(g.get("relevance", 0.9)),
+                            rerank_score=float(g.get("relevance", 0.0)),
+                            quoted_text=str(g.get("text", ""))[:500],
+                        )
+
+                    # 3. Log Retrieval Run
+                    await retrieval_repo.log_retrieval_run(
+                        session=session,
+                        query=question,
+                        rewritten_query=rewritten_query_str,
+                        retrieval_strategy="hybrid_rrf",
+                        cache_hit=False,
+                        latency_ms=total_latency,
+                        total_results=len(last_retrieved_docs),
+                        confidence_score=last_confidence.get("score", 0),
+                        conversation_id=db_conv_id,
+                        message_id=ast_msg.id,
+                    )
+            except Exception as save_err:
+                logger.warning(f"Error persisting assistant message to PostgreSQL: {save_err}")
+
+        # ── Store high-confidence result in pgvector & local Semantic Cache ──
+        if clean_final_answer and last_confidence.get("score", 0) >= 60:
             try:
                 import threading
-                from query_cache import store_cached_response
                 from main import get_embeddings
                 emb = get_embeddings()
+                q_vec = emb.embed_query(question)
+
+                # 1. Store in pgvector cache
+                if is_postgres_configured():
+                    async def _async_store_pg_cache():
+                        async with get_db_session() as session:
+                            await cache_repo.store_cached_response(
+                                session=session,
+                                question=question,
+                                answer=clean_final_answer,
+                                confidence=last_confidence,
+                                conflict_data=last_conflict,
+                                query_vector=q_vec,
+                                source_filter=source_filter,
+                            )
+                    # Run async task
+                    import asyncio
+                    asyncio.create_task(_async_store_pg_cache())
+
+                # 2. Store in local JSON cache
+                from query_cache import store_cached_response as store_local_cache
                 threading.Thread(
-                    target=store_cached_response,
-                    args=(question, accumulated_answer, last_confidence, last_conflict, emb, source_filter),
+                    target=store_local_cache,
+                    args=(question, clean_final_answer, last_confidence, last_conflict, emb, source_filter),
                     daemon=True
                 ).start()
-            except Exception as store_err:
-                logger.warning(f"Could not async store in query cache: {store_err}")
+            except Exception as cache_store_err:
+                logger.warning(f"Error storing query cache: {cache_store_err}")
 
     except Exception as e:
         logger.error(f"Error during streaming: {e}")
@@ -330,9 +662,10 @@ async def ask_question(req: ChatRequest, user: UserProfile = Depends(get_current
             detail=f"Daily ascent limit reached ({current_count}/{daily_limit} requests used today). Quota resets at 00:00 UTC."
         )
     return StreamingResponse(
-        generate_chat_events(req.question, user, req.web_search_enabled, req.source_filter),
+        generate_chat_events(req.question, user, req.web_search_enabled, req.source_filter, req.conversation_id),
         media_type="text/event-stream"
     )
+
 
 @app.post("/ingest")
 async def ingest(req: IngestRequest, user: UserProfile = Depends(get_current_user)):
@@ -390,10 +723,10 @@ def health():
     return {"status": "ok", "service": "Ridge RAG"}
 
 @app.get("/api/suggestions")
-def get_suggestions(force: bool = False, user: UserProfile = Depends(get_current_user)):
+async def get_suggestions(force: bool = False, user: UserProfile = Depends(get_current_user)):
     """
     Returns suggested queries from the in-memory / persistent cache.
-    Does NOT make LLM or Chroma DB calls on refresh.
+    Does NOT make LLM or DB calls on normal refresh.
     Only re-generates when force=True or during document ingestion.
     """
     from main import get_suggestions_cache
@@ -402,17 +735,15 @@ def get_suggestions(force: bool = False, user: UserProfile = Depends(get_current
         if sugs:
             return {"suggestions": sugs, "cached": True}
 
-    # Only if no cached suggestions exist or force=True, generate from Chroma sample
+    # Only if no cached suggestions exist or force=True, generate from PostgreSQL sample
     try:
-        from main import get_vectorstore, generate_suggestions
-        vectorstore = get_vectorstore()
-        coll = vectorstore._collection
-        count = coll.count()
-        if count > 0:
-            docs = coll.get(limit=4)
-            documents = docs.get("documents", [])
-            if documents:
-                sample_text = " ".join(documents)[:1500]
+        from main import generate_suggestions
+        async with get_db_session() as session:
+            stmt = select(DocumentChunk.content).limit(4)
+            result = await session.execute(stmt)
+            chunks = [r[0] for r in result.all() if r[0]]
+            if chunks:
+                sample_text = " ".join(chunks)[:1500]
                 new_sugs = generate_suggestions(sample_text)
                 if new_sugs:
                     return {"suggestions": new_sugs, "cached": False}
@@ -422,34 +753,28 @@ def get_suggestions(force: bool = False, user: UserProfile = Depends(get_current
     cached_fallback = get_suggestions_cache()
     return {"suggestions": cached_fallback, "empty": len(cached_fallback) == 0}
 
+
 @app.get("/api/glossary")
-def get_glossary_terms(user: UserProfile = Depends(get_current_user)):
+async def get_glossary_terms(user: UserProfile = Depends(get_current_user)):
     """Returns the list of indexed acronyms and domain entity definitions."""
     try:
         from glossary import get_glossary_for_user, sync_glossary_with_active_sources
-        from main import get_vectorstore
         from pathlib import Path
 
         is_admin = user.role == "admin"
-        vectorstore = get_vectorstore()
-        coll = vectorstore._collection
-        count = coll.count()
         active_sources = set()
 
-        if count > 0:
-            data = coll.get(limit=count + 500, include=["metadatas"])
-            metas = data.get("metadatas", []) or []
-            for m in metas:
-                if not m:
-                    continue
-                m_user = m.get("user_id")
-                if is_admin or m_user in (user.id, "default", None):
-                    src = m.get("source", "")
-                    if src:
-                        active_sources.add(src)
-                        active_sources.add(Path(src).name)
+        async with get_db_session() as session:
+            stmt = select(Document.filename, Document.uploaded_by)
+            if not is_admin:
+                stmt = stmt.where(or_(Document.uploaded_by == user.id, Document.uploaded_by.is_(None), Document.uploaded_by == "default"))
+            res = await session.execute(stmt)
+            for row in res.all():
+                fn = row[0]
+                if fn:
+                    active_sources.add(fn)
+                    active_sources.add(Path(fn).name)
 
-        # Prune any stale entries from deleted documents if admin
         if is_admin and active_sources:
             sync_glossary_with_active_sources(active_sources)
 
@@ -464,24 +789,22 @@ def get_glossary_terms(user: UserProfile = Depends(get_current_user)):
 
 
 @app.get("/api/stats")
-def get_stats(user: UserProfile = Depends(get_current_user)):
-    from main import get_vectorstore
-    vectorstore = get_vectorstore()
-    coll = vectorstore._collection
-    count = coll.count()
-    data = coll.get(include=["metadatas"])
-    metas = data.get("metadatas", []) or []
-    
-    # Filter strictly by user (admins see their own in default view or all if show_all)
+async def get_stats(user: UserProfile = Depends(get_current_user)):
     is_admin = user.role == "admin"
-    user_metas = [m for m in metas if m and (m.get("user_id") == user.id or (is_admin and m.get("user_id") == user.id))]
-    user_chunks = len(user_metas)
-    unique_sources = set(m.get("source") for m in user_metas if m.get("source"))
-    doc_count = len(unique_sources) if unique_sources else (1 if user_chunks > 0 else 0)
+    async with get_db_session() as session:
+        if is_admin:
+            doc_stmt = select(func.count(Document.id))
+            chunk_stmt = select(func.count(DocumentChunk.id))
+        else:
+            doc_stmt = select(func.count(Document.id)).where(or_(Document.uploaded_by == user.id, Document.uploaded_by.is_(None), Document.uploaded_by == "default"))
+            chunk_stmt = select(func.count(DocumentChunk.id)).join(Document).where(or_(Document.uploaded_by == user.id, Document.uploaded_by.is_(None), Document.uploaded_by == "default"))
+        
+        doc_count = (await session.execute(doc_stmt)).scalar() or 0
+        chunk_count = (await session.execute(chunk_stmt)).scalar() or 0
     
     return {
         "doc_count": doc_count,
-        "chunk_count": user_chunks,
+        "chunk_count": chunk_count,
         "requests_today": user.requests_today,
         "daily_request_limit": user.daily_request_limit,
         "role": user.role
@@ -489,63 +812,51 @@ def get_stats(user: UserProfile = Depends(get_current_user)):
 
 
 @app.get("/api/kb/sources")
-def get_kb_sources(all_users: bool = False, user: UserProfile = Depends(get_current_user)):
-    from main import get_vectorstore
+async def get_kb_sources(all_users: bool = False, user: UserProfile = Depends(get_current_user)):
     from pathlib import Path
     try:
-        vectorstore = get_vectorstore()
-        coll = vectorstore._collection
-        count = coll.count()
-        if count == 0:
-            return {"total_chunks": 0, "total_sources": 0, "sources": []}
-
-        data = coll.get(limit=count + 500, include=["metadatas", "documents"])
-        ids = data.get("ids", [])
-        metas = data.get("metadatas", [])
-        docs = data.get("documents", [])
-
         is_admin = user.role == "admin"
         show_all = all_users and is_admin
 
-        sources_map = {}
-        filtered_chunk_count = 0
+        async with get_db_session() as session:
+            stmt = select(Document).order_by(Document.created_at.desc())
+            if not show_all:
+                stmt = stmt.where(or_(Document.uploaded_by == user.id, Document.uploaded_by.is_(None), Document.uploaded_by == "default"))
+            
+            docs = (await session.execute(stmt)).scalars().all()
+            if not docs:
+                return {"total_chunks": 0, "total_sources": 0, "sources": []}
 
-        for i, id_ in enumerate(ids):
-            meta = metas[i] if i < len(metas) and metas[i] else {}
-            meta_user = meta.get("user_id")
+            sources_list = []
+            total_chunks = 0
 
-            # Multi-tenant isolation: Only include documents belonging strictly to this user
-            if not show_all and meta_user != user.id:
-                continue
+            for doc in docs:
+                chunk_cnt_stmt = select(func.count(DocumentChunk.id)).where(DocumentChunk.document_id == doc.id)
+                c_count = (await session.execute(chunk_cnt_stmt)).scalar() or 0
+                total_chunks += c_count
 
-            filtered_chunk_count += 1
-            raw_src = meta.get("source", "Unknown Source")
-            name = Path(raw_src).name if ("/" in raw_src or "\\" in raw_src) else raw_src
-            if not name:
-                name = raw_src
+                sample_stmt = select(DocumentChunk.content).where(DocumentChunk.document_id == doc.id).limit(1)
+                sample = (await session.execute(sample_stmt)).scalar() or ""
 
-            key = f"{meta_user}::{raw_src}" if show_all else raw_src
+                raw_src = doc.filename or doc.source_url or "Unknown Source"
+                name = Path(raw_src).name if ("/" in raw_src or "\\" in raw_src) else raw_src
 
-            if key not in sources_map:
-                sources_map[key] = {
+                sources_list.append({
                     "source": raw_src,
                     "name": name,
-                    "type": meta.get("type", "document"),
-                    "h1": meta.get("h1", name),
-                    "user_id": meta_user,
-                    "chunk_count": 0,
-                    "sample": docs[i][:180] if i < len(docs) else "",
-                    "ids": []
-                }
-            sources_map[key]["chunk_count"] += 1
-            sources_map[key]["ids"].append(id_)
+                    "type": doc.source_type or "document",
+                    "h1": name,
+                    "user_id": doc.uploaded_by or "shared",
+                    "chunk_count": c_count,
+                    "sample": sample[:180],
+                    "ids": [str(doc.id)]
+                })
 
-        sources_list = list(sources_map.values())
-        return {
-            "total_chunks": filtered_chunk_count,
-            "total_sources": len(sources_list),
-            "sources": sources_list
-        }
+            return {
+                "total_chunks": total_chunks,
+                "total_sources": len(sources_list),
+                "sources": sources_list
+            }
     except Exception as e:
         logger.error(f"Failed to get KB sources: {e}")
         return {"total_chunks": 0, "total_sources": 0, "sources": [], "error": str(e)}
@@ -557,68 +868,42 @@ class DeleteKBRequest(BaseModel):
 
 
 @app.post("/api/kb/delete")
-def delete_kb_source(req: DeleteKBRequest, user: UserProfile = Depends(get_current_user)):
-    from main import get_vectorstore, invalidate_bm25
-    from pathlib import Path
+async def delete_kb_source(req: DeleteKBRequest, user: UserProfile = Depends(get_current_user)):
     try:
-        vectorstore = get_vectorstore()
-        coll = vectorstore._collection
         is_admin = user.role == "admin"
 
-        if req.ids:
-            # If not admin, verify all ids belong to this user
-            if not is_admin:
-                data = coll.get(ids=req.ids, include=["metadatas"])
-                valid_ids = [
-                    id_ for i, id_ in enumerate(data.get("ids", []))
-                    if data.get("metadatas", [])[i].get("user_id") in (user.id, "default", None)
-                ]
-                if valid_ids:
-                    coll.delete(ids=valid_ids)
-            else:
-                coll.delete(ids=req.ids)
+        async with get_db_session() as session:
+            if req.ids:
+                import uuid
+                doc_uuids = []
+                for i in req.ids:
+                    try:
+                        doc_uuids.append(uuid.UUID(i))
+                    except Exception:
+                        pass
+                if doc_uuids:
+                    stmt = delete(Document).where(Document.id.in_(doc_uuids))
+                    if not is_admin:
+                        stmt = stmt.where(or_(Document.uploaded_by == user.id, Document.uploaded_by.is_(None)))
+                    await session.execute(stmt)
 
-            invalidate_bm25()
-            remaining_chunks = coll.count()
-            return {"status": "deleted", "remaining_chunks": remaining_chunks}
+            elif req.source:
+                stmt = delete(Document).where(Document.filename == req.source)
+                if not is_admin:
+                    stmt = stmt.where(or_(Document.uploaded_by == user.id, Document.uploaded_by.is_(None)))
+                await session.execute(stmt)
 
-        if req.source:
-            count = coll.count()
-            if count > 0:
-                data = coll.get(limit=count + 500, include=["metadatas"])
-                matching_ids = []
-                req_name = Path(req.source).name.lower()
-                req_norm = req.source.rstrip("/").lower()
-                
-                for i, m in enumerate(data.get("metadatas", [])):
-                    if not m:
-                        continue
-                    m_src = str(m.get("source", "")).strip()
-                    m_norm = m_src.rstrip("/").lower()
-                    m_name = Path(m_src).name.lower()
-                    m_user = m.get("user_id")
-
-                    if not is_admin and m_user not in (user.id, "default", None):
-                        continue
-
-                    if m_src == req.source or m_norm == req_norm or (req_name and m_name == req_name):
-                        matching_ids.append(data["ids"][i])
-
-                if matching_ids:
-                    coll.delete(ids=matching_ids)
-                    invalidate_bm25()
-
-                # Also remove deleted source acronyms from glossary
                 try:
                     from glossary import remove_source_from_glossary
                     remove_source_from_glossary(req.source, user_id=None if is_admin else user.id)
                 except Exception as ge:
                     logger.warning(f"Error removing source from glossary: {ge}")
+            else:
+                raise HTTPException(status_code=400, detail="Must provide 'source' or 'ids'")
 
-            remaining_chunks = coll.count()
+            rem_stmt = select(func.count(DocumentChunk.id))
+            remaining_chunks = (await session.execute(rem_stmt)).scalar() or 0
             return {"status": "deleted", "remaining_chunks": remaining_chunks}
-
-        raise HTTPException(status_code=400, detail="Must provide 'source' or 'ids'")
     except HTTPException:
         raise
     except Exception as e:
@@ -627,36 +912,24 @@ def delete_kb_source(req: DeleteKBRequest, user: UserProfile = Depends(get_curre
 
 
 @app.post("/api/kb/clear")
-def clear_kb(user: UserProfile = Depends(get_current_user)):
-    from main import get_vectorstore, clear_suggestions_cache, invalidate_bm25
+async def clear_kb(user: UserProfile = Depends(get_current_user)):
     try:
-        vectorstore = get_vectorstore()
-        coll = vectorstore._collection
-        count = coll.count()
-        if count > 0:
-            data = coll.get(limit=count + 500, include=["metadatas"])
-            ids = data.get("ids", [])
-            metas = data.get("metadatas", []) or []
-
-            is_admin = user.role == "admin"
+        is_admin = user.role == "admin"
+        async with get_db_session() as session:
             if is_admin:
-                if ids:
-                    coll.delete(ids=ids)
+                await session.execute(delete(Document))
             else:
-                user_ids = [ids[i] for i, m in enumerate(metas) if m and m.get("user_id") in (user.id, "default", None)]
-                if user_ids:
-                    coll.delete(ids=user_ids)
-            invalidate_bm25()
+                await session.execute(delete(Document).where(Document.uploaded_by == user.id))
     except Exception as e:
         logger.error(f"Error in clear_kb: {e}")
 
-    # Clear glossary for this user
     try:
         from glossary import clear_glossary
         clear_glossary(user_id=None if user.role == "admin" else user.id)
     except Exception as ge:
         logger.warning(f"Error clearing glossary: {ge}")
 
+    from main import clear_suggestions_cache
     clear_suggestions_cache()
     if os.path.exists("suggestions.json"):
         try:
@@ -708,50 +981,35 @@ def set_user_status(target_id: str, req: UpdateStatusRequest, admin: UserProfile
 
 
 @app.delete("/api/admin/users/{target_id}")
-def delete_user_account(target_id: str, admin: UserProfile = Depends(require_admin)):
-    """Deletes a user account and purges their indexed chunks from ChromaDB."""
+async def delete_user_account(target_id: str, admin: UserProfile = Depends(require_admin)):
+    """Deletes a user account and purges their documents from PostgreSQL."""
     if target_id == admin.id:
         raise HTTPException(status_code=400, detail="Cannot delete your own administrator account.")
     
-    # 1. Delete user files from ChromaDB
+    # 1. Delete user files from PostgreSQL
     try:
-        from main import get_vectorstore, invalidate_bm25
-        vectorstore = get_vectorstore()
-        coll = vectorstore._collection
-        count = coll.count()
-        if count > 0:
-            data = coll.get(limit=count + 500, include=["metadatas"])
-            ids = data.get("ids", [])
-            metas = data.get("metadatas", []) or []
-            user_ids = [ids[i] for i, m in enumerate(metas) if m and m.get("user_id") == target_id]
-            if user_ids:
-                coll.delete(ids=user_ids)
-                invalidate_bm25()
+        async with get_db_session() as session:
+            await session.execute(delete(Document).where(Document.uploaded_by == target_id))
     except Exception as e:
-        logger.warning(f"Note purging user chunks on delete: {e}")
+        logger.warning(f"Note purging user docs on delete: {e}")
 
-    # 2. Delete user record from SQLite
+    # 2. Delete user record from auth repository
     admin_delete_user(target_id)
     return {"status": "deleted", "id": target_id}
 
 
 @app.get("/api/admin/stats")
-def get_admin_stats(admin: UserProfile = Depends(require_admin)):
+async def get_admin_stats(admin: UserProfile = Depends(require_admin)):
     """Returns global system metrics."""
     users = admin_list_users()
     total_users = len(users)
     active_users = sum(1 for u in users if u.get("is_active"))
     total_requests_today = sum(u.get("requests_today", 0) for u in users)
 
-    from main import get_vectorstore
     try:
-        vectorstore = get_vectorstore()
-        coll = vectorstore._collection
-        chunk_count = coll.count()
-        data = coll.get(include=["metadatas"])
-        metas = data.get("metadatas", []) or []
-        unique_sources = set(m.get("source") for m in metas if m and m.get("source"))
-        doc_count = len(unique_sources)
+        async with get_db_session() as session:
+            doc_count = (await session.execute(select(func.count(Document.id)))).scalar() or 0
+            chunk_count = (await session.execute(select(func.count(DocumentChunk.id)))).scalar() or 0
     except Exception:
         chunk_count = 0
         doc_count = 0
@@ -763,6 +1021,7 @@ def get_admin_stats(admin: UserProfile = Depends(require_admin)):
         "total_documents": doc_count,
         "total_chunks": chunk_count,
     }
+
 
 
 # Mount the compiled React frontend

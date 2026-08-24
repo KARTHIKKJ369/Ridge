@@ -50,14 +50,32 @@ def evaluate_test_case(app, test_case: dict) -> dict:
     accumulated_state = dict(initial_state)
     latest_grade_verdict = "no"
 
-    for output in app.stream(initial_state):
-        for node_name, node_output in output.items():
-            steps_executed.append(node_name)
-            accumulated_state.update(node_output)
-            if node_name == "grade_node":
-                latest_grade_verdict = node_output.get("generation", "no")
+    max_attempts = 4
+    for attempt in range(1, max_attempts + 1):
+        try:
+            steps_executed = []
+            accumulated_state = dict(initial_state)
+            latest_grade_verdict = "no"
+
+            for output in app.stream(initial_state):
+                for node_name, node_output in output.items():
+                    steps_executed.append(node_name)
+                    accumulated_state.update(node_output)
+                    if node_name == "grade_node":
+                        latest_grade_verdict = node_output.get("generation", "no")
+            break
+        except Exception as e:
+            err_str = str(e).lower()
+            if ("429" in err_str or "rate limit" in err_str or "too many requests" in err_str) and attempt < max_attempts:
+                wait_time = 8 * attempt
+                print(f"  ⚠️  Groq rate limit hit (429). Retrying in {wait_time}s (Attempt {attempt}/{max_attempts})...")
+                time.sleep(wait_time)
+            else:
+                print(f"  ❌ Error executing test case: {e}")
+                break
 
     total_latency_ms = int((time.time() - t0) * 1000)
+
 
     # ── RAG Triad Metrics Evaluation ──────────────────────────────────────────
     grader_verdict = latest_grade_verdict
@@ -143,8 +161,9 @@ def run_benchmark():
         res = evaluate_test_case(app, tc)
         results.append(res)
         if i < len(test_cases) - 1:
-            print("  [Pacing] Cooling down for 3.5s to respect Groq RPM limits...")
-            time.sleep(3.5)
+            print("  [Pacing] Cooling down for 5.0s to respect Groq RPM limits...")
+            time.sleep(5.0)
+
 
     # Compute Summary Statistics
     total_cases = len(results)
