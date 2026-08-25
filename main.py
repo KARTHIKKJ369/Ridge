@@ -617,23 +617,35 @@ def build_app():
         print("--- NODE: GENERATE ---")
         question = state.get("original_question") or state["question"]
         docs = state.get("documents", [])
+        doc_metas = state.get("documents_metadata", [])
         doc_grades = state.get("doc_grades", [])
         loop_count = state.get("loop_count", 0)
         max_docs = settings.get("max_context_docs", 6)
         max_chars = settings.get("max_context_chars", 1200)
+
         # Use ContextPacker for token-budgeted context assembly with parent expansion
-        from app.retrieval.context_packer import get_context_packer
-        packer = get_context_packer()
-        ranked_passages = [
-            {"text": doc, "meta": doc_metas[i] if i < len(doc_metas) else {}, "score": 1.0 - i * 0.05}
-            for i, doc in enumerate(docs[:max_docs])
-        ]
-        packed_texts, packed_metas, _ = packer.pack_context(ranked_passages, top_k=max_docs)
+        packed_texts = []
+        packed_metas = []
+        if docs:
+            try:
+                from app.retrieval.context_packer import get_context_packer
+                packer = get_context_packer()
+                ranked_passages = [
+                    {"text": doc, "meta": doc_metas[i] if i < len(doc_metas) else {}, "score": 1.0 - i * 0.05}
+                    for i, doc in enumerate(docs[:max_docs])
+                ]
+                packed_texts, packed_metas, _ = packer.pack_context(ranked_passages, top_k=max_docs)
+            except Exception as pack_err:
+                print(f"Context packer note ({pack_err}), falling back to direct context")
+
+        if not packed_texts and docs:
+            packed_texts = [d[:max_chars].strip() for d in docs[:max_docs]]
+            packed_metas = doc_metas[:max_docs]
+
         context = "\n\n".join(f"[{i+1}] {txt.strip()}" for i, txt in enumerate(packed_texts)).strip()
-        # Update doc_metas reference to packed metas for accurate citation mapping
         doc_metas = packed_metas
 
-        print(f"  Total context length: {len(context)} chars")
+        print(f"  Total context length: {len(context)} chars ({len(packed_texts)} chunks)")
 
         # CRAG Strict Grounding Guard: When no verified documents exist and web fallback is disabled/empty
         if not docs:
