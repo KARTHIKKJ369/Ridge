@@ -165,6 +165,7 @@ type Message = {
   confidence?: ConfidenceMetric;
   conflict_data?: ConflictData;
   isStreaming?: boolean;
+  activeNode?: string;    // current pipeline node while streaming
   timestamp?: string;
   liked?: boolean | null;
 };
@@ -306,6 +307,18 @@ export interface KBSource {
   sample: string;
   ids: string[];
 }
+
+// Human-readable labels shown in the live "Thinking" indicator while streaming
+const ACTIVE_NODE_LABELS: Record<string, string> = {
+  decompose_node:           '🔀 Decomposing query into sub-questions…',
+  retrieve_node:            '🔍 Searching knowledge base…',
+  grade_node:               '⚖️ Grading document relevance…',
+  web_search_node:          '🌐 Searching the web for fallback context…',
+  rewrite_node:             '✏️ Reformulating query for better recall…',
+  generate_node:            '✍️ Synthesizing grounded answer…',
+  check_hallucination_node: '🛡️ Auditing for hallucinations…',
+  cache_hit_node:           '⚡ Loading from semantic cache…',
+};
 
 const DEFAULT_SUGGESTIONS = [
   "Summarize the key findings and core concepts across the indexed documents.",
@@ -566,7 +579,11 @@ const ChatMessageItem = React.memo(({
                 <div className="shimmer-pulse-dot" />
                 <div className="shimmer-pulse-dot" />
                 <div className="shimmer-pulse-dot" />
-                <span>Evaluating context and generating verified answer...</span>
+                <span>
+                  {msg.activeNode && ACTIVE_NODE_LABELS[msg.activeNode]
+                    ? ACTIVE_NODE_LABELS[msg.activeNode]
+                    : 'Evaluating context and generating verified answer…'}
+                </span>
               </div>
             )
           )}
@@ -2061,6 +2078,10 @@ export default function App() {
                   if (msg.id === assistantId) {
                     const newMsg = { ...msg };
                     newMsg.traces = [...(newMsg.traces || []), data];
+                    // Track current pipeline node for the live Thinking indicator
+                    if (data.node) {
+                      newMsg.activeNode = data.node;
+                    }
                     if (data.answer) {
                       newMsg.content = data.answer;
                     }
@@ -2097,7 +2118,7 @@ export default function App() {
     } finally {
       abortControllerRef.current = null;
       updateCurrentMessages(prev => prev.map(msg =>
-        msg.id === assistantId ? { ...msg, isStreaming: false } : msg
+        msg.id === assistantId ? { ...msg, isStreaming: false, activeNode: undefined } : msg
       ), currentTargetSessionId, assistantId);
       setIsLoading(false);
     }

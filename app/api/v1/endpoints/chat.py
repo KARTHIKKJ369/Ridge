@@ -10,9 +10,13 @@ import time
 import re
 import logging
 from typing import AsyncGenerator
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
+from slowapi import Limiter
+from slowapi.util import get_remote_address
+
+limiter = Limiter(key_func=get_remote_address)
 
 from main import get_app
 from auth import get_current_user, check_and_increment_user_usage, UserProfile
@@ -87,7 +91,7 @@ async def generate_chat_events(
         q_emb = embedder.embed_query(question)
         cached = None
 
-        # Check pgvector query cache first
+        # Semantic cache: pgvector HNSW only (thread-safe, O(log N) ANN search)
         if is_postgres_configured():
             try:
                 async with get_db_session() as session:
@@ -100,11 +104,6 @@ async def generate_chat_events(
                     )
             except Exception as pg_cache_err:
                 logger.warning(f"pgvector query cache note: {pg_cache_err}")
-
-        # Fallback to local query cache if not found
-        if not cached:
-            from query_cache import get_cached_response as get_local_cached_response
-            cached = get_local_cached_response(question, embedder, threshold=0.96, source_filter=source_filter)
 
         if cached:
             match_pct = int(round(cached.get("similarity", 0.99) * 100))
@@ -346,10 +345,9 @@ async def generate_chat_events(
             except Exception as save_err:
                 logger.warning(f"Error persisting assistant message to PostgreSQL: {save_err}")
 
-        # ── Store high-confidence result in pgvector & local Semantic Cache ──
+        # ── Store high-confidence result in pgvector ──
         if clean_final_answer and last_confidence.get("score", 0) >= 60:
             try:
-                import threading
                 from main import get_embeddings
                 emb = get_embeddings()
                 q_vec = emb.embed_query(question)
@@ -370,13 +368,6 @@ async def generate_chat_events(
                     import asyncio
                     asyncio.create_task(_async_store_pg_cache())
 
-                # 2. Store in local JSON cache
-                from query_cache import store_cached_response as store_local_cache
-                threading.Thread(
-                    target=store_local_cache,
-                    args=(question, clean_final_answer, last_confidence, last_conflict, emb, source_filter),
-                    daemon=True
-                ).start()
             except Exception as cache_store_err:
                 logger.warning(f"Error storing query cache: {cache_store_err}")
 
@@ -389,8 +380,9 @@ async def generate_chat_events(
 
 @router.post("/chat")
 @router.post("/ask")
-async def ask_question_endpoint(req: ChatRequest, user: UserProfile = Depends(get_current_user)):
-    """Streaming chat endpoint for interactive Corrective RAG answers."""
+@limiter.limit("15/minute")
+async def ask_question_endpoint(request: Request, req: ChatRequest, user: UserProfile = Depends(get_current_user)):
+    """Streaming chat endpoint for interactive Corrective RAG answers. Rate limited to 15 requests/minute per IP."""
     allowed, current_count, daily_limit = check_and_increment_user_usage(user.id)
     if not allowed:
         raise HTTPException(

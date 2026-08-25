@@ -76,7 +76,7 @@ def get_settings() -> dict:
     return {
         "embedding_model": os.getenv(
             "EMBEDDING_MODEL",
-            "sentence-transformers/all-MiniLM-L6-v2",
+            "BAAI/bge-large-en-v1.5",
         ),
         "chroma_dir": os.getenv("CHROMA_DIR", "./chroma_db"),
         # Primary synthesis model & Fast model for grading/suggestions/rewrite
@@ -621,7 +621,17 @@ def build_app():
         loop_count = state.get("loop_count", 0)
         max_docs = settings.get("max_context_docs", 6)
         max_chars = settings.get("max_context_chars", 1200)
-        context = "\n\n".join(f"[{i+1}] {doc[:max_chars].strip()}" for i, doc in enumerate(docs[:max_docs])).strip()
+        # Use ContextPacker for token-budgeted context assembly with parent expansion
+        from app.retrieval.context_packer import get_context_packer
+        packer = get_context_packer()
+        ranked_passages = [
+            {"text": doc, "meta": doc_metas[i] if i < len(doc_metas) else {}, "score": 1.0 - i * 0.05}
+            for i, doc in enumerate(docs[:max_docs])
+        ]
+        packed_texts, packed_metas, _ = packer.pack_context(ranked_passages, top_k=max_docs)
+        context = "\n\n".join(f"[{i+1}] {txt.strip()}" for i, txt in enumerate(packed_texts)).strip()
+        # Update doc_metas reference to packed metas for accurate citation mapping
+        doc_metas = packed_metas
 
         print(f"  Total context length: {len(context)} chars")
 
@@ -1061,20 +1071,29 @@ def build_app():
             # No-op: standard single retrieve path, set sub_queries but keep question
             return {"sub_queries": sub_queries, "latency_ms": int((time.time() - t0) * 1000)}
 
-        # --- Step 2: Parallel hybrid retrieval per sub-query ---
-        all_candidates = []
+        # Parallel hybrid retrieval across all sub-queries simultaneously
+        import asyncio
         try:
-            for sq in sub_queries:
-                cands = await retriever_engine.retrieve(
-                    query=sq,
-                    user_id=state.get("user_id"),
-                    tenant_id=t_uuid,
-                    source_filter=state.get("source_filter"),
-                    k=settings["retriever_fetch_k"],
-                )
-                all_candidates.extend(cands)
+            results = await asyncio.gather(
+                *[
+                    retriever_engine.retrieve(
+                        query=sq,
+                        user_id=state.get("user_id"),
+                        tenant_id=t_uuid,
+                        source_filter=state.get("source_filter"),
+                        k=settings["retriever_fetch_k"],
+                    )
+                    for sq in sub_queries
+                ],
+                return_exceptions=True,
+            )
+            for r in results:
+                if isinstance(r, Exception):
+                    print(f"  [Decompose Node] Sub-query retrieval error: {r}")
+                else:
+                    all_candidates.extend(r)
         except Exception as dec_err:
-            print(f"  [Decompose Node] Warning: retrieval failed ({dec_err}), proceeding with empty results.")
+            print(f"  [Decompose Node] Warning: parallel retrieval failed ({dec_err}), proceeding with empty results.")
 
         # De-duplicate candidates by chunk_id or text
         seen_chunks = set()

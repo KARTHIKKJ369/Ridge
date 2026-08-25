@@ -12,6 +12,9 @@ from fastapi import FastAPI, Request
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
 
 from app.db.database import (
     init_db as init_postgres_db,
@@ -40,12 +43,18 @@ async def lifespan(app: FastAPI):
     yield
 
 
+# Rate Limiter — keyed by client IP
+limiter = Limiter(key_func=get_remote_address)
+
 app = FastAPI(
     title="Ridge API",
     description="High-performance Corrective RAG (CRAG) platform with LangGraph state machine, PostgreSQL/pgvector, FlashRank, and Groq LLMs.",
     version="2.1.0",
     lifespan=lifespan,
 )
+
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 # CORS Configuration
 ALLOWED_ORIGINS = [

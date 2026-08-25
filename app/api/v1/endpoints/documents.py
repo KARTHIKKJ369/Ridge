@@ -7,9 +7,13 @@ import os
 import tempfile
 import logging
 from pathlib import Path
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, UploadFile, File
 from pydantic import BaseModel
 from sqlalchemy import select, func, delete, or_
+from slowapi import Limiter
+from slowapi.util import get_remote_address
+
+limiter = Limiter(key_func=get_remote_address)
 
 from main import ingest_document
 from auth import get_current_user, UserProfile
@@ -39,29 +43,40 @@ class ShareDocumentRequest(BaseModel):
 
 
 @router.post("/ingest")
-async def ingest_endpoint(req: IngestRequest, user: UserProfile = Depends(get_current_user)):
-    """Ingests raw text or URL into the user's or organization's knowledge base."""
-    try:
-        result = ingest_document(
-            req.text_or_url,
-            user_id=user.id,
-            tenant_id=user.tenant_id,
-            is_shared=req.is_shared,
-        )
-        return result
-    except Exception as e:
-        logger.error(f"Error ingesting document: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+@limiter.limit("5/minute")
+async def ingest_endpoint(
+    request: Request,
+    req: IngestRequest,
+    background_tasks: BackgroundTasks,
+    user: UserProfile = Depends(get_current_user),
+):
+    """Queues ingestion of raw text or URL into the user's knowledge base. Returns immediately."""
+    def _run_ingest():
+        try:
+            ingest_document(
+                req.text_or_url,
+                user_id=user.id,
+                tenant_id=user.tenant_id,
+                is_shared=req.is_shared,
+            )
+        except Exception as e:
+            logger.error(f"[BackgroundIngest] Error ingesting URL/text: {e}")
+
+    background_tasks.add_task(_run_ingest)
+    return {"status": "queued", "message": "Ingestion started in background. Sources will appear shortly."}
 
 
 @router.post("/upload")
 @router.post("/ingest/upload")
+@limiter.limit("5/minute")
 async def upload_file_endpoint(
+    request: Request,
     file: UploadFile = File(...),
+    background_tasks: BackgroundTasks = BackgroundTasks(),
     is_shared: bool = False,
-    user: UserProfile = Depends(get_current_user)
+    user: UserProfile = Depends(get_current_user),
 ):
-    """Uploads and ingests a document (.pdf, .docx, .txt, .md, .pptx, .xlsx, .csv)."""
+    """Uploads and queues a document for ingestion. Returns immediately after file is received."""
     filename = file.filename or ""
     _, ext = os.path.splitext(filename)
     ext = ext.lower()
@@ -72,36 +87,35 @@ async def upload_file_endpoint(
             detail=f"File extension '{ext}' is not supported. Allowed extensions: {', '.join(sorted(ALLOWED_EXTENSIONS))}"
         )
 
-    try:
-        content = await file.read()
-        if len(content) > MAX_UPLOAD_BYTES:
-            raise HTTPException(
-                status_code=413,
-                detail=f"File exceeds maximum upload size of {MAX_UPLOAD_BYTES // (1024 * 1024)}MB."
-            )
+    content = await file.read()
+    if len(content) > MAX_UPLOAD_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"File exceeds maximum upload size of {MAX_UPLOAD_BYTES // (1024 * 1024)}MB."
+        )
 
-        with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as temp_file:
-            temp_file.write(content)
-            temp_path = temp_file.name
+    # Write temp file synchronously so background task has a stable path
+    with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as temp_file:
+        temp_file.write(content)
+        temp_path = temp_file.name
 
+    def _run_ingest():
         try:
-            result = ingest_document(
+            ingest_document(
                 temp_path,
                 original_filename=filename,
                 user_id=user.id,
                 tenant_id=user.tenant_id,
                 is_shared=is_shared,
             )
-            return result
+        except Exception as e:
+            logger.error(f"[BackgroundIngest] Error ingesting '{filename}': {e}")
         finally:
             if os.path.exists(temp_path):
                 os.remove(temp_path)
 
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error processing upload: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+    background_tasks.add_task(_run_ingest)
+    return {"status": "queued", "filename": filename, "message": "Upload received. Processing in background."}
 
 
 @router.get("/kb/sources")
