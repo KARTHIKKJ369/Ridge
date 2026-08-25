@@ -770,12 +770,16 @@ def build_app():
             "Formatting & Quality Rules:\n"
             "1. DIRECT EXECUTIVE ANSWER: Start with a clear, direct 1-2 sentence answer before expanding into details.\n"
             "2. CLEAN MARKDOWN STRUCTURE: Use clean markdown hierarchy (## Section, ### Subsections, bullet points, bold keywords).\n"
-            "3. TABLES: If presenting comparative or source-level data, format as a valid Markdown table with proper newlines between every row.\n"
+            "3. TABLES & MULTI-ROW DATA:\n"
+            "   - When presenting step-by-step flows, comparisons, or structured data in a table, every single row MUST be on its own line starting with `|` and ending with `|`.\n"
+            "   - NEVER concatenate multiple table rows on the same line with `||` or `| |`.\n"
+            "   - NEVER put physical newlines or raw markdown bullet lists inside table cells. To separate multiple points inside a single cell, use `<br>• ` or concise phrases separated by semicolons.\n"
             "4. NOTEBOOKLM-STYLE INLINE CITATIONS & STRICT GROUNDING:\n"
             "   - Every factual claim, definition, metric, or finding MUST be immediately supported by an inline citation badge corresponding to the numbered context findings: e.g. [1], [2], or [1, 2].\n"
             "   - Place citations at the exact sentence or clause level where the fact is asserted (e.g. 'Corrective RAG integrates a retrieval evaluator to assess document quality [1], falling back to web search when confidence is low [2].').\n"
             "   - Use ONLY clean bracketed numbers like [1] or [1, 2]. Never output raw HTML tags or internal tokens like 【1†L1-L4】.\n"
             "5. ACCURACY & EVIDENCE: Base factual assertions directly on the verified context findings. If the context is unrelated to the question, state that clearly and provide a grounded explanation.\n"
+
 
             "6. NO GIBBERISH: If the question is unintelligible keyboard mash, politely ask for clarification.\n"
             "7. MATHEMATICAL EQUATIONS & LATEX: Format all mathematical formulas and variables using standard LaTeX syntax. Use inline `$ ... $` for inline variables and terms (e.g., `$p_c$`, `$\\alpha$`, `$p^s_{T,c}$`), and block `$$ ... $$` on separate lines for display equations. Never output bracketed formulas like `[ p_c := ... ]` or `(\\alpha)` without dollar signs.\n"

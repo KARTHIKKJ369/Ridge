@@ -19,10 +19,13 @@ export const cleanMarkdownContent = (content: string): string => {
   // 0.1 Normalize exotic Unicode whitespace characters to standard ASCII space
   text = text.replace(/[\u202F\u00A0\u2000-\u200B\u2028\u2029\uFEFF]/g, ' ');
 
-  // 0.2 Fix collapsed Markdown tables where table rows lack newlines
+  // 0.2 Fix collapsed Markdown tables where rows are glued together with || or | |
+  // e.g. "| cell | cell | | Next Row | cell |" -> "| cell | cell |\n| Next Row | cell |"
+  text = text.replace(/\|\s*\|\s*(?=[^|\n]+(?:\||$))/g, '|\n| ');
+
+  // 0.3 Fix collapsed Markdown table header separator rows
   text = text.replace(/(\|[-:]+[-| :]*)\|([^\n\-\|])/g, '$1|\n| $2');
   text = text.replace(/(\|[^|\n]+)\|(\|[-:]+[-| :]*\|)/g, '$1|\n$2');
-  text = text.replace(/\|[ \t]*\|/g, '|\n|');
 
   // 1. Process Citations FIRST before any math bracket conversions
   // Handle special citation markers: 【1†source】 or 【1】
@@ -88,12 +91,24 @@ export const cleanMarkdownContent = (content: string): string => {
   // Clean empty display math blocks like "$$\n$$" or "$$ $$"
   text = text.replace(/\$\$\s*\$\$/g, '');
 
-  return text
-    .replace(/<br\s*\/?>\s*•/gi, '\n- ')
-    .replace(/<br\s*\/?>\s*\*/gi, '\n* ')
-    .replace(/<br\s*\/?>\s*-/gi, '\n- ')
-    .replace(/<br\s*\/?>/gi, '\n\n');
+  // 4. Safe <br> handling: preserve <br> inside table cells, normalize outside
+  const finalLines = text.split('\n').map((line) => {
+    const trimmed = line.trim();
+    if (trimmed.startsWith('|') && trimmed.endsWith('|')) {
+      // Inside a table row: preserve <br> for intra-cell multiline lists
+      return line;
+    }
+    // Outside table rows: convert <br> to clean newlines
+    return line
+      .replace(/<br\s*\/?>\s*•/gi, '\n- ')
+      .replace(/<br\s*\/?>\s*\*/gi, '\n* ')
+      .replace(/<br\s*\/?>\s*-/gi, '\n- ')
+      .replace(/<br\s*\/?>/gi, '\n\n');
+  });
+
+  return finalLines.join('\n');
 };
+
 
 
 
