@@ -1,9 +1,15 @@
 """
 Anthropic-Style Contextual Retrieval Engine
 ===========================================
-Generates 50–100 token situated contextual representations for retrievable chunks,
+Generates situated contextual representations for retrievable chunks,
 positioning each chunk within the global context of its parent document.
-Provides fast LLM contextualization with deterministic hierarchy fallbacks.
+
+Architecture:
+- Single-Pass Document Overview: Generates document-level situated context in at most 1 fast LLM call
+  (rather than N per-chunk LLM calls which cause HTTP 429 rate limit backoffs).
+- Deterministic Hierarchy Mapping: Combines document scope with section breadcrumbs and page numbers.
+- Zero-Delay Fallback: Immediate sub-millisecond fallback if LLM is rate-limited or offline.
+- Zero Citation Pollution: Enriches search representation (contextual_content) while keeping raw_content clean.
 """
 from __future__ import annotations
 
@@ -16,17 +22,12 @@ from app.document_intelligence.chunker import StructuredChunk
 
 logger = logging.getLogger(__name__)
 
-CONTEXTUAL_PROMPT_TEMPLATE = """<document>
-{document_text}
+DOC_SITUATE_PROMPT = """<document>
+{document_preview}
 </document>
 
-Here is the chunk we want to situate within the whole document:
-<chunk>
-{chunk_text}
-</chunk>
-
-Please give a short, succinct context (1-2 sentences, maximum 60 words) to situate this chunk within the overall document for search retrieval. Mention the document subject, entity names, dates/years, or section topic if applicable.
-Answer only with the succinct context description:"""
+Provide a concise 1-2 sentence (maximum 40 words) description of this document's primary subject, domain, entity, and scope.
+Answer with only the succinct description:"""
 
 
 class ContextualRetrievalEngine:
@@ -57,7 +58,9 @@ class ContextualRetrievalEngine:
                         api_key=settings["groq_api_key"],
                         model_name=settings.get("groq_fast_model", "openai/gpt-oss-20b"),
                         temperature=0.2,
-                        max_tokens=128,
+                        max_tokens=96,
+                        max_retries=1,  # Do not loop in long retries
+                        timeout=5.0,    # Fast failover to deterministic fallback
                     )
             except Exception as e:
                 logger.warning(f"Fast LLM initialization note for Contextual Retrieval: {e}")
@@ -67,6 +70,7 @@ class ContextualRetrievalEngine:
         """
         Fast deterministic fallback: constructs situated context from document title,
         section breadcrumbs, page numbers, and structural element types.
+        Takes 0 ms and never rate-limits.
         """
         parts = []
         clean_title = doc_title or chunk.metadata.get("source", "Document")
@@ -84,45 +88,34 @@ class ContextualRetrievalEngine:
             parts.append("Tabular Data")
         elif chunk.content_type == "figure":
             parts.append("Visual Figure")
+        elif chunk.content_type == "code":
+            parts.append("Code Syntax")
 
         return f"[{' | '.join(parts)}]"
 
-    def contextualize_chunk(
-        self,
-        doc_preview: str,
-        chunk: StructuredChunk,
-        doc_title: str = "",
-        use_llm: bool = True,
-    ) -> str:
+    def extract_document_situated_scope(self, doc_text: str, doc_title: str = "") -> str:
         """
-        Generates situated context for a single chunk via LLM or deterministic fallback.
+        Extracts a single global situated scope description for the whole document in 1 fast call.
         """
-        deterministic_prefix = self.generate_deterministic_context(chunk, doc_title)
-
-        if not self.enabled or not use_llm:
-            return deterministic_prefix
+        if not self.enabled or not doc_text:
+            return ""
 
         llm = self._get_fast_llm()
         if not llm:
-            return deterministic_prefix
+            return ""
 
         try:
-            # Truncate doc preview if giant to avoid latency
-            preview = doc_preview[:3000] if len(doc_preview) > 3000 else doc_preview
-            prompt = CONTEXTUAL_PROMPT_TEMPLATE.format(
-                document_text=preview,
-                chunk_text=chunk.raw_content[:800],
-            )
-            response = llm.invoke(prompt)
-            llm_text = response.content.strip()
-            # Clean reasoning or tag artifacts
-            llm_text = re.sub(r"<.*?>", "", llm_text).strip()
-            if llm_text:
-                return f"{deterministic_prefix} {llm_text}"
+            preview = doc_text[:2500]
+            prompt = DOC_SITUATE_PROMPT.format(document_preview=preview)
+            res = llm.invoke(prompt)
+            scope_text = re.sub(r"<.*?>", "", res.content).strip()
+            # If valid short scope, return it
+            if 10 < len(scope_text) < 300:
+                return scope_text
         except Exception as err:
-            logger.warning(f"LLM Contextualization fallback on chunk: {err}")
+            logger.debug(f"Document scope extraction skipped (using deterministic): {err}")
 
-        return deterministic_prefix
+        return ""
 
     def enrich_chunks(
         self,
@@ -133,19 +126,24 @@ class ContextualRetrievalEngine:
     ) -> list[StructuredChunk]:
         """
         Enriches all retrievable chunks with contextual representations.
-        Sets chunk.contextual_content and updates chunk.content for vector embedding.
+        Executes at most ONE fast call for the whole document, then applies
+        O(1) deterministic situated context per chunk to eliminate 429 rate limits.
         """
+        # 1. Single-pass global document scope (1 call max)
+        doc_scope = ""
+        if use_llm and self.enabled and doc_text:
+            doc_scope = self.extract_document_situated_scope(doc_text, doc_title)
+
+        # 2. Situating each chunk in O(1) time
         for chunk in chunks:
-            # Generate situated context
-            context_prefix = self.contextualize_chunk(
-                doc_preview=doc_text,
-                chunk=chunk,
-                doc_title=doc_title,
-                use_llm=use_llm,
-            )
-            chunk.contextual_content = context_prefix
-            # Update search representation with situated context + raw content
-            chunk.content = f"{context_prefix}\n{chunk.raw_content}".strip()
+            det_prefix = self.generate_deterministic_context(chunk, doc_title)
+            if doc_scope and chunk.content_type not in ("table", "figure"):
+                context_rep = f"{det_prefix} Context: {doc_scope}"
+            else:
+                context_rep = det_prefix
+
+            chunk.contextual_content = context_rep
+            chunk.content = f"{context_rep}\n{chunk.raw_content}".strip()
 
         return chunks
 

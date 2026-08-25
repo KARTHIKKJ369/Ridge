@@ -487,7 +487,7 @@ def build_app():
     retriever_engine = UnifiedRetriever(backend=os.getenv("RETRIEVAL_BACKEND", "pgvector"))
 
 
-    def retrieve(state: GraphState) -> dict:
+    async def retrieve(state: GraphState) -> dict:
         t0 = time.time()
         q = state["question"]
         src_filter = state.get("source_filter")
@@ -504,33 +504,24 @@ def build_app():
         if tenant_id:
             print(f"  [Tenant Scope Filter Active]: '{tenant_id}'")
 
-        # Run async retrieval synchronously in LangGraph node
-        import asyncio
         try:
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                import concurrent.futures
-                with concurrent.futures.ThreadPoolExecutor() as pool:
-                    candidates = pool.submit(
-                        asyncio.run,
-                        retriever_engine.retrieve(query=q, user_id=user_id, tenant_id=t_uuid, source_filter=src_filter, k=50)
-                    ).result()
-            else:
-                candidates = loop.run_until_complete(
-                    retriever_engine.retrieve(query=q, user_id=user_id, tenant_id=t_uuid, source_filter=src_filter, k=50)
-                )
-        except Exception:
-            candidates = asyncio.run(
-                retriever_engine.retrieve(query=q, user_id=user_id, tenant_id=t_uuid, source_filter=src_filter, k=50)
+            candidates = await retriever_engine.retrieve(
+                query=q, user_id=user_id, tenant_id=t_uuid, source_filter=src_filter, k=50
             )
+        except Exception as retrieve_err:
+            print(f"  [Retrieve Node] Warning: retrieval query failed ({retrieve_err}), proceeding with empty results.")
+            candidates = []
 
-        final_texts, final_metas, expanded_count = retriever_engine.rerank_and_expand(
-            query=q,
-            candidates=candidates,
-            top_k=settings["retriever_k"],
-            rerank_top_n=settings.get("rerank_top_n", 20),
-        )
-
+        try:
+            final_texts, final_metas, expanded_count = retriever_engine.rerank_and_expand(
+                query=q,
+                candidates=candidates,
+                top_k=settings["retriever_k"],
+                rerank_top_n=settings.get("rerank_top_n", 20),
+            )
+        except Exception as rerank_err:
+            print(f"  [Rerank Node] Warning: rerank/expand failed ({rerank_err})")
+            final_texts, final_metas, expanded_count = [], [], 0
 
         return {
             "documents": final_texts,
@@ -538,6 +529,7 @@ def build_app():
             "expanded_count": expanded_count,
             "latency_ms": int((time.time() - t0) * 1000),
         }
+
 
 
     def grade_documents(state: GraphState) -> dict:
@@ -555,22 +547,24 @@ def build_app():
         docs_to_grade = doc_texts[:grade_limit]
 
         docs_str = "\n".join(
-            f"--- Document {i} ---\n{doc[:450].strip()}\n" for i, doc in enumerate(docs_to_grade)
+            f"--- Document {i} ---\n{doc[:1200].strip()}\n" for i, doc in enumerate(docs_to_grade)
         )
 
         prompt = (
             "You are an expert relevance evaluator for a technical document retrieval system.\n"
-            "Assess whether the retrieved documents are relevant or helpful for answering the user question.\n\n"
+            "Assess whether the retrieved documents are relevant, helpful, or topical for answering the user question.\n\n"
             f"User Question: {question}\n\n"
             f"Retrieved Documents:\n{docs_str}\n\n"
             "Evaluation Rules:\n"
             "1. GIBBERISH / NOISE FILTER: If the user question is random characters or nonsensical gibberish (e.g. 'euhygvdvg vbhsd'), you MUST score 'no' for all documents.\n"
-            "2. IDENTITY & PROFILE QUESTIONS: If the question asks about a person, and the document contains their resume or background, score 'yes'.\n"
-            "3. TECHNICAL CONCEPTS: If the question asks about a method or algorithm, score 'yes' if the document discusses it.\n"
-            "4. UNRELATED DOCUMENTS: Score 'no' if the document is on a completely different subject.\n\n"
+            "2. IDENTITY & PROFILE QUESTIONS: If the question asks about a person, and the document contains their resume, biography, or background, score 'yes'.\n"
+            "3. TECHNICAL CONCEPTS & DEFINITIONS: If the question asks about a concept, entity, definition, architecture, or methodology (e.g. 'what is a digital twin', 'PEAS model', 'DSU optimization'), score 'yes' if the document defines, discusses, mentions, or describes the topic or its related components.\n"
+            "4. PARTIAL RELEVANCE: Score 'yes' if the passage contains useful context or background, even if it does not answer the question completely on its own.\n"
+            "5. UNRELATED DOCUMENTS: Only score 'no' if the document is completely off-topic or discussing an unrelated domain.\n\n"
             "Return ONLY a valid JSON object matching this schema:\n"
             '{"grades": [{"index": 0, "rationale": "...", "score": "yes" | "no"}]}'
         )
+
 
         result = None
         last_err = None
@@ -777,14 +771,22 @@ def build_app():
             "1. DIRECT EXECUTIVE ANSWER: Start with a clear, direct 1-2 sentence answer before expanding into details.\n"
             "2. CLEAN MARKDOWN STRUCTURE: Use clean markdown hierarchy (## Section, ### Subsections, bullet points, bold keywords).\n"
             "3. TABLES: If presenting comparative or source-level data, format as a valid Markdown table with proper newlines between every row.\n"
-            "4. CLEAN CITATIONS & NO RAW HTML: Never output raw HTML tags (<br>, <div>) or internal citation tags like 【1†L1-L4】. When referencing sources, use clean inline bracketed references like [1].\n"
+            "4. NOTEBOOKLM-STYLE INLINE CITATIONS & STRICT GROUNDING:\n"
+            "   - Every factual claim, definition, metric, or finding MUST be immediately supported by an inline citation badge corresponding to the numbered context findings: e.g. [1], [2], or [1, 2].\n"
+            "   - Place citations at the exact sentence or clause level where the fact is asserted (e.g. 'Corrective RAG integrates a retrieval evaluator to assess document quality [1], falling back to web search when confidence is low [2].').\n"
+            "   - Use ONLY clean bracketed numbers like [1] or [1, 2]. Never output raw HTML tags or internal tokens like 【1†L1-L4】.\n"
             "5. ACCURACY & EVIDENCE: Base factual assertions directly on the verified context findings. If the context is unrelated to the question, state that clearly and provide a grounded explanation.\n"
+
             "6. NO GIBBERISH: If the question is unintelligible keyboard mash, politely ask for clarification.\n"
             "7. MATHEMATICAL EQUATIONS & LATEX: Format all mathematical formulas and variables using standard LaTeX syntax. Use inline `$ ... $` for inline variables and terms (e.g., `$p_c$`, `$\\alpha$`, `$p^s_{T,c}$`), and block `$$ ... $$` on separate lines for display equations. Never output bracketed formulas like `[ p_c := ... ]` or `(\\alpha)` without dollar signs.\n"
-            "8. INTERACTIVE MERMAID DIAGRAMS: When the user asks for a diagram or when explaining multi-step workflows, architectures, decision cycles, algorithm traversals, or state transitions, ALWAYS include a valid ```mermaid\nflowchart TD\n...``` code block diagram. CRITICAL SYNTAX RULES:\n"
-            "   - Use ONLY standard ASCII arrows: `-->`, `-.->`, `==>`. NEVER use Unicode em-dashes or box characters (`─`, `—`, `–`, `→`).\n"
-            "   - Wrap all node and subgraph text in double quotes: `A[\"Node Label\"]`, `subgraph ID [\"Group Name\"]`.\n"
-            "   - Never use raw HTML tags (`<b>`, `<span>`) inside Mermaid diagrams."
+            "8. MERMAID DIAGRAMS (STRICT USAGE CRITERIA):\n"
+            "   - ONLY include a Mermaid diagram if the user EXPLICITLY asks for a diagram/flowchart/visual representation, or when explaining a complex technical system architecture, data pipeline, protocol sequence, or algorithm execution flow that strictly benefits from visual progression.\n"
+            "   - NEVER include Mermaid diagrams for simple definitions, person profiles/biographies/resumes (e.g. 'who is X'), single facts, or general Q&A.\n"
+            "   - When a diagram IS appropriate, CRITICAL SYNTAX RULES:\n"
+            "     * Use ONLY standard ASCII arrows: `-->`, `-.->`, `==>`. NEVER use Unicode em-dashes or box characters (`─`, `—`, `–`, `→`).\n"
+            "     * Wrap all node and subgraph text in double quotes: `A[\"Node Label\"]`, `subgraph ID [\"Group Name\"]`.\n"
+            "     * Never use raw HTML tags (`<b>`, `<span>`, `<br>`) inside Mermaid diagrams."
+
         )
 
         # Primary Model with instant fast model fallback on rate-limit
@@ -1005,11 +1007,14 @@ def build_app():
         q_lower = q.lower()
         return any(sig in q_lower for sig in COMPOUND_SIGNALS)
 
-    def decompose(state: GraphState) -> dict:
+    async def decompose(state: GraphState) -> dict:
         """Detect compound/multi-part questions, split into focused sub-queries,
         run parallel hybrid retrieval for each, and merge results via RRF."""
         t0 = time.time()
         question = state["question"]
+        tenant_id = state.get("tenant_id")
+        import uuid
+        t_uuid = uuid.UUID(tenant_id) if tenant_id else None
         print("\n--- NODE: QUERY DECOMPOSITION ---")
 
         # Skip LLM call entirely for clearly simple questions
@@ -1031,15 +1036,15 @@ def build_app():
         )
         sub_queries = [question]  # default: no decomposition
         try:
-            resp = llm_fast.invoke(detect_prompt)
+            resp = await llm_fast.ainvoke(detect_prompt)
             cleaned = clean_llm_response(resp.content)
             m = re.search(r"\{.*\}", cleaned, re.DOTALL)
             if m:
                 data = json.loads(m.group(0))
                 if data.get("compound") and data.get("sub_queries"):
-                    candidates = [str(q).strip() for q in data["sub_queries"] if q and len(str(q).strip()) > 3]
-                    if len(candidates) >= 2:
-                        sub_queries = candidates[:4]
+                    candidates_q = [str(q).strip() for q in data["sub_queries"] if q and len(str(q).strip()) > 3]
+                    if len(candidates_q) >= 2:
+                        sub_queries = candidates_q[:4]
                         print(f"  Compound question detected. Sub-queries: {sub_queries}")
                     else:
                         print("  Simple question detected. No decomposition needed.")
@@ -1053,11 +1058,8 @@ def build_app():
             return {"sub_queries": sub_queries, "latency_ms": int((time.time() - t0) * 1000)}
 
         # --- Step 2: Parallel hybrid retrieval per sub-query ---
-        import asyncio
-        import concurrent.futures
-
-        async def _retrieve_all():
-            all_candidates = []
+        all_candidates = []
+        try:
             for sq in sub_queries:
                 cands = await retriever_engine.retrieve(
                     query=sq,
@@ -1067,27 +1069,18 @@ def build_app():
                     k=settings["retriever_fetch_k"],
                 )
                 all_candidates.extend(cands)
-            return all_candidates
-
-
-        try:
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                with concurrent.futures.ThreadPoolExecutor() as pool:
-                    merged_candidates = pool.submit(asyncio.run, _retrieve_all()).result()
-            else:
-                merged_candidates = loop.run_until_complete(_retrieve_all())
-        except Exception:
-            merged_candidates = asyncio.run(_retrieve_all())
+        except Exception as dec_err:
+            print(f"  [Decompose Node] Warning: retrieval failed ({dec_err}), proceeding with empty results.")
 
         # De-duplicate candidates by chunk_id or text
         seen_chunks = set()
         unique_candidates = []
-        for c in merged_candidates:
+        for c in all_candidates:
             key = c.chunk_id or c.text.strip()[:100]
             if key not in seen_chunks:
                 seen_chunks.add(key)
                 unique_candidates.append(c)
+
 
         final_texts, final_metas, expanded_count = retriever_engine.rerank_and_expand(
             query=question,

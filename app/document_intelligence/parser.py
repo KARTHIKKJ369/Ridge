@@ -82,7 +82,11 @@ class PDFStructureParser(BaseDocumentParser):
 
             for page_idx, page in enumerate(reader.pages, start=1):
                 page_ast = PageAST(page_number=page_idx)
-                raw_page_text = page.extract_text() or ""
+                try:
+                    raw_page_text = page.extract_text(extraction_mode="layout") or page.extract_text() or ""
+                except Exception:
+                    raw_page_text = page.extract_text() or ""
+
 
                 # If page has sufficient native digital text
                 if len(raw_page_text.strip()) >= 50:

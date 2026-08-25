@@ -50,10 +50,6 @@ import {
   Code,
   AlertTriangle,
   Layers,
-  ZoomIn,
-  ZoomOut,
-  Maximize2,
-  Minimize2,
   Building2,
   UserPlus,
   Eye,
@@ -61,573 +57,15 @@ import {
 } from 'lucide-react';
 
 
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
-import remarkMath from 'remark-math';
-import rehypeRaw from 'rehype-raw';
-import rehypeKatex from 'rehype-katex';
-import katex from 'katex';
-import 'katex/dist/katex.min.css';
-import mermaid from 'mermaid';
 import { AuthModal } from './components/AuthModal';
+import { MarkdownRenderer, markdownToReportHtml } from './components/markdown/MarkdownRenderer';
+import {
+  NotebookLMCitationPopover,
+  NotebookLMSourcesDeck,
+  NotebookLMSourceModal,
+} from './components/chat/NotebookLMCitations';
 import './App.css';
 
-mermaid.initialize({
-  startOnLoad: false,
-  suppressErrorRendering: true,
-  theme: 'base',
-  securityLevel: 'loose',
-  flowchart: {
-    useMaxWidth: false,
-    htmlLabels: true,
-    curve: 'basis',
-    nodeSpacing: 30,
-    rankSpacing: 36,
-    padding: 10,
-  },
-  themeVariables: {
-    fontFamily: "'Plus Jakarta Sans', 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif",
-    fontSize: '12.5px',
-    lineColor: '#64748b',
-    primaryColor: '#ffffff',
-    primaryTextColor: '#1e293b',
-    primaryBorderColor: '#0284c7',
-    secondaryColor: '#f1f5f9',
-    tertiaryColor: '#f8fafc',
-    mainBkg: '#ffffff',
-    nodeBorder: '#0284c7',
-    clusterBkg: 'rgba(2, 132, 199, 0.03)',
-    clusterBorder: 'rgba(2, 132, 199, 0.25)',
-    titleColor: '#1e293b',
-    edgeLabelBackground: '#ffffff',
-  }
-});
-
-const isMermaidComplete = (text: string): boolean => {
-  if (!text || !text.trim()) return false;
-  const trimmed = text.trim();
-  const lines = trimmed.split('\n');
-  if (lines.length < 2) return false;
-
-  // Check for unclosed quotes
-  const quotesCount = (trimmed.match(/"/g) || []).length;
-  if (quotesCount % 2 !== 0) return false;
-
-  // Check for trailing incomplete arrow or open bracket at the end
-  if (/(-->|->|==>|-\.->|--|\(|\[|\{)\s*$/.test(trimmed)) return false;
-
-  // Count subgraphs vs ends
-  const subgraphCount = (trimmed.match(/\bsubgraph\b/gi) || []).length;
-  const endCount = (trimmed.match(/\bend\b/gi) || []).length;
-  if (subgraphCount > endCount) return false;
-
-  return true;
-};
-
-const sanitizeMermaidChart = (raw: string): string => {
-  if (!raw) return '';
-  let text = raw.trim();
-  text = text.replace(/^```(mermaid)?\n?/i, '').replace(/```$/i, '').trim();
-
-  // 1. Normalize Unicode hyphens/dashes to ASCII hyphen
-  text = text.replace(/[\u2011\u2012\u00AD\u2013\u2014\u2212]/g, '-');
-
-  // 2. Convert Unicode arrows & box-drawing characters to standard ASCII Mermaid arrows
-  text = text.replace(/[\u2192\u27F6]/g, '-->');
-  text = text.replace(/[\u21D2\u27F9]/g, '==>');
-  text = text.replace(/\u2500{2,}>/g, '-->');
-  text = text.replace(/\u2500>/g, '-->');
-  text = text.replace(/\u2500{2,}/g, '--');
-  text = text.replace(/-{3,}>/g, '-->');
-  text = text.replace(/-\s*\.\s*->|-\.\s*->/g, '-.->');
-
-  // 3. Strip HTML tags (e.g. <b>Text</b> -> Text)
-  text = text.replace(/<[^>]+>/g, '');
-
-  // 4. Fix subgraph syntax: subgraph ID[Title] -> subgraph ID ["Title"]
-  text = text.replace(/subgraph\s+([a-zA-Z0-9_-]+)\s*\[\s*(.*?)\s*\]/g, (_, id, label) => {
-    const cleanLabel = label.replace(/^"|"$/g, '').replace(/"/g, "'").trim();
-    return `subgraph ${id} ["${cleanLabel}"]`;
-  });
-
-  // 5. Fix stadium shapes ([...])
-  text = text.replace(/\b([A-Za-z0-9_]+)\(\[\s*([^"\[\]\n]+?)\s*\]\)/g, (_, nodeId, label) => {
-    return `${nodeId}(["${label.replace(/"/g, "'").trim()}"])`;
-  });
-
-  // 6. Fix subroutine shapes [[...]]
-  text = text.replace(/\b([A-Za-z0-9_]+)\[\[\s*([^"\[\]\n]+?)\s*\]\]/g, (_, nodeId, label) => {
-    return `${nodeId}[["${label.replace(/"/g, "'").trim()}"]]`;
-  });
-
-  // 7. Auto-quote unquoted node labels in [] brackets: nodeId[some text] -> nodeId["some text"]
-  text = text.replace(/\b([A-Za-z0-9_]+)\[([^"\[\]\n]+)\]/g, (_, nodeId, label) => {
-    return `${nodeId}["${label.replace(/"/g, "'").trim()}"]`;
-  });
-
-  // 8. Auto-quote unquoted node labels in () rounded shapes: nodeId(some text) -> nodeId("some text")
-  text = text.replace(/\b([A-Za-z0-9_]+)\((?!\()([^"()\n]+)\)(?!\))/g, (_, nodeId, label) => {
-    return `${nodeId}("${label.replace(/"/g, "'").trim()}")`;
-  });
-
-  // 9. Auto-quote unquoted node labels in {} diamond shapes: nodeId{some text} -> nodeId{"some text"}
-  text = text.replace(/\b([A-Za-z0-9_]+)\{([^"\{\}\n]+)\}/g, (_, nodeId, label) => {
-    return `${nodeId}{"${label.replace(/"/g, "'").trim()}"}`;
-  });
-
-  // 10. Clean edge labels inside |...|: remove quotes & parens that crash Dagre positioning
-  text = text.replace(/([=-]>|--)\s*\|([^|\n]+)\|\s*([A-Za-z0-9_]+)/g, (_, arrow, label, target) => {
-    const cleanLabel = label.replace(/["'\[\]()]/g, '').trim();
-    return `${arrow}|${cleanLabel}| ${target}`;
-  });
-
-  return text;
-};
-
-const mermaidSvgCache = new Map<string, string>();
-
-const MermaidDiagram = ({ chart }: { chart: string }) => {
-  const initialClean = sanitizeMermaidChart(chart);
-  const cachedSvg = mermaidSvgCache.get(initialClean);
-
-  const [svg, setSvg] = useState<string>(cachedSvg || '');
-  const [isRendered, setIsRendered] = useState<boolean>(!!cachedSvg);
-  const [showCode, setShowCode] = useState<boolean>(false);
-  const [copied, setCopied] = useState<boolean>(false);
-  const [renderError, setRenderError] = useState<string>('');
-  const [cleanChart, setCleanChart] = useState<string>(initialClean);
-  const [zoom, setZoom] = useState<number>(1.0);
-  const [isFullscreen, setIsFullscreen] = useState<boolean>(false);
-
-  useEffect(() => {
-    let isMounted = true;
-    if (!chart || !chart.trim()) return;
-
-    const sanitized = sanitizeMermaidChart(chart);
-    if (isMounted) setCleanChart(sanitized);
-
-    // If already cached, apply immediately without re-rendering delay
-    if (mermaidSvgCache.has(sanitized)) {
-      const hit = mermaidSvgCache.get(sanitized)!;
-      if (isMounted) {
-        setSvg(hit);
-        setIsRendered(true);
-        setRenderError('');
-      }
-      return;
-    }
-
-    // If diagram is still being streamed or incomplete, wait before calling mermaid.render
-    if (!isMermaidComplete(sanitized)) {
-      return;
-    }
-
-    const renderChart = async () => {
-      try {
-        const id = `mermaid_${Math.random().toString(36).substring(2, 9)}_${Date.now()}`;
-        const { svg: renderedSvg } = await mermaid.render(id, sanitized);
-        if (isMounted && renderedSvg) {
-          mermaidSvgCache.set(sanitized, renderedSvg);
-          setSvg(renderedSvg);
-          setIsRendered(true);
-          setRenderError('');
-        }
-      } catch (err: unknown) {
-        console.error('[MermaidDiagram] render failed:', err);
-        const msg = err instanceof Error ? err.message : String(err);
-        if (isMounted) setRenderError(msg);
-        // Post-error DOM cleanup of error artifacts only
-        setTimeout(() => {
-          const strayError = document.querySelectorAll('svg[aria-roledescription="error"]');
-          strayError.forEach(el => el.remove());
-        }, 100);
-      }
-    };
-
-    const timer = setTimeout(renderChart, 40);
-    return () => {
-      isMounted = false;
-      clearTimeout(timer);
-    };
-  }, [chart]);
-
-  const handleCopyCode = () => {
-    navigator.clipboard.writeText((cleanChart || chart).trim());
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  };
-
-  const handleZoomIn = () => setZoom(prev => Math.min(2.2, +(prev + 0.15).toFixed(2)));
-  const handleZoomOut = () => setZoom(prev => Math.max(0.55, +(prev - 0.15).toFixed(2)));
-  const handleZoomReset = () => setZoom(1.0);
-
-  return (
-    <>
-      <div className="mermaid-diagram-card">
-        <div className="mermaid-diagram-header">
-          <div className="mermaid-header-left">
-            <span className="mermaid-diagram-badge">
-              <Activity size={12} />
-              <span>Interactive Diagram</span>
-            </span>
-            {renderError && (
-              <span className="mermaid-render-error-badge" title={renderError}>
-                ⚠ Render Error
-              </span>
-            )}
-          </div>
-          <div className="mermaid-header-right">
-            {isRendered && !renderError && !showCode && (
-              <div className="mermaid-zoom-controls">
-                <button
-                  type="button"
-                  className="mermaid-icon-tool-btn"
-                  onClick={handleZoomOut}
-                  title="Zoom out diagram"
-                  aria-label="Zoom out"
-                  disabled={zoom <= 0.55}
-                >
-                  <ZoomOut size={12} />
-                </button>
-                <button
-                  type="button"
-                  className="mermaid-icon-tool-btn zoom-text-btn"
-                  onClick={handleZoomReset}
-                  title="Reset diagram zoom"
-                  aria-label="Reset zoom"
-                >
-                  {Math.round(zoom * 100)}%
-                </button>
-                <button
-                  type="button"
-                  className="mermaid-icon-tool-btn"
-                  onClick={handleZoomIn}
-                  title="Zoom in diagram"
-                  aria-label="Zoom in"
-                  disabled={zoom >= 2.2}
-                >
-                  <ZoomIn size={12} />
-                </button>
-                <button
-                  type="button"
-                  className="mermaid-icon-tool-btn"
-                  onClick={() => setIsFullscreen(true)}
-                  title="Expand diagram fullscreen"
-                  aria-label="Expand diagram fullscreen"
-                >
-                  <Maximize2 size={12} />
-                </button>
-              </div>
-            )}
-            {isRendered && (
-              <button 
-                type="button"
-                className="mermaid-tool-btn"
-                onClick={() => setShowCode(!showCode)}
-                title={showCode ? "Show visual diagram" : "View diagram source code"}
-              >
-                <Code size={12} />
-                <span>{showCode ? "Visual" : "Source"}</span>
-              </button>
-            )}
-            <button 
-              type="button"
-              className="mermaid-tool-btn"
-              onClick={handleCopyCode}
-              title="Copy Mermaid code"
-            >
-              {copied ? <Check size={12} className="text-moss" /> : <Copy size={12} />}
-              <span>{copied ? "Copied" : "Copy"}</span>
-            </button>
-          </div>
-        </div>
-
-        {showCode ? (
-          <pre className="mermaid-code-preview">{(cleanChart || chart).trim()}</pre>
-        ) : renderError ? (
-          <pre className="mermaid-code-preview">{(cleanChart || chart).trim()}</pre>
-        ) : isRendered && svg ? (
-          <div className="mermaid-diagram-canvas-wrapper">
-            <div 
-              className="mermaid-diagram-canvas"
-              style={{ transform: `scale(${zoom})`, transformOrigin: 'top center' }}
-              dangerouslySetInnerHTML={{ __html: svg }}
-            />
-          </div>
-        ) : (
-          <div className="mermaid-diagram-loading">
-            <div className="shimmer-pulse-dot" />
-            <div className="shimmer-pulse-dot" />
-            <div className="shimmer-pulse-dot" />
-            <span>Rendering visual diagram...</span>
-          </div>
-        )}
-      </div>
-
-      {/* Fullscreen Expanded Diagram Modal */}
-      {isFullscreen && (
-        <div className="recall-modal-backdrop mermaid-fullscreen-backdrop" onClick={() => setIsFullscreen(false)}>
-          <div className="mermaid-fullscreen-card" onClick={(e) => e.stopPropagation()}>
-            <div className="modal-header">
-              <div className="modal-title-wrap">
-                <Activity size={16} className="text-teal" />
-                <h3>Expanded Diagram View</h3>
-              </div>
-              <div className="mermaid-fullscreen-header-actions">
-                <div className="mermaid-zoom-controls">
-                  <button type="button" className="mermaid-icon-tool-btn" onClick={handleZoomOut} title="Zoom out" disabled={zoom <= 0.55}>
-                    <ZoomOut size={13} />
-                  </button>
-                  <button type="button" className="mermaid-icon-tool-btn zoom-text-btn" onClick={handleZoomReset} title="Reset zoom">
-                    {Math.round(zoom * 100)}%
-                  </button>
-                  <button type="button" className="mermaid-icon-tool-btn" onClick={handleZoomIn} title="Zoom in" disabled={zoom >= 2.5}>
-                    <ZoomIn size={13} />
-                  </button>
-                </div>
-                <button 
-                  type="button"
-                  className="mermaid-tool-btn"
-                  onClick={handleCopyCode}
-                  title="Copy Mermaid code"
-                >
-                  {copied ? <Check size={13} className="text-moss" /> : <Copy size={13} />}
-                  <span>{copied ? "Copied" : "Copy"}</span>
-                </button>
-                <button className="modal-close-btn" onClick={() => setIsFullscreen(false)} title="Exit fullscreen view">
-                  <Minimize2 size={16} />
-                </button>
-              </div>
-            </div>
-            <div className="mermaid-fullscreen-body">
-              <div 
-                className="mermaid-diagram-canvas fullscreen-canvas"
-                style={{ transform: `scale(${zoom})`, transformOrigin: 'center center' }}
-                dangerouslySetInnerHTML={{ __html: svg }}
-              />
-            </div>
-          </div>
-        </div>
-      )}
-    </>
-  );
-};
-
-const cleanMarkdownContent = (content: string) => {
-  if (!content) return '';
-  // 0. Strip leading JSON preambles (e.g. {"conflict": false, "summary": ""})
-  let text = content.replace(/^\s*\{[\s\S]*?"summary":\s*"[^"]*"\s*\}\s*/g, '');
-
-  // 0.1 Normalize exotic Unicode whitespace characters (e.g. \u202F, \u00A0, \u2000-\u200B) to standard ASCII space
-  text = text.replace(/[\u202F\u00A0\u2000-\u200B\u2028\u2029\uFEFF]/g, ' ');
-
-  // 0.2 Fix collapsed Markdown tables where table rows lack newlines
-  text = text.replace(/(\|[-:]+[-| :]*)\|([^\n\-\|])/g, '$1|\n| $2');
-  text = text.replace(/(\|[^|\n]+)\|(\|[-:]+[-| :]*\|)/g, '$1|\n$2');
-  text = text.replace(/\|[ \t]*\|/g, '|\n|');
-
-
-  // 1. Convert standard LaTeX block \[ ... \] to $$ ... $$
-  text = text.replace(/\\\[([\s\S]*?)\\\]/g, '\n\n$$\n$1\n$$\n\n');
-
-  // 2. Convert standard LaTeX inline \( ... \) to $ ... $
-  text = text.replace(/\\\(([\s\S]*?)\\\)/g, '$$$1$$');
-
-  // 3. Fix multiline block math wrapped in single dollar signs on separate lines:
-  // e.g. \n$\n\text{SGPA}...\n$\n -> \n\n$$\n\text{SGPA}...\n$$\n\n
-  text = text.replace(/(?:^|\n)[ \t]*\$[ \t]*\n([\s\S]*?)\n[ \t]*\$[ \t]*(?=\n|$)/g, (_m, body) => {
-    const cleanedBody = body.replace(/\$/g, '').trim();
-    return `\n\n$$\n${cleanedBody}\n$$\n\n`;
-  });
-
-  // 4. Convert bracketed math blocks containing LaTeX like [ p_c := \alpha ... ] to $$ ... $$
-  text = text.replace(/(?:^|\n)\s*\[\s*([^[\]\n]*\\[a-zA-Z]+[^[\]\n]*|[a-zA-Z0-9_^{}]+\s*(?:[:=+\-*/]=?)\s*[^[\]\n]*\\[a-zA-Z]+[^[\]\n]*)\s*\]\s*(?=\n|$)/g, '\n\n$$\n$1\n$$\n\n');
-
-  // 5. Convert any standalone line containing LaTeX math commands into a $$ ... $$ block
-  // e.g. \text{SGPA}= \frac{\displaystyle\sum_{i=1}^{n} Grade-Point_i \times Credit_i}{\displaystyle\sum_{i=1}^{n}\text{Credit}_i}
-  text = text.replace(/(?:^|\n)(?!\s*\$\$)([^\n]*?\\[a-zA-Z]+[^\n]*?)(?=\n|$)/g, (match, line) => {
-    const trimmed = line.trim();
-    // Do NOT wrap if line is a markdown table row (starts/ends with | or has table pipes)
-    if (/^\|.*\|$/.test(trimmed) || (trimmed.startsWith('|') && trimmed.includes('|'))) {
-      return match;
-    }
-    // Do NOT wrap if line is a markdown heading, list bullet, quote, or code block
-    if (/^[#*>\-`]|^\d+\./.test(trimmed)) {
-      return match;
-    }
-    if (/\\[a-zA-Z]+(?:\{|\[|\b)/.test(trimmed) || /[_^]\{|\\[_&%$#]/.test(trimmed)) {
-      const cleaned = trimmed.replace(/\$/g, '');
-      return `\n\n$$\n${cleaned}\n$$\n\n`;
-    }
-    return match;
-  });
-
-  // 6. Direct KaTeX Pre-rendering for $$ ... $$ display math (guarantees perfect rendering through rehype-raw)
-  text = text.replace(/\$\$([\s\S]*?)\$\$/g, (_m, formula) => {
-    const cleaned = formula.replace(/\$/g, '').trim();
-    if (!cleaned) return '';
-    try {
-      const rendered = katex.renderToString(cleaned, { displayMode: true, throwOnError: false, strict: 'ignore' });
-      return `\n\n${rendered}\n\n`;
-    } catch {
-      return `\n\n$$\n${cleaned}\n$$\n\n`;
-    }
-  });
-
-  // 7. Direct KaTeX Pre-rendering for $ ... $ inline math
-  text = text.replace(/(?<!\\)\$([^\$\n]+?)\$/g, (_m, formula) => {
-    const cleaned = formula.trim();
-    if (!cleaned) return '$$';
-    try {
-      return katex.renderToString(cleaned, { displayMode: false, throwOnError: false, strict: 'ignore' });
-    } catch {
-      return `$${cleaned}$`;
-    }
-  });
-
-  // 8. Convert inline parenthesized math with LaTeX backslashes like (\alpha) or (\alpha \le 1) or (p^{s}_{T,c})
-  text = text.replace(/\(([^()\n]*\\[a-zA-Z]+[^()\n]*)\)/g, (_m, formula) => {
-    try {
-      return katex.renderToString(formula.trim(), { displayMode: false, throwOnError: false, strict: 'ignore' });
-    } catch {
-      return `(${formula})`;
-    }
-  });
-
-  // 5. Citations and cleanups
-  // Handle special citation markers: 【1†source】 or 【1】
-  text = text.replace(/【(\d+)†[^】]*】/g, ' [$1](#cit-$1)');
-  text = text.replace(/【(\d+)】/g, ' [$1](#cit-$1)');
-  text = text.replace(/【[^】]*】/g, '');
-
-  // Handle grouped bracketed citations like [1, 2, 4] or [1,2]
-  text = text.replace(/(?<![\$\w\\])\[(\d+(?:\s*,\s*\d+)+)\](?!\()/g, (_match, group) => {
-    const nums = group.split(',').map((n: string) => n.trim()).filter(Boolean);
-    return nums.map((n: string) => `[${n}](#cit-${n})`).join(' ');
-  });
-
-  // Handle range bracketed citations like [1-3] or [1–3]
-  text = text.replace(/(?<![\$\w\\])\[(\d+)\s*[-–—]\s*(\d+)\](?!\()/g, (_match, startStr, endStr) => {
-    const start = parseInt(startStr, 10);
-    const end = parseInt(endStr, 10);
-    if (!isNaN(start) && !isNaN(end) && start < end && end - start <= 10) {
-      const items = [];
-      for (let i = start; i <= end; i++) {
-        items.push(`[${i}](#cit-${i})`);
-      }
-      return items.join(' ');
-    }
-    return `[${startStr}](#cit-${startStr})-[${endStr}](#cit-${endStr})`;
-  });
-
-  // Handle single bracketed citations [1], [2], etc. (without requiring broken word boundaries)
-  text = text.replace(/(?<![\$\w\\])\[(\d+)\](?!\()/g, '[$1](#cit-$1)');
-
-  return text
-    .replace(/<br\s*\/?>\s*•/gi, '\n- ')
-    .replace(/<br\s*\/?>\s*\*/gi, '\n* ')
-    .replace(/<br\s*\/?>\s*-/gi, '\n- ')
-    .replace(/<br\s*\/?>/gi, '\n\n');
-};
-
-const markdownToReportHtml = (md: string): string => {
-  if (!md) return '';
-
-  // 1. Normalize line endings and strip reasoning tags
-  let text = md.replace(/\r\n/g, '\n').replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
-
-  // 2. Headings (Markdown #, ##, ###)
-  text = text
-    .replace(/^### (.*$)/gim, '<h3 class="report-h3">$1</h3>')
-    .replace(/^## (.*$)/gim, '<h2 class="report-h2">$1</h2>')
-    .replace(/^# (.*$)/gim, '<h1 class="report-h1">$1</h1>');
-
-  // 3. Bold & Italic formatting
-  text = text
-    .replace(/\*\*\*(.*?)\*\*\*/gim, '<strong><em>$1</em></strong>')
-    .replace(/\*\*(.*?)\*\*/gim, '<strong>$1</strong>')
-    .replace(/\*(.*?)\*/gim, '<em>$1</em>')
-    .replace(/___(.*?)___/gim, '<strong><em>$1</em></strong>')
-    .replace(/__(.*?)__/gim, '<strong>$1</strong>')
-    .replace(/_(.*?)_/gim, '<em>$1</em>');
-
-  // 4. Citation badges: [1], [2], [1, 2], [1-3] or 【1†L1-L4】
-  text = text
-    .replace(/【(\d+)†[^】]*】/gim, '<span class="report-cit-badge">[$1]</span>')
-    .replace(/【(\d+)】/gim, '<span class="report-cit-badge">[$1]</span>')
-    .replace(/【[^】]*】/gim, '')
-    .replace(/(?<![\$\w\\])\[(\d+(?:\s*,\s*\d+)+)\](?!\()/gim, (_m, group) => {
-      const nums = group.split(',').map((n: string) => n.trim()).filter(Boolean);
-      return nums.map((n: string) => `<span class="report-cit-badge">[${n}]</span>`).join(' ');
-    })
-    .replace(/(?<![\$\w\\])\[(\d+)\s*[-–—]\s*(\d+)\](?!\()/gim, (_m, s, e) => {
-      const start = parseInt(s, 10);
-      const end = parseInt(e, 10);
-      if (!isNaN(start) && !isNaN(end) && start < end && end - start <= 10) {
-        const items = [];
-        for (let i = start; i <= end; i++) {
-          items.push(`<span class="report-cit-badge">[${i}]</span>`);
-        }
-        return items.join(' ');
-      }
-      return `<span class="report-cit-badge">[${s}-${e}]</span>`;
-    })
-    .replace(/(?<![\$\w\\])\[(\d+)\](?!\()/gim, '<span class="report-cit-badge">[$1]</span>');
-
-  // 5. Code blocks & inline code
-  text = text
-    .replace(/```([\w]*)\n([\s\S]*?)```/gim, '<pre class="report-code-block"><code>$2</code></pre>')
-    .replace(/`([^`]+)`/gim, '<code class="report-inline-code">$1</code>');
-
-  // 6. Blockquotes
-  text = text.replace(/^>\s+(.*$)/gim, '<blockquote class="report-blockquote">$1</blockquote>');
-
-  // 7. Parse lists vs paragraphs
-  const rawLines = text.split('\n');
-  const result: string[] = [];
-  let inList = false;
-  let inOrderedList = false;
-
-  for (let i = 0; i < rawLines.length; i++) {
-    const line = rawLines[i].trim();
-    if (!line) {
-      if (inList) { result.push('</ul>'); inList = false; }
-      if (inOrderedList) { result.push('</ol>'); inOrderedList = false; }
-      continue;
-    }
-
-    if (line.startsWith('* ') || line.startsWith('- ') || line.startsWith('• ')) {
-      if (inOrderedList) { result.push('</ol>'); inOrderedList = false; }
-      if (!inList) { result.push('<ul class="report-ul">'); inList = true; }
-      const itemText = line.replace(/^[\*\-•]\s+/, '');
-      result.push(`  <li class="report-li">${itemText}</li>`);
-    } else if (/^\d+\.\s+/.test(line)) {
-      if (inList) { result.push('</ul>'); inList = false; }
-      if (!inOrderedList) { result.push('<ol class="report-ol">'); inOrderedList = true; }
-      const itemText = line.replace(/^\d+\.\s+/, '');
-      result.push(`  <li class="report-li">${itemText}</li>`);
-    } else if (
-      line.startsWith('<h1') || 
-      line.startsWith('<h2') || 
-      line.startsWith('<h3') || 
-      line.startsWith('<pre') ||
-      line.startsWith('<blockquote')
-    ) {
-      if (inList) { result.push('</ul>'); inList = false; }
-      if (inOrderedList) { result.push('</ol>'); inOrderedList = false; }
-      result.push(line);
-    } else {
-      if (inList) { result.push('</ul>'); inList = false; }
-      if (inOrderedList) { result.push('</ol>'); inOrderedList = false; }
-      result.push(`<p class="report-p">${line}</p>`);
-    }
-  }
-
-  if (inList) result.push('</ul>');
-  if (inOrderedList) result.push('</ol>');
-
-  return result.join('\n');
-};
 
 // Symmetrical Mountain Summit & Neural Ridge Emblem
 const RidgeLogo = ({ size = 22, className = '' }: { size?: number; className?: string }) => (
@@ -1101,119 +539,26 @@ const ChatMessageItem = React.memo(({
           {/* Markdown Text */}
           {msg.content ? (
             <div className="recall-markdown-body">
-              <ReactMarkdown
-                remarkPlugins={[remarkGfm, remarkMath]}
-                rehypePlugins={[rehypeRaw, [rehypeKatex, { throwOnError: false, errorColor: '#f87171', strict: 'ignore' }]]}
-                components={{
-                  table: ({ children, ...props }) => (
-                    <div className="markdown-table-wrapper">
-                      <table {...props}>{children}</table>
-                    </div>
-                  ),
-                  a: ({ href, children, ...props }) => {
-                    if (href?.startsWith('#cit-')) {
-                      const citIdx = parseInt(href.replace('#cit-', ''), 10);
-                      const targetGrade = msgGrades[citIdx - 1];
-                      return (
-                        <span
-                          className="interactive-cit-wrapper"
-                          onMouseEnter={(e) => {
-                            const rect = e.currentTarget.getBoundingClientRect();
-                            onHoverCitation({
-                              msgId: msg.id,
-                              index: citIdx,
-                              target: targetGrade,
-                              rect,
-                            });
-                          }}
-                          onMouseLeave={() => onHoverCitation(null)}
-                        >
-                          <button
-                            type="button"
-                            className="inline-citation-badge"
-                            onClick={(e) => {
-                              e.preventDefault();
-                              e.stopPropagation();
-                              onHoverCitation(null);
-                              const elem = document.getElementById(`doc-card-${msg.id}-${citIdx}`);
-                              if (elem) {
-                                elem.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                                onHighlightCitation(`${msg.id}-${citIdx}`);
-                                setTimeout(() => onHighlightCitation(null), 2500);
-                              }
-                              if (targetGrade) {
-                                onSelectSource(targetGrade);
-                              } else if (!elem) {
-                                onHighlightCitation(`${msg.id}-${citIdx}`);
-                                setTimeout(() => onHighlightCitation(null), 2500);
-                              }
-                            }}
-                            title={targetGrade?.source ? `Source [${citIdx}]: ${targetGrade.source.split('/').pop()} (Click to inspect)` : `Source [${citIdx}]: Click to inspect verified passage`}
-                            aria-label={`Source citation ${citIdx}`}
-                          >
-                            {citIdx}
-                          </button>
-                        </span>
-                      );
-                    }
-                    if (href?.startsWith('file://')) {
-                      const path = href.replace('file://', '');
-                      return (
-                        <span
-                          className="inline-file-link"
-                          title={`Local path: ${path} (Click to copy)`}
-                          onClick={(e) => {
-                            e.preventDefault();
-                            onFileClick(path);
-                          }}
-                          style={{
-                            cursor: 'pointer',
-                            textDecoration: 'underline',
-                            color: 'var(--color-5)',
-                            fontFamily: 'var(--font-mono)',
-                            fontSize: '0.9em'
-                          }}
-                        >
-                          {children}
-                        </span>
-                      );
-                    }
-                    return (
-                      <a href={href} target="_blank" rel="noopener noreferrer" {...props}>
-                        {children}
-                      </a>
-                    );
-                  },
-                  code: ({ inline, className, children, ...props }: any) => {
-                    const match = /language-(\w+)/.exec(className || '');
-                    const lang = match ? match[1] : '';
-                    const content = String(children).replace(/\n$/, '');
-                    const isMermaid = !inline && (
-                      lang === 'mermaid' || 
-                      content.startsWith('graph ') || 
-                      content.startsWith('graph TD') ||
-                      content.startsWith('graph LR') ||
-                      content.startsWith('flowchart ') || 
-                      content.startsWith('sequenceDiagram') || 
-                      content.startsWith('classDiagram') || 
-                      content.startsWith('stateDiagram') ||
-                      content.startsWith('erDiagram') ||
-                      content.startsWith('gantt') ||
-                      content.startsWith('pie')
-                    );
-                    if (isMermaid) {
-                      return <MermaidDiagram chart={content} />;
-                    }
-                    return (
-                      <code className={className} {...props}>
-                        {children}
-                      </code>
-                    );
+              <MarkdownRenderer
+                content={msg.content}
+                citations={msgGrades}
+                highlightedCitationIndex={activeCitationHighlight ? parseInt(activeCitationHighlight.split('-')[1], 10) : null}
+                onCitationClick={(c) => onSelectSource(c)}
+                onFileClick={onFileClick}
+                onCitationHover={(c, rect) => {
+                  if (c && rect) {
+                    onHoverCitation({
+                      msgId: msg.id,
+                      index: c.index,
+                      target: c,
+                      rect,
+                    });
+                  } else {
+                    onHoverCitation(null);
                   }
                 }}
-              >
-                {cleanMarkdownContent(msg.content)}
-              </ReactMarkdown>
+              />
+
             </div>
           ) : (
             msg.isStreaming && (
@@ -1226,53 +571,23 @@ const ChatMessageItem = React.memo(({
             )
           )}
 
-          {/* Embedded Citations & Veracity Cards */}
+          {/* NotebookLM Grounding Sources Deck */}
           {isAssistant && msgGrades.length > 0 && (
-            <div className="recall-citations-section">
-              <div className="citations-header">
-                {msgGrades.some((g: any) => g.breadcrumb === 'Web Search Fallback' || g.source?.startsWith('http')) ? (
-                  <Globe size={13} className="text-amber" />
-                ) : (
-                  <BookOpen size={13} className="text-teal" />
-                )}
-                <span>
-                  {msgGrades.some((g: any) => g.breadcrumb === 'Web Search Fallback' || g.source?.startsWith('http'))
-                    ? `Live Web Sources (${msgGrades.length} retrieved)`
-                    : `Anchored Topo & Grader Verdicts (${msgGrades.length} chunks evaluated)`}
-                </span>
-              </div>
-              <div className="citations-flex">
-                {msgGrades.map((g: any, idx: number) => {
-                  const citNum = idx + 1;
-                  const cardId = `doc-card-${msg.id}-${citNum}`;
-                  const isHighlighted = activeCitationHighlight === `${msg.id}-${citNum}`;
-                  const isWeb = g.breadcrumb === 'Web Search Fallback' || g.source?.startsWith('http') || g.source?.includes('(');
-                  const fname = g.source ? (g.source.split('/').pop() || g.source) : `Chunk #${citNum}`;
-                  const isRelevant = g.score === 'yes';
-                  const displayTitle = isWeb 
-                    ? (g.source ? g.source.split('(')[0]?.trim() : `Web Source #${citNum}`)
-                    : (g.breadcrumb ? (g.breadcrumb.split('>').pop()?.trim() || fname) : fname);
-                  return (
-                    <button 
-                      id={cardId}
-                      key={idx} 
-                      className={`citation-pill ${isRelevant ? 'relevant' : 'filtered'} ${isHighlighted ? 'pulse-highlight' : ''}`}
-                      onClick={() => onSelectSource(g)}
-                      title={isWeb ? "Inspect live web source URL and snippet" : "Inspect grader rationale and chunk excerpt"}
-                    >
-                      <span className="cit-icon">
-                        {isRelevant ? <Check size={12} className="text-moss" /> : <X size={12} className="text-rust" />}
-                      </span>
-                      <span className="cit-name">[{citNum}] {displayTitle}</span>
-                      <span className={`cit-verdict ${isRelevant ? 'pass' : 'fail'}`}>
-                        {isRelevant ? (isWeb ? 'Web Verified' : 'Verified') : 'Filtered Crux'}
-                      </span>
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
+            <NotebookLMSourcesDeck
+              msgId={msg.id}
+              citations={msgGrades}
+              activeHighlightId={activeCitationHighlight}
+              onSelectSource={(c) => onSelectSource(c)}
+              onHoverSource={(idx) => {
+                if (idx !== null) {
+                  onHighlightCitation(`${msg.id}-${idx}`);
+                } else {
+                  onHighlightCitation(null);
+                }
+              }}
+            />
           )}
+
 
           {/* Grounded Confidence Scorecard & Badge */}
           {isAssistant && msg.confidence && (
@@ -4352,62 +3667,14 @@ export default function App() {
         </div>
       )}
 
-      {/* Citation Detail Modal */}
+      {/* NotebookLM Source Detail Modal */}
       {selectedSourceModal && (
-        <div className="recall-modal-backdrop" onClick={() => setSelectedSourceModal(null)}>
-          <div className="recall-modal-card citation-detail-modal" onClick={e => e.stopPropagation()}>
-            <div className="modal-header">
-              <div className="modal-title-wrap">
-                <BookOpen size={18} className="text-teal" />
-                <h3>Source Grader Analysis</h3>
-              </div>
-              <button className="modal-close-btn" onClick={() => setSelectedSourceModal(null)}>
-                <X size={18} />
-              </button>
-            </div>
-            <div className="modal-body-area">
-              <div className="citation-badge-line">
-                <span className={`grader-badge ${selectedSourceModal.score === 'yes' ? 'pass' : 'fail'}`}>
-                  <span className="badge-icon-inline">
-                    {selectedSourceModal.score === 'yes' ? <Check size={11} /> : <X size={11} />}
-                  </span>
-                  {selectedSourceModal.score === 'yes' ? 'USED IN ANSWER' : 'FILTERED OUT AS CRUX'}
-                </span>
-                {selectedSourceModal.source && (
-                  <span className="source-uri-tag">{selectedSourceModal.source}</span>
-                )}
-                {selectedSourceModal.breadcrumb && (
-                  <span className="source-uri-tag">{selectedSourceModal.breadcrumb}</span>
-                )}
-              </div>
-
-              <div className="detail-box">
-                <h4>LLM Grader Rationale:</h4>
-                <p className="rationale-text">{selectedSourceModal.rationale || 'No rationale provided by grader.'}</p>
-              </div>
-
-              {selectedSourceModal.text && (
-                <div className="detail-box" style={{ marginTop: '12px' }}>
-                  <h4>Source Passage Excerpt:</h4>
-                  <pre style={{ 
-                    fontFamily: 'var(--font-mono)', 
-                    fontSize: '0.75rem', 
-                    whiteSpace: 'pre-wrap', 
-                    background: 'var(--recall-surface)', 
-                    padding: '10px', 
-                    borderRadius: '6px', 
-                    border: '1px solid var(--recall-border)',
-                    maxHeight: '180px',
-                    overflowY: 'auto'
-                  }}>
-                    {selectedSourceModal.text}
-                  </pre>
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
+        <NotebookLMSourceModal
+          citation={selectedSourceModal}
+          onClose={() => setSelectedSourceModal(null)}
+        />
       )}
+
 
       {/* Side-by-Side Conflict Diff Viewer Modal */}
       {selectedConflictDiff && (
@@ -4512,28 +3779,16 @@ export default function App() {
         </div>
       )}
 
-      {/* Floating Citation Hover Preview Popover */}
+      {/* NotebookLM Citation Hover Preview Popover */}
       {hoveredCitation && !selectedSourceModal && !isGlossaryOpen && !isAdminModalOpen && !isExportOpen && !isIngestOpen && !isAuthModalOpen && (
-        <div 
-          className="citation-hover-popover"
-          style={{
-            position: 'fixed',
-            top: `${hoveredCitation.rect.top < 150 ? hoveredCitation.rect.bottom + 8 : Math.max(10, hoveredCitation.rect.top - 125)}px`,
-            left: `${Math.min(window.innerWidth - 320, Math.max(16, hoveredCitation.rect.left - 100))}px`,
-            zIndex: 120,
-          }}
-        >
-          <div className="cit-popover-header">
-            <span className="cit-popover-tag">Source [{hoveredCitation.index}]</span>
-            <span className="cit-popover-src" title={hoveredCitation.target?.source || 'Verified Passage'}>
-              {hoveredCitation.target?.source ? hoveredCitation.target.source.split('/').pop() : 'Verified Passage'}
-            </span>
-          </div>
-          <div className="cit-popover-body">
-            {hoveredCitation.target?.text ? hoveredCitation.target.text.slice(0, 220) + '...' : 'Referenced document passage evaluated and verified by the CRAG pipeline.'}
-          </div>
-        </div>
+        <NotebookLMCitationPopover
+          citation={hoveredCitation.target || { index: hoveredCitation.index }}
+          rect={hoveredCitation.rect}
+          onClose={() => setHoveredCitation(null)}
+          onInspect={(c) => setSelectedSourceModal(c)}
+        />
       )}
+
 
       {/* Admin Management Console Modal */}
       {isAdminModalOpen && (

@@ -63,17 +63,33 @@ def is_postgres_configured() -> bool:
     return bool(url and ("postgres" in url or "localhost" in url or "5432" in url or "5433" in url))
 
 
-from sqlalchemy.pool import NullPool
-
 # Asynchronous Engine & Session Factory
 DATABASE_URL = get_database_url(sync=False)
 
-engine = create_async_engine(
-    DATABASE_URL,
-    echo=False,
-    poolclass=NullPool,
-    pool_pre_ping=True,
-)
+pool_class_env = os.getenv("DB_POOL_CLASS", "").lower().strip()
+if pool_class_env == "nullpool":
+    from sqlalchemy.pool import NullPool
+    engine = create_async_engine(
+        DATABASE_URL,
+        echo=False,
+        poolclass=NullPool,
+        pool_pre_ping=True,
+    )
+else:
+    pool_size = int(os.getenv("DB_POOL_SIZE", "20"))
+    max_overflow = int(os.getenv("DB_MAX_OVERFLOW", "10"))
+    pool_timeout = int(os.getenv("DB_POOL_TIMEOUT", "30"))
+    pool_recycle = int(os.getenv("DB_POOL_RECYCLE", "1800"))
+    engine = create_async_engine(
+        DATABASE_URL,
+        echo=False,
+        pool_size=pool_size,
+        max_overflow=max_overflow,
+        pool_timeout=pool_timeout,
+        pool_recycle=pool_recycle,
+        pool_pre_ping=True,
+    )
+
 
 
 async_session_factory = async_sessionmaker(
