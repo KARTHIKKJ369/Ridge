@@ -41,15 +41,23 @@ async def test_unified_retriever_pgvector_mode():
 
 @pytest.mark.asyncio
 async def test_source_filtering():
+    from main import aingest_document
+    await aingest_document(
+        text_or_url="Graph neural networks (GNNs) analyze complex relational graphs and structured data.",
+        original_filename="gnn_research_paper.pdf",
+        user_id="test_user",
+        is_shared=True,
+    )
+
     retriever = PgvectorRetriever()
     query = "graph neural network"
     
     # Filter by specific source
     candidates = await retriever.retrieve(
         query=query,
-        source_filter="A_Global-Local_Dynamic_Directed_Graph_Neural_Network_for_Parkinsons_Disease_Detection.pdf",
+        source_filter="gnn_research_paper.pdf",
         k=5,
     )
     assert len(candidates) > 0
     for c in candidates:
-        assert "Parkinsons" in c.metadata.get("source", "") or "Dynamic_Directed_Graph" in c.metadata.get("source", "")
+        assert "gnn_research_paper.pdf" in c.metadata.get("source", "")

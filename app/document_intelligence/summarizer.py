@@ -41,17 +41,12 @@ class HierarchicalSummarizer:
     def _get_fast_llm(self):
         if self._llm is None:
             try:
-                from main import get_settings
-                from langchain_groq import ChatGroq
-
-                settings = get_settings()
-                if settings.get("groq_api_key"):
-                    self._llm = ChatGroq(
-                        api_key=settings["groq_api_key"],
-                        model_name=settings.get("groq_fast_model", "openai/gpt-oss-20b"),
-                        temperature=0.3,
-                        max_tokens=256,
-                    )
+                from app.graph.llm_factory import create_llm
+                self._llm = create_llm(
+                    temperature=0.3,
+                    max_tokens=256,
+                    is_fast_model=True,
+                )
             except Exception as e:
                 logger.warning(f"Fast LLM initialization note for Summarizer: {e}")
         return self._llm

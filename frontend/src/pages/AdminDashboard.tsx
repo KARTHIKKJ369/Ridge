@@ -259,6 +259,10 @@ export const AdminDashboard: React.FC = () => {
   const [selectedDocIds, setSelectedDocIds] = useState<Set<string>>(new Set());
   const [isBulkDeletingDocs, setIsBulkDeletingDocs] = useState(false);
 
+  // Multi-select Institutions State
+  const [selectedTenantIds, setSelectedTenantIds] = useState<string[]>([]);
+  const [selectedInstitutionsFilter, setSelectedInstitutionsFilter] = useState<string[]>([]);
+
   // Quota Edit State
   const [editingLimitUserId, setEditingLimitUserId] = useState<string | null>(null);
   const [tempLimitValue, setTempLimitValue] = useState<number>(50);
@@ -709,6 +713,69 @@ export const AdminDashboard: React.FC = () => {
     }
   };
 
+  // Bulk Toggle Tenant Status
+  const handleBulkToggleTenantStatus = async (tenantIds: string[], newStatus: boolean) => {
+    if (tenantIds.length === 0) return;
+    try {
+      const promises = tenantIds.map(tId =>
+        fetchWithAuth(`/api/admin/tenants/${tId}/status`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ is_active: newStatus })
+        })
+      );
+      await Promise.all(promises);
+      showToast(`${tenantIds.length} institutions ${newStatus ? 'activated' : 'suspended'}`, 'success');
+      setAdminTenantsList(prev =>
+        prev.map(t => tenantIds.includes(t.id) ? { ...t, is_active: newStatus } : t)
+      );
+      setSelectedTenantIds([]);
+    } catch (e) {
+      showToast('Error updating institutions in bulk', 'error');
+    }
+  };
+
+  // Bulk Delete Tenants & Cascaded Users
+  const handleBulkDeleteTenants = (tenantIds: string[]) => {
+    if (tenantIds.length === 0) return;
+    const nonDefaultIds = tenantIds.filter(id => {
+      const t = adminTenantsList.find(item => item.id === id);
+      return t && t.slug !== 'default';
+    });
+    if (nonDefaultIds.length === 0) {
+      showToast('Cannot delete the primary system root institution.', 'error');
+      return;
+    }
+    setConfirmDialog({
+      open: true,
+      title: `Delete ${nonDefaultIds.length} Institutions & All Members`,
+      message: `Permanently delete ${nonDefaultIds.length} selected institutions and ALL of their associated members/climbers, knowledge bases, documents, and chunks? This operation cannot be undone.`,
+      danger: true,
+      onConfirm: async () => {
+        setConfirmDialog(d => ({ ...d, open: false }));
+        try {
+          const res = await fetchWithAuth('/api/admin/tenants/bulk-delete', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ tenant_ids: nonDefaultIds })
+          });
+          if (res.ok) {
+            const data = await res.json();
+            showToast(`${data.deleted_count || nonDefaultIds.length} institutions and all associated users deleted`, 'success');
+            setAdminTenantsList(prev => prev.filter(t => !nonDefaultIds.includes(t.id)));
+            setSelectedTenantIds([]);
+            fetchAdminData();
+          } else {
+            const err = await res.json();
+            showToast(err.detail || 'Failed to delete selected institutions', 'error');
+          }
+        } catch (e) {
+          showToast('Error deleting selected institutions', 'error');
+        }
+      }
+    });
+  };
+
   // Delete Tenant
   const handleDeleteTenant = (tenantId: string, tenantName: string) => {
     setConfirmDialog({
@@ -829,6 +896,11 @@ export const AdminDashboard: React.FC = () => {
 
   // Filtered Users list
   const filteredUsers = adminUsers.filter(u => {
+    if (selectedInstitutionsFilter.length > 0) {
+      if (!u.tenant_id || !selectedInstitutionsFilter.includes(u.tenant_id)) {
+        return false;
+      }
+    }
     const q = searchQuery.toLowerCase();
     return (
       u.username.toLowerCase().includes(q) ||
@@ -1390,7 +1462,7 @@ export const AdminDashboard: React.FC = () => {
               </div>
 
               <div className="admin-table-card">
-                {/* Search & Tenant Filter Toolbar */}
+                {/* Search Toolbar */}
                 <div className="admin-toolbar-row">
                   <div className="admin-search-box">
                     <Search size={15} style={{ color: 'var(--recall-text-muted)' }} />
@@ -1406,25 +1478,54 @@ export const AdminDashboard: React.FC = () => {
                       </button>
                     )}
                   </div>
-
-                  {isSuperAdmin && adminTenantsList.length > 0 && (
-                    <select
-                      className="admin-tenant-filter-select"
-                      value={tenantFilter}
-                      onChange={e => {
-                        setTenantFilter(e.target.value);
-                        fetchAdminData(e.target.value);
-                      }}
-                    >
-                      <option value="">All Enterprises (Global)</option>
-                      {adminTenantsList.map(t => (
-                        <option key={t.id} value={t.id}>
-                          {t.name} (@{t.slug})
-                        </option>
-                      ))}
-                    </select>
-                  )}
                 </div>
+
+                {/* Multi-Institution Filter Bar for Superadmins */}
+                {isSuperAdmin && adminTenantsList.length > 0 && (
+                  <div className="admin-multi-tenant-bar" style={{ margin: '0 16px 16px 16px' }}>
+                    <div className="multi-tenant-label">
+                      <Building2 size={13} className="text-teal" />
+                      <span>Filter Institutions:</span>
+                    </div>
+                    <div className="multi-tenant-chips-list">
+                      <button
+                        type="button"
+                        className={`multi-tenant-chip ${selectedInstitutionsFilter.length === 0 ? 'active' : ''}`}
+                        onClick={() => setSelectedInstitutionsFilter([])}
+                      >
+                        All Institutions ({adminTenantsList.length})
+                      </button>
+                      {adminTenantsList.map(t => {
+                        const isSelected = selectedInstitutionsFilter.includes(t.id);
+                        return (
+                          <button
+                            key={t.id}
+                            type="button"
+                            className={`multi-tenant-chip ${isSelected ? 'active' : ''}`}
+                            onClick={() => {
+                              setSelectedInstitutionsFilter(prev =>
+                                isSelected ? prev.filter(id => id !== t.id) : [...prev, t.id]
+                              );
+                            }}
+                            title={`Click to ${isSelected ? 'remove' : 'include'} ${t.name}`}
+                          >
+                            <span>{t.name}</span>
+                            {isSelected && <Check size={11} className="chip-check-icon" />}
+                          </button>
+                        );
+                      })}
+                      {selectedInstitutionsFilter.length > 0 && (
+                        <button
+                          type="button"
+                          className="multi-tenant-clear-btn"
+                          onClick={() => setSelectedInstitutionsFilter([])}
+                        >
+                          Reset
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                )}
 
                 {/* Bulk Selection Action Banner */}
                 {selectedUserIds.size > 0 && (
@@ -2068,6 +2169,20 @@ export const AdminDashboard: React.FC = () => {
                   </p>
                 </div>
                 <div className="view-actions-wrap">
+                  {adminTenantsList.filter(t => t.slug !== 'default').length > 0 && (
+                    <button
+                      className="btn-secondary-admin"
+                      onClick={() => {
+                        const nonDefault = adminTenantsList.filter(t => t.slug !== 'default').map(t => t.id);
+                        setSelectedTenantIds(selectedTenantIds.length === nonDefault.length ? [] : nonDefault);
+                      }}
+                      title="Select or deselect all institutions"
+                    >
+                      <Check size={14} />
+                      <span>{selectedTenantIds.length > 0 && selectedTenantIds.length === adminTenantsList.filter(t => t.slug !== 'default').length ? 'Deselect All' : 'Select All'}</span>
+                    </button>
+                  )}
+
                   <button
                     className="btn-primary-admin"
                     onClick={() => {
@@ -2092,22 +2207,121 @@ export const AdminDashboard: React.FC = () => {
                 </div>
               </div>
 
+              {/* Bulk Institutions Action Banner */}
+              {selectedTenantIds.length > 0 && (
+                <div className="admin-bulk-banner" style={{ marginBottom: 18 }}>
+                  <span className="bulk-count-badge">
+                    <Check size={16} />
+                    <span>{selectedTenantIds.length} institution{selectedTenantIds.length > 1 ? 's' : ''} selected</span>
+                  </span>
+
+                  <div className="bulk-actions-group">
+                    <button
+                      className="btn-bulk-activate"
+                      style={{ background: 'var(--recall-accent)', color: '#ffffff', padding: '6px 12px', borderRadius: 'var(--radius-sm)', border: 'none', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: '0.78rem', fontWeight: 600 }}
+                      onClick={() => handleBulkToggleTenantStatus(selectedTenantIds, true)}
+                    >
+                      <Check size={13} />
+                      <span>Activate ({selectedTenantIds.length})</span>
+                    </button>
+
+                    <button
+                      className="btn-bulk-suspend"
+                      style={{ background: 'var(--recall-surface-elevated)', color: 'var(--recall-text-primary)', border: '1px solid var(--recall-border)', padding: '6px 12px', borderRadius: 'var(--radius-sm)', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: '0.78rem', fontWeight: 600 }}
+                      onClick={() => handleBulkToggleTenantStatus(selectedTenantIds, false)}
+                    >
+                      <X size={13} />
+                      <span>Suspend ({selectedTenantIds.length})</span>
+                    </button>
+
+                    <button
+                      className="btn-bulk-delete"
+                      style={{ background: '#ef4444', color: '#ffffff', padding: '6px 12px', borderRadius: 'var(--radius-sm)', border: 'none', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: '0.78rem', fontWeight: 600 }}
+                      onClick={() => handleBulkDeleteTenants(selectedTenantIds)}
+                      title="Permanently delete selected institutions and all their members"
+                    >
+                      <Trash2 size={14} />
+                      <span>Delete ({selectedTenantIds.length}) & Users</span>
+                    </button>
+
+                    <button
+                      className="btn-bulk-filter"
+                      style={{ background: 'var(--recall-surface-subtle)', color: 'var(--recall-accent)', border: '1px solid var(--recall-border)', padding: '6px 12px', borderRadius: 'var(--radius-sm)', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: '0.78rem', fontWeight: 600 }}
+                      onClick={() => {
+                        setSelectedInstitutionsFilter(selectedTenantIds);
+                        setActiveTab('users');
+                      }}
+                    >
+                      <Users size={13} />
+                      <span>Filter Climbers ({selectedTenantIds.length})</span>
+                    </button>
+
+                    <button
+                      className="btn-bulk-clear"
+                      onClick={() => setSelectedTenantIds([])}
+                    >
+                      Clear Selection
+                    </button>
+                  </div>
+                </div>
+              )}
+
               {/* Institution Cards Grid */}
               <div className="institutions-grid">
                 {adminTenantsList.map(t => {
                   const capacityPercent = Math.min(100, Math.round(((t.user_count || 0) / (t.max_users || 50)) * 100));
+                  const isSelected = selectedTenantIds.includes(t.id);
+                  const isRoot = t.slug === 'default';
+
+                  const toggleSelection = () => {
+                    if (isRoot) return;
+                    setSelectedTenantIds(prev =>
+                      prev.includes(t.id) ? prev.filter(id => id !== t.id) : [...prev, t.id]
+                    );
+                  };
+
                   return (
-                    <div key={t.id} className="institution-card">
+                    <div 
+                      key={t.id} 
+                      className={`institution-card ${isSelected ? 'institution-card-selected' : ''}`}
+                      onClick={toggleSelection}
+                      style={{ cursor: isRoot ? 'default' : 'pointer' }}
+                    >
                       <div>
                         <div className="inst-card-top">
                           <div>
                             <div className="inst-card-title">{t.name}</div>
                             <span className="inst-slug-pill">@{t.slug}</span>
                           </div>
-                          {t.slug === 'default' && (
+                          {isRoot ? (
                             <span className="tenant-default-badge" style={{ padding: '2px 6px', background: 'var(--recall-warning-subtle)', borderRadius: 4 }}>
                               System Root
                             </span>
+                          ) : (
+                            <div 
+                              className={`inst-select-box ${isSelected ? 'selected' : ''}`}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                toggleSelection();
+                              }}
+                              title={isSelected ? `Deselect ${t.name}` : `Select ${t.name}`}
+                              style={{
+                                width: 22,
+                                height: 22,
+                                borderRadius: 6,
+                                border: isSelected ? '2px solid var(--recall-accent)' : '2px solid var(--recall-border-strong)',
+                                background: isSelected ? 'var(--recall-accent)' : 'var(--recall-surface-elevated)',
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                cursor: 'pointer',
+                                color: '#ffffff',
+                                transition: 'all 0.15s ease',
+                                flexShrink: 0
+                              }}
+                            >
+                              {isSelected && <Check size={14} strokeWidth={3} />}
+                            </div>
                           )}
                         </div>
 
@@ -2134,13 +2348,16 @@ export const AdminDashboard: React.FC = () => {
                         </div>
                       </div>
 
-                      <div className="inst-card-footer">
-                        {t.slug === 'default' ? (
+                      <div className="inst-card-footer" onClick={(e) => e.stopPropagation()}>
+                        {isRoot ? (
                           <span style={{ fontSize: '0.75rem', color: 'var(--recall-success)', fontWeight: 600 }}>Active</span>
                         ) : (
                           <button
                             className={`status-chip-btn ${t.is_active !== false ? 'active' : 'suspended'}`}
-                            onClick={() => handleToggleTenantStatus(t.id, t.is_active !== false)}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleToggleTenantStatus(t.id, t.is_active !== false);
+                            }}
                           >
                             {t.is_active !== false ? <Check size={12} /> : <X size={12} />}
                             <span>{t.is_active !== false ? 'Active' : 'Suspended'}</span>
@@ -2150,8 +2367,9 @@ export const AdminDashboard: React.FC = () => {
                         <div style={{ display: 'flex', gap: 6 }}>
                           <button
                             className="btn-ghost-sm"
-                            onClick={() => {
-                              setTenantFilter(t.id);
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setSelectedInstitutionsFilter([t.id]);
                               setActiveTab('users');
                               fetchAdminData(t.id);
                             }}
@@ -2160,10 +2378,13 @@ export const AdminDashboard: React.FC = () => {
                             <span>View Climbers</span>
                           </button>
 
-                          {t.slug !== 'default' && (
+                          {!isRoot && (
                             <button
                               className="user-delete-action-btn"
-                              onClick={() => handleDeleteTenant(t.id, t.name)}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleDeleteTenant(t.id, t.name);
+                              }}
                               title="Delete institution"
                             >
                               <Trash2 size={14} />

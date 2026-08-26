@@ -344,15 +344,18 @@ export const NotebookLMSourcesDeck: React.FC<SourcesDeckProps> = ({
   );
 };
 
-interface SourceDetailModalProps {
-  citation: CitationItem | null;
+interface SourceModalProps {
+  citation: CitationItem;
   onClose: () => void;
+  onOpenViewer?: (source: string, text?: string) => void;
 }
 
-export const NotebookLMSourceModal: React.FC<SourceDetailModalProps> = ({ citation, onClose }) => {
+export const NotebookLMSourceModal: React.FC<SourceModalProps> = ({
+  citation,
+  onClose,
+  onOpenViewer,
+}) => {
   const [copied, setCopied] = useState(false);
-
-  if (!citation) return null;
 
   const isWeb =
     citation.breadcrumb === 'Web Search Fallback' ||
@@ -462,9 +465,30 @@ export const NotebookLMSourceModal: React.FC<SourceDetailModalProps> = ({ citati
         {/* Modal Footer */}
         <div className="modal-footer-area">
           <div className="modal-footer-left">
-            <span className="grounding-audit-note">
-              ✓ Grounded with Reciprocal Rank Fusion & FlashRank Cross-Encoder
-            </span>
+            {citation.source && onOpenViewer && !isWeb && (
+              <button
+                type="button"
+                className="popover-action-btn primary"
+                onClick={() => {
+                  onClose();
+                  onOpenViewer(citation.source!, citation.text);
+                }}
+              >
+                <BookOpen size={12} />
+                <span>Open Full Document Preview</span>
+              </button>
+            )}
+            {isWeb && citation.source && (
+              <a
+                href={citation.source}
+                target="_blank"
+                rel="noreferrer"
+                className="popover-action-btn"
+              >
+                <span>Visit Web Source</span>
+                <ExternalLink size={11} />
+              </a>
+            )}
           </div>
           <button type="button" className="btn-secondary modal-done-btn" onClick={onClose}>
             Done
@@ -474,4 +498,3 @@ export const NotebookLMSourceModal: React.FC<SourceDetailModalProps> = ({ citati
     </div>
   );
 };
-

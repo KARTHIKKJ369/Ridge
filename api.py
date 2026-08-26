@@ -87,6 +87,10 @@ app.add_api_route("/ingest", ingest_endpoint, methods=["POST"], include_in_schem
 app.add_api_route("/health", health, methods=["GET"], include_in_schema=False)
 app.add_api_route("/status", health, methods=["GET"], include_in_schema=False)
 
+from app.api.v1.endpoints.chat import websocket_chat_endpoint
+app.add_api_websocket_route("/ws/chat", websocket_chat_endpoint)
+app.add_api_websocket_route("/ws/ask", websocket_chat_endpoint)
+
 
 # Mount the compiled React frontend static files
 frontend_dist = os.path.join(os.path.dirname(__file__), "frontend", "dist")

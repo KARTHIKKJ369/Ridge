@@ -1,21 +1,24 @@
 """
 Document Ingestion & Knowledge Base Management Endpoints
 ========================================================
-Handles file upload parsing, web URL ingestion, KB source listing, document deletion, and sharing settings.
+Handles file upload parsing, web URL ingestion, KB source listing, document deletion,
+sharing settings, and document text preview for the Source Viewer.
 """
 import os
+import uuid
 import tempfile
 import logging
 from pathlib import Path
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, UploadFile, File
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, UploadFile, File, Query, Body
 from pydantic import BaseModel
 from sqlalchemy import select, func, delete, or_
+from sqlalchemy.orm import selectinload
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 
 limiter = Limiter(key_func=get_remote_address)
 
-from main import ingest_document
+from main import aingest_document, ingest_document
 from auth import get_current_user, UserProfile
 from app.db.database import get_db_session
 from app.db.models import Document, DocumentChunk, KnowledgeBase
@@ -51,9 +54,9 @@ async def ingest_endpoint(
     user: UserProfile = Depends(get_current_user),
 ):
     """Queues ingestion of raw text or URL into the user's knowledge base. Returns immediately."""
-    def _run_ingest():
+    async def _run_ingest():
         try:
-            ingest_document(
+            await aingest_document(
                 req.text_or_url,
                 user_id=user.id,
                 tenant_id=user.tenant_id,
@@ -99,9 +102,9 @@ async def upload_file_endpoint(
         temp_file.write(content)
         temp_path = temp_file.name
 
-    def _run_ingest():
+    async def _run_upload():
         try:
-            ingest_document(
+            await aingest_document(
                 temp_path,
                 original_filename=filename,
                 user_id=user.id,
@@ -114,22 +117,22 @@ async def upload_file_endpoint(
             if os.path.exists(temp_path):
                 os.remove(temp_path)
 
-    background_tasks.add_task(_run_ingest)
+    background_tasks.add_task(_run_upload)
     return {"status": "queued", "filename": filename, "message": "Upload received. Processing in background."}
 
 
 @router.get("/kb/sources")
 async def get_kb_sources_endpoint(all_users: bool = False, user: UserProfile = Depends(get_current_user)):
     """Lists knowledge base documents available to the user."""
-    import uuid
     try:
         is_admin = user.role in ("superadmin", "admin")
         show_all = all_users and is_admin
-        t_uuid = uuid.UUID(user.tenant_id)
+        t_uuid = uuid.UUID(user.tenant_id) if user.tenant_id else None
 
         async with get_db_session() as session:
             stmt = (
                 select(Document)
+                .options(selectinload(Document.chunks))
                 .join(KnowledgeBase, Document.knowledge_base_id == KnowledgeBase.id)
                 .where(KnowledgeBase.tenant_id == t_uuid)
                 .order_by(Document.created_at.desc())
@@ -138,145 +141,266 @@ async def get_kb_sources_endpoint(all_users: bool = False, user: UserProfile = D
                 stmt = stmt.where(or_(Document.uploaded_by == user.id, Document.is_shared == True))
 
             docs = (await session.execute(stmt)).scalars().all()
-            if not docs:
-                return {"total_chunks": 0, "total_sources": 0, "sources": []}
-
             sources_list = []
-            total_chunks = 0
+            for d in docs:
+                display_name = d.filename
+                if not display_name or display_name.startswith("tmp"):
+                    if d.source_url:
+                        display_name = d.source_url
+                    elif d.chunks and d.chunks[0].content:
+                        # Extract first meaningful line
+                        first_line = d.chunks[0].content.strip().split("\n")[0][:60]
+                        display_name = first_line or "Document Passage"
+                    else:
+                        display_name = "Indexed Document"
 
-            for doc in docs:
-                chunk_cnt_stmt = select(func.count(DocumentChunk.id)).where(DocumentChunk.document_id == doc.id)
-                c_count = (await session.execute(chunk_cnt_stmt)).scalar() or 0
-                total_chunks += c_count
-
-                sample_stmt = select(DocumentChunk.content).where(DocumentChunk.document_id == doc.id).limit(1)
-                sample = (await session.execute(sample_stmt)).scalar() or ""
-
-                raw_src = doc.filename or doc.source_url or "Unknown Source"
-                name = Path(raw_src).name if ("/" in raw_src or "\\" in raw_src) else raw_src
+                sample_text = ""
+                if d.chunks and d.chunks[0].content:
+                    sample_text = d.chunks[0].content.strip()[:180]
 
                 sources_list.append({
-                    "id": str(doc.id),
-                    "source": raw_src,
-                    "name": name,
-                    "type": doc.source_type or "document",
-                    "h1": name,
-                    "user_id": doc.uploaded_by or "shared",
-                    "is_shared": doc.is_shared,
-                    "tenant_id": str(t_uuid),
-                    "chunk_count": c_count,
-                    "sample": sample[:180],
-                    "ids": [str(doc.id)]
+                    "id": str(d.id),
+                    "name": display_name,
+                    "filename": d.filename or display_name,
+                    "source": d.filename or display_name,
+                    "type": d.source_type or "file",
+                    "source_type": d.source_type or "file",
+                    "source_url": d.source_url or "",
+                    "is_shared": d.is_shared,
+                    "chunk_count": len(d.chunks) if d.chunks else 0,
+                    "sample": sample_text,
+                    "created_at": d.created_at.isoformat() if d.created_at else None,
+                    "uploaded_by": d.uploaded_by,
                 })
 
             return {
-                "total_chunks": total_chunks,
+                "sources": sources_list,
                 "total_sources": len(sources_list),
-                "sources": sources_list
+                "total_chunks": sum(s["chunk_count"] for s in sources_list),
             }
     except Exception as e:
-        logger.error(f"Failed to get KB sources: {e}")
-        return {"total_chunks": 0, "total_sources": 0, "sources": [], "error": str(e)}
+        logger.error(f"Error fetching KB sources: {e}")
+        return {"sources": [], "total_sources": 0, "total_chunks": 0}
 
 
-@router.post("/kb/delete")
-async def delete_kb_source_endpoint(req: DeleteKBRequest, user: UserProfile = Depends(get_current_user)):
-    """Deletes specific documents from the knowledge base."""
+@router.get("/documents/content")
+async def get_document_content_endpoint(
+    source: str = Query(..., description="Filename or source identifier"),
+    doc_id: str | None = Query(None, description="Optional document UUID"),
+    user: UserProfile = Depends(get_current_user),
+):
+    """
+    Fetches the full text and chunk structure of an indexed document for the Document Preview viewer.
+    """
     try:
-        is_admin = user.role == "admin"
-
+        t_uuid = uuid.UUID(user.tenant_id) if user.tenant_id else None
         async with get_db_session() as session:
-            if req.ids:
-                import uuid
-                doc_uuids = []
-                for i in req.ids:
-                    try:
-                        doc_uuids.append(uuid.UUID(i))
-                    except Exception:
-                        pass
-                if doc_uuids:
-                    stmt = delete(Document).where(Document.id.in_(doc_uuids))
-                    if not is_admin:
-                        stmt = stmt.where(or_(Document.uploaded_by == user.id, Document.uploaded_by.is_(None)))
-                    await session.execute(stmt)
-
-            elif req.source:
-                stmt = delete(Document).where(Document.filename == req.source)
-                if not is_admin:
-                    stmt = stmt.where(or_(Document.uploaded_by == user.id, Document.uploaded_by.is_(None)))
-                await session.execute(stmt)
-
+            stmt = (
+                select(Document)
+                .join(KnowledgeBase, Document.knowledge_base_id == KnowledgeBase.id)
+                .where(KnowledgeBase.tenant_id == t_uuid)
+            )
+            if doc_id:
                 try:
-                    from glossary import remove_source_from_glossary
-                    remove_source_from_glossary(req.source, user_id=None if is_admin else user.id)
-                except Exception as ge:
-                    logger.warning(f"Error removing source from glossary: {ge}")
+                    stmt = stmt.where(Document.id == uuid.UUID(doc_id))
+                except Exception:
+                    stmt = stmt.where(Document.filename == source)
             else:
-                raise HTTPException(status_code=400, detail="Must provide 'source' or 'ids'")
+                stmt = stmt.where(or_(Document.filename == source, Document.source_url == source))
 
-            rem_stmt = select(func.count(DocumentChunk.id))
-            remaining_chunks = (await session.execute(rem_stmt)).scalar() or 0
-            return {"status": "deleted", "remaining_chunks": remaining_chunks}
+            if user.role not in ("superadmin", "admin"):
+                stmt = stmt.where(or_(Document.uploaded_by == user.id, Document.is_shared == True))
+
+            doc = (await session.execute(stmt)).scalars().first()
+            if not doc:
+                raise HTTPException(status_code=404, detail="Document not found or access restricted.")
+
+            chunks_stmt = (
+                select(DocumentChunk)
+                .where(DocumentChunk.document_id == doc.id)
+                .order_by(DocumentChunk.chunk_index.asc())
+            )
+            chunks = (await session.execute(chunks_stmt)).scalars().all()
+
+            assembled_text = "\n\n".join(c.content for c in chunks)
+            return {
+                "id": str(doc.id),
+                "filename": doc.filename,
+                "source_type": doc.source_type,
+                "source_url": doc.source_url,
+                "is_shared": doc.is_shared,
+                "chunk_count": len(chunks),
+                "full_text": assembled_text,
+                "chunks": [
+                    {
+                        "id": str(c.id),
+                        "index": c.chunk_index,
+                        "text": c.content,
+                        "metadata": c.metadata_json or {},
+                    }
+                    for c in chunks
+                ]
+            }
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error in delete_kb_source: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Error fetching document content for '{source}': {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to load document content: {str(e)}")
+
+
+@router.post("/kb/delete")
+@router.delete("/kb/delete")
+@router.delete("/kb/source")
+@router.delete("/kb/documents/{doc_id}")
+async def delete_kb_source_endpoint(
+    req: DeleteKBRequest = Body(default=None),
+    source: str | None = None,
+    doc_id: str | None = None,
+    user: UserProfile = Depends(get_current_user),
+):
+    """Deletes a specific source file or chunks by source name, ID, or body payload."""
+    target_source = (req.source if req else None) or source
+    target_ids = (req.ids if req else None) or ([doc_id] if doc_id else None)
+
+    if not target_source and not target_ids:
+        raise HTTPException(status_code=400, detail="Must provide either 'source' or 'ids'.")
+
+    try:
+        t_uuid = uuid.UUID(user.tenant_id) if user.tenant_id else None
+        async with get_db_session() as session:
+            stmt = (
+                select(Document)
+                .join(KnowledgeBase, Document.knowledge_base_id == KnowledgeBase.id)
+                .where(KnowledgeBase.tenant_id == t_uuid)
+            )
+            if target_source:
+                try:
+                    src_uuid = uuid.UUID(target_source)
+                    stmt = stmt.where(
+                        or_(
+                            Document.id == src_uuid,
+                            Document.filename == target_source,
+                            Document.source_url == target_source,
+                        )
+                    )
+                except Exception:
+                    stmt = stmt.where(
+                        or_(
+                            Document.filename == target_source,
+                            Document.source_url == target_source,
+                        )
+                    )
+            if target_ids:
+                parsed_uuids = []
+                str_names = []
+                for i in target_ids:
+                    try:
+                        parsed_uuids.append(uuid.UUID(str(i)))
+                    except Exception:
+                        str_names.append(str(i))
+                clauses = []
+                if parsed_uuids:
+                    clauses.append(Document.id.in_(parsed_uuids))
+                if str_names:
+                    clauses.append(Document.filename.in_(str_names))
+                    clauses.append(Document.source_url.in_(str_names))
+                if clauses:
+                    stmt = stmt.where(or_(*clauses))
+
+            if user.role not in ("superadmin", "admin"):
+                stmt = stmt.where(Document.uploaded_by == user.id)
+
+            docs_to_delete = (await session.execute(stmt)).scalars().all()
+            for doc in docs_to_delete:
+                await session.delete(doc)
+            await session.commit()
+
+        return {
+            "status": "success",
+            "message": f"Successfully removed {len(docs_to_delete)} document(s).",
+            "deleted_count": len(docs_to_delete),
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error deleting KB source: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to delete source: {str(e)}")
 
 
 @router.post("/kb/clear")
-async def clear_kb_endpoint(user: UserProfile = Depends(get_current_user)):
-    """Clears all knowledge base documents for the user or organization."""
-    try:
-        is_admin = user.role == "admin"
-        async with get_db_session() as session:
-            if is_admin:
-                await session.execute(delete(Document))
-            else:
-                await session.execute(delete(Document).where(Document.uploaded_by == user.id))
-    except Exception as e:
-        logger.error(f"Error in clear_kb: {e}")
-
-    try:
-        from glossary import clear_glossary
-        clear_glossary(user_id=None if user.role == "admin" else user.id)
-    except Exception as ge:
-        logger.warning(f"Error clearing glossary: {ge}")
-
-    from main import clear_suggestions_cache
-    clear_suggestions_cache()
-    if os.path.exists("suggestions.json"):
-        try:
-            os.remove("suggestions.json")
-        except Exception:
-            pass
-
-    return {"status": "cleared", "remaining_chunks": 0}
-
-
-@router.patch("/kb/documents/{document_id}/share")
-async def toggle_document_sharing_endpoint(
-    document_id: str,
-    req: ShareDocumentRequest,
-    user: UserProfile = Depends(get_current_user)
+@router.delete("/kb/clear")
+async def clear_kb_endpoint(
+    user: UserProfile = Depends(get_current_user),
 ):
-    """Toggles a document between private and organization-shared."""
-    import uuid
+    """Clears all documents and chunks from the user's / organization's knowledge base."""
     try:
-        doc_uuid = uuid.UUID(document_id)
-    except Exception:
-        raise HTTPException(status_code=400, detail="Invalid document UUID.")
+        t_uuid = uuid.UUID(user.tenant_id) if user.tenant_id else None
+        async with get_db_session() as session:
+            stmt = (
+                select(Document)
+                .join(KnowledgeBase, Document.knowledge_base_id == KnowledgeBase.id)
+                .where(KnowledgeBase.tenant_id == t_uuid)
+            )
+            if user.role not in ("superadmin", "admin"):
+                stmt = stmt.where(Document.uploaded_by == user.id)
 
-    is_admin = user.role in ("superadmin", "admin")
-    async with get_db_session() as session:
-        doc = await document_repo.toggle_document_sharing(
-            session=session,
-            doc_id=doc_uuid,
-            is_shared=req.is_shared,
-            user_id=user.id,
-            is_admin=is_admin,
-        )
-        if not doc:
-            raise HTTPException(status_code=404, detail="Document not found or unauthorized.")
-        await session.commit()
-        return {"status": "updated", "document_id": str(doc.id), "is_shared": doc.is_shared}
+            docs_to_delete = (await session.execute(stmt)).scalars().all()
+            for doc in docs_to_delete:
+                await session.delete(doc)
+            await session.commit()
+
+        return {"status": "success", "message": f"Cleared {len(docs_to_delete)} documents from knowledge base."}
+    except Exception as e:
+        logger.error(f"Error clearing knowledge base: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to clear knowledge base: {str(e)}")
+
+
+@router.patch("/kb/documents/{doc_id}/share")
+@router.patch("/kb/source/share")
+async def toggle_document_sharing_endpoint(
+    req: ShareDocumentRequest,
+    doc_id: str | None = None,
+    source: str | None = None,
+    user: UserProfile = Depends(get_current_user),
+):
+    """Toggles whether an uploaded document is shared organization-wide across the tenant."""
+    try:
+        t_uuid = uuid.UUID(user.tenant_id) if user.tenant_id else None
+        async with get_db_session() as session:
+            stmt = (
+                select(Document)
+                .join(KnowledgeBase, Document.knowledge_base_id == KnowledgeBase.id)
+                .where(KnowledgeBase.tenant_id == t_uuid)
+            )
+            if doc_id:
+                try:
+                    stmt = stmt.where(Document.id == uuid.UUID(doc_id))
+                except Exception:
+                    stmt = stmt.where(Document.filename == doc_id)
+            elif source:
+                stmt = stmt.where(Document.filename == source)
+            else:
+                raise HTTPException(status_code=400, detail="Must provide doc_id or source parameter.")
+
+            if user.role not in ("superadmin", "admin"):
+                stmt = stmt.where(Document.uploaded_by == user.id)
+
+            doc = (await session.execute(stmt)).scalars().first()
+            if not doc:
+                raise HTTPException(status_code=404, detail="Document not found or access denied.")
+
+            doc.is_shared = req.is_shared
+            await session.commit()
+
+            return {
+                "status": "success",
+                "id": str(doc.id),
+                "filename": doc.filename,
+                "is_shared": doc.is_shared,
+                "message": f"Document sharing updated to {doc.is_shared}.",
+            }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error updating document sharing: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to update document sharing: {str(e)}")

@@ -206,6 +206,25 @@ async def delete_tenant(
     return True
 
 
+async def bulk_delete_tenants(session: AsyncSession, tenant_ids: list[uuid.UUID]) -> int:
+    """
+    Permanently deletes multiple institutions, cascade deleting all their
+    associated users, knowledge bases, documents, and chunks.
+    Refuses to delete the default system root tenant.
+    """
+    valid_ids = [t_id for t_id in tenant_ids if t_id != DEFAULT_TENANT_ID]
+    if not valid_ids:
+        return 0
+
+    deleted_count = 0
+    for t_id in valid_ids:
+        success = await delete_tenant(session, t_id)
+        if success:
+            deleted_count += 1
+
+    return deleted_count
+
+
 async def get_or_create_tenant_kb(session: AsyncSession, tenant_id: uuid.UUID) -> uuid.UUID:
     """Returns the primary knowledge base ID for a given tenant."""
     res = await session.execute(

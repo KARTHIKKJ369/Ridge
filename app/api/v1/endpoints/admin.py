@@ -341,6 +341,32 @@ async def delete_tenant_endpoint(
         return {"status": "deleted", "tenant_id": tenant_id}
 
 
+class BulkDeleteTenantsRequest(BaseModel):
+    tenant_ids: list[str]
+
+
+@router.post("/admin/tenants/bulk-delete")
+async def bulk_delete_tenants_endpoint(
+    req: BulkDeleteTenantsRequest,
+    user: UserProfile = Depends(require_superadmin)
+):
+    """Permanently deletes multiple institutions and cascades deletion to all their users and knowledge bases."""
+    t_uuids = []
+    for t_id in req.tenant_ids:
+        try:
+            t_uuids.append(uuid.UUID(t_id))
+        except Exception:
+            continue
+
+    if not t_uuids:
+        return {"status": "completed", "deleted_count": 0}
+
+    async with get_db_session() as session:
+        deleted_count = await tenant_repo.bulk_delete_tenants(session, t_uuids)
+        await session.commit()
+        return {"status": "completed", "deleted_count": deleted_count}
+
+
 # ---------------------------------------------------------------------------
 # Admin Feedback Oversight
 # ---------------------------------------------------------------------------

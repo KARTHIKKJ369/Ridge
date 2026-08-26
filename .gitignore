@@ -9,6 +9,9 @@ __pycache__/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+.coverage
+htmlcov/
+coverage.xml
 
 # ==============================================================================
 # Virtual Environments & Package Managers
@@ -19,6 +22,9 @@ env/
 ENV/
 env.bak/
 venv.bak/
+build/
+dist/
+*.egg-info/
 
 # ==============================================================================
 # Environment Secrets & Local Configs
@@ -73,6 +79,10 @@ frontend/node_modules/
 frontend/.vite/
 frontend/dist/
 dist/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
 
 # ==============================================================================
 # Operating System & IDE Artifacts
@@ -90,9 +100,13 @@ Thumbs.db
 *.sublime-workspace
 
 # ==============================================================================
-# Runtime Logs, PIDs & Temp Files
+# Runtime Logs, PIDs, Temp Files & Scratch
 # ==============================================================================
 *.log
 *.tmp
 logs/
 .ridge.pids
+scratch/
+.user_uploaded/
+.system_generated/
+

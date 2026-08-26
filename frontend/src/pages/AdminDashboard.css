@@ -1124,6 +1124,17 @@
   box-shadow: var(--shadow-md);
 }
 
+.institution-card.institution-card-selected {
+  border-color: var(--recall-accent) !important;
+  background: var(--recall-accent-subtle) !important;
+  box-shadow: 0 0 0 2px var(--recall-accent), 0 4px 12px rgba(13, 148, 136, 0.15) !important;
+}
+
+.inst-select-box:hover {
+  border-color: var(--recall-accent) !important;
+  transform: scale(1.08);
+}
+
 .inst-card-top {
   display: flex;
   align-items: flex-start;

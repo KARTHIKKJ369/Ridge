@@ -2,15 +2,18 @@
 Streaming Chat & Corrective RAG Orchestration Endpoints
 =======================================================
 Executes the LangGraph state machine with pgvector semantic cache lookup,
-token streaming, node trace events, persistent message recording, and citations.
+token streaming, node trace events, persistent message recording,
+authoritative citations mapping, and bidirectional WebSocket streaming.
 """
 import os
 import json
 import time
 import re
+import uuid
 import logging
-from typing import AsyncGenerator
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+import asyncio
+from typing import AsyncGenerator, Optional
+from fastapi import APIRouter, Depends, HTTPException, Request, WebSocket, WebSocketDisconnect, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from slowapi import Limiter
@@ -19,9 +22,10 @@ from slowapi.util import get_remote_address
 limiter = Limiter(key_func=get_remote_address)
 
 from main import get_app
-from auth import get_current_user, check_and_increment_user_usage, UserProfile
+from auth import get_current_user, check_and_increment_user_usage, UserProfile, decode_access_token
 from app.db.database import get_db_session, is_postgres_configured
-from app.db.repositories import conversation_repo, cache_repo, retrieval_repo
+from app.db.repositories import conversation_repo, cache_repo, retrieval_repo, user_repo
+from app.graph.observability import get_langfuse_handler, flush_langfuse
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["Chat"])
@@ -34,6 +38,50 @@ class ChatRequest(BaseModel):
     web_search_enabled: bool = True
     source_filter: str | None = None
     conversation_id: str | None = None
+
+
+def compute_authoritative_citations(
+    clean_final_answer: str,
+    last_doc_grades: list[dict],
+) -> list[dict]:
+    """
+    Computes an authoritative list of grounded citation badges referenced in the synthesized answer.
+    """
+    cited_nums = [int(n) for n in re.findall(r"\[(\d+)\]", clean_final_answer)]
+    cited_indices = set(cited_nums)
+
+    relevant_grades = [g for g in last_doc_grades if g.get("score") == "yes"]
+    if not relevant_grades:
+        relevant_grades = last_doc_grades
+
+    authoritative = []
+    for idx in sorted(cited_indices):
+        if 1 <= idx <= len(relevant_grades):
+            g = relevant_grades[idx - 1]
+            authoritative.append({
+                "index": idx,
+                "source": g.get("source", f"Source [{idx}]"),
+                "breadcrumb": g.get("breadcrumb", ""),
+                "score": g.get("score", "yes"),
+                "rationale": g.get("rationale", "Verified by CRAG grading pipeline"),
+                "text": g.get("text", ""),
+                "relevance": float(g.get("relevance", 0.95)),
+                "chunk_id": g.get("chunk_id", ""),
+            })
+        elif 1 <= idx <= len(last_doc_grades):
+            g = last_doc_grades[idx - 1]
+            authoritative.append({
+                "index": idx,
+                "source": g.get("source", f"Source [{idx}]"),
+                "breadcrumb": g.get("breadcrumb", ""),
+                "score": g.get("score", "yes"),
+                "rationale": g.get("rationale", ""),
+                "text": g.get("text", ""),
+                "relevance": float(g.get("relevance", 0.85)),
+                "chunk_id": g.get("chunk_id", ""),
+            })
+
+    return authoritative
 
 
 async def generate_chat_events(
@@ -50,7 +98,6 @@ async def generate_chat_events(
     # ── Persistent Conversation & User Message Initialization ────────────────
     if is_postgres_configured():
         try:
-            import uuid
             t_uuid = uuid.UUID(user.tenant_id) if user.tenant_id else None
             async with get_db_session() as session:
                 if not db_conv_id:
@@ -91,7 +138,6 @@ async def generate_chat_events(
         q_emb = embedder.embed_query(question)
         cached = None
 
-        # Semantic cache: pgvector HNSW only (thread-safe, O(log N) ANN search)
         if is_postgres_configured():
             try:
                 async with get_db_session() as session:
@@ -118,26 +164,30 @@ async def generate_chat_events(
                 "breakdown": {
                     "grader_consensus": 100.0,
                     "source_trust": "Semantic Vector Cache (Verified)",
-                    "relevant_chunks": 4,
+                    "relevant_chunks": 1,
                     "reformulation_loops": 0,
                     "faithfulness": "Verified Cache Hit"
                 }
             }
             conflict_data = cached.get("conflict_data") or {"detected": False, "summary": "", "sources": []}
-
             final_trace = {
                 "type": "trace",
-                "node": "generate_node",
-                "message": "Loaded verified answer from Semantic Cache",
-                "answer": ans,
+                "node": "cache_hit_node",
+                "message": f"Verified match from semantic vector cache ({match_pct}%)",
+                "latency_ms": 2,
                 "confidence": conf,
                 "conflict_data": conflict_data,
-                "latency_ms": 2
+                "answer": ans,
             }
             yield f"data: {json.dumps(final_trace)}\n\n"
 
-            # Persist Cached Assistant Message
-            if is_postgres_configured() and db_conv_id:
+            # Check for citations in cached answer
+            cached_citations = compute_authoritative_citations(ans, [])
+            if cached_citations:
+                yield f"data: {json.dumps({'type': 'citations', 'citations': cached_citations})}\n\n"
+
+            # Persist Cached Message to PostgreSQL
+            if is_postgres_configured() and db_conv_id and ans:
                 try:
                     async with get_db_session() as session:
                         await conversation_repo.add_message(
@@ -145,7 +195,7 @@ async def generate_chat_events(
                             conversation_id=db_conv_id,
                             role="assistant",
                             content=ans,
-                            model="semantic_cache",
+                            model="pgvector-semantic-cache",
                             status="completed",
                             latency_ms=2,
                             metadata_json={
@@ -185,14 +235,37 @@ async def generate_chat_events(
         last_doc_grades = []
         rewritten_query_str = ""
 
-        async for event in rag_app.astream_events(initial_state, version="v2"):
+        # Langfuse tracing handler
+        lf_handler = get_langfuse_handler()
+        stream_config = {}
+        if lf_handler:
+            stream_config["callbacks"] = [lf_handler]
+
+        async for event in rag_app.astream_events(initial_state, version="v2", config=stream_config if stream_config else None):
             kind = event.get("event")
 
-            # 1. Live token-by-token streaming from ChatGroq exclusively during synthesis
+            # 1. Live token streaming from Chat LLM during generation
             tags = event.get("tags") or []
             if kind == "on_chat_model_stream" and "generation_stream" in tags:
                 chunk = event.get("data", {}).get("chunk")
-                content = chunk.content if hasattr(chunk, "content") else str(chunk)
+                raw_c = chunk.content if hasattr(chunk, "content") else chunk
+                if isinstance(raw_c, list):
+                    parts = []
+                    for p in raw_c:
+                        if isinstance(p, str):
+                            parts.append(p)
+                        elif isinstance(p, dict) and "text" in p:
+                            parts.append(str(p["text"]))
+                        elif hasattr(p, "text"):
+                            parts.append(str(p.text))
+                        else:
+                            parts.append(str(p))
+                    content = "".join(parts)
+                elif not isinstance(raw_c, str):
+                    content = str(raw_c) if raw_c is not None else ""
+                else:
+                    content = raw_c
+
                 if content:
                     accumulated_answer += content
                     yield f"data: {json.dumps({'type': 'token', 'token': content})}\n\n"
@@ -258,6 +331,10 @@ async def generate_chat_events(
 
                 elif curr_node == "generate_node":
                     gen = output.get("generation", "")
+                    if isinstance(gen, list):
+                        gen = "".join(str(p) for p in gen)
+                    elif not isinstance(gen, str):
+                        gen = str(gen) if gen is not None else ""
                     if gen and not accumulated_answer:
                         accumulated_answer = gen
                     conf = output.get("confidence", {})
@@ -287,6 +364,11 @@ async def generate_chat_events(
         total_latency = int((time.time() - t_start) * 1000)
         clean_final_answer = re.sub(r'^\s*\{[\s\S]*?"summary":\s*"[^"]*"\s*\}\s*', '', accumulated_answer).strip()
 
+        # ── 3. Authoritative Citation Mapping Event ────────────────────────────
+        authoritative_cits = compute_authoritative_citations(clean_final_answer, last_doc_grades)
+        if authoritative_cits:
+            yield f"data: {json.dumps({'type': 'citations', 'citations': authoritative_cits})}\n\n"
+
         # ── Persist Assistant Message, Citations & Observability to PostgreSQL ─
         if is_postgres_configured() and db_conv_id and clean_final_answer:
             try:
@@ -304,22 +386,23 @@ async def generate_chat_events(
                             "traces": captured_traces,
                             "confidence": last_confidence,
                             "conflict_data": last_conflict,
+                            "citations": authoritative_cits,
                         },
                     )
 
                     # 2. Add Structured Citations
-                    relevant_grades = [g for g in last_doc_grades if g.get("score") == "yes"]
-                    for idx, g in enumerate(relevant_grades, start=1):
+                    for c in authoritative_cits:
                         await conversation_repo.add_citation(
                             session=session,
                             message_id=ast_msg.id,
-                            citation_index=idx,
-                            relevance_score=float(g.get("relevance", 0.9)),
-                            rerank_score=float(g.get("relevance", 0.0)),
-                            quoted_text=str(g.get("text", ""))[:500],
+                            citation_index=c.get("index", 1),
+                            relevance_score=float(c.get("relevance", 0.9)),
+                            rerank_score=float(c.get("relevance", 0.0)),
+                            quoted_text=str(c.get("text", ""))[:500],
                         )
 
                     # 3. Log Retrieval Run
+                    relevant_grades = [g for g in last_doc_grades if g.get("score") == "yes"]
                     await retrieval_repo.log_retrieval_run(
                         session=session,
                         query=question,
@@ -352,7 +435,6 @@ async def generate_chat_events(
                 emb = get_embeddings()
                 q_vec = emb.embed_query(question)
 
-                # 1. Store in pgvector cache
                 if is_postgres_configured():
                     async def _async_store_pg_cache():
                         async with get_db_session() as session:
@@ -365,7 +447,6 @@ async def generate_chat_events(
                                 query_vector=q_vec,
                                 source_filter=source_filter,
                             )
-                    import asyncio
                     asyncio.create_task(_async_store_pg_cache())
 
             except Exception as cache_store_err:
@@ -374,6 +455,8 @@ async def generate_chat_events(
     except Exception as e:
         logger.error(f"Error during streaming: {e}")
         yield f"data: {json.dumps({'error': str(e)})}\n\n"
+    finally:
+        flush_langfuse()
 
     yield "data: [DONE]\n\n"
 
@@ -393,3 +476,98 @@ async def ask_question_endpoint(request: Request, req: ChatRequest, user: UserPr
         generate_chat_events(req.question, user, req.web_search_enabled, req.source_filter, req.conversation_id),
         media_type="text/event-stream"
     )
+
+
+@router.websocket("/ws/chat")
+@router.websocket("/ws/ask")
+async def websocket_chat_endpoint(websocket: WebSocket):
+    """
+    Bidirectional WebSocket endpoint for real-time chat streaming, live traces,
+    authoritative citations, and generation cancellation signals.
+    """
+    await websocket.accept()
+    try:
+        while True:
+            data = await websocket.receive_text()
+            try:
+                payload = json.loads(data)
+            except Exception:
+                await websocket.send_json({"error": "Invalid JSON format."})
+                continue
+
+            action = payload.get("action", "ask")
+            if action == "ping":
+                await websocket.send_json({"type": "pong"})
+                continue
+
+            question = payload.get("question", "").strip()
+            if not question:
+                await websocket.send_json({"error": "Question parameter is required."})
+                continue
+
+            # Token authentication from query params or payload
+            token = payload.get("token") or websocket.query_params.get("token")
+            user_profile = None
+            if token:
+                try:
+                    tok_data = decode_access_token(token)
+                    if tok_data:
+                        async with get_db_session() as session:
+                            user_db = await user_repo.get_user_by_id(session, tok_data.get("sub", ""))
+                            if user_db:
+                                user_profile = UserProfile(
+                                    id=user_db.id,
+                                    username=user_db.username,
+                                    email=user_db.email,
+                                    name=user_db.name,
+                                    role=user_db.role,
+                                    is_active=user_db.is_active,
+                                    tenant_id=str(user_db.tenant_id) if user_db.tenant_id else None,
+                                    tenant_slug=user_db.tenant.slug if user_db.tenant else None,
+                                    tenant_name=user_db.tenant.name if user_db.tenant else None,
+                                    is_guest=False,
+                                )
+                except Exception as auth_err:
+                    logger.warning(f"WebSocket auth warning: {auth_err}")
+
+            if not user_profile:
+                user_profile = UserProfile(
+                    id="guest",
+                    username="guest",
+                    email="guest@ridge.ai",
+                    name="Guest Climber",
+                    role="guest",
+                    is_active=True,
+                    tenant_id=None,
+                    tenant_slug="public",
+                    tenant_name="Public Ridge",
+                    is_guest=True,
+                )
+
+            web_search_enabled = payload.get("web_search_enabled", True)
+            source_filter = payload.get("source_filter")
+            conversation_id = payload.get("conversation_id")
+
+            # Stream events over WebSocket
+            async for raw_sse in generate_chat_events(
+                question=question,
+                user=user_profile,
+                web_search_enabled=web_search_enabled,
+                source_filter=source_filter,
+                conversation_id=conversation_id,
+            ):
+                if raw_sse.startswith("data: "):
+                    content = raw_sse[6:].strip()
+                    if content == "[DONE]":
+                        await websocket.send_json({"type": "done"})
+                    else:
+                        try:
+                            ev_json = json.loads(content)
+                            await websocket.send_json(ev_json)
+                        except Exception:
+                            await websocket.send_text(content)
+
+    except WebSocketDisconnect:
+        logger.info("WebSocket client disconnected.")
+    except Exception as ws_err:
+        logger.error(f"WebSocket session error: {ws_err}")

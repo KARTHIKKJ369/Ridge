@@ -5,12 +5,13 @@
 ![Python](https://img.shields.io/badge/Python-3.11+-3776AB?style=for-the-badge&logo=python&logoColor=white)
 ![PostgreSQL](https://img.shields.io/badge/Database-PostgreSQL_16_·_pgvector-4169E1?style=for-the-badge&logo=postgresql&logoColor=white)
 ![LangGraph](https://img.shields.io/badge/Orchestration-LangGraph-FF6B6B?style=for-the-badge)
-![Groq](https://img.shields.io/badge/LLM_Engine-Groq_LPU-F55036?style=for-the-badge)
+![LLM Engines](https://img.shields.io/badge/LLM_Engines-Groq_LPU_·_Google_Gemini-F55036?style=for-the-badge)
 ![FastAPI](https://img.shields.io/badge/Backend-FastAPI-009688?style=for-the-badge&logo=fastapi&logoColor=white)
-![React](https://img.shields.io/badge/Frontend-React_19_·_Vite_·_React_Router-61DAFB?style=for-the-badge&logo=react&logoColor=black)
+![React](https://img.shields.io/badge/Frontend-React_19_·_Vite_·_TypeScript-61DAFB?style=for-the-badge&logo=react&logoColor=black)
+![Tests](https://img.shields.io/badge/Tests-30%2F30_Passing-brightgreen?style=for-the-badge)
 ![License](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)
 
-**Ridge** is an industrial-grade, multi-tenant Corrective Retrieval-Augmented Generation (CRAG) platform. It transforms complex technical documents, financial 10-Ks, slide decks, spreadsheets, codebases, and web sources into an audited, hallucination-resistant LangGraph state machine backed by **PostgreSQL as the primary system of record**, **pgvector for dense HNSW retrieval**, native full-text lexical search, SQL Reciprocal Rank Fusion, layout-aware AST document intelligence, Anthropic-style contextual retrieval, and real-time observability.
+**Ridge** is an industrial-grade, multi-tenant Corrective Retrieval-Augmented Generation (CRAG) platform. It transforms complex technical documents, financial 10-Ks, slide decks, spreadsheets, codebases, and web sources into an audited, hallucination-resistant LangGraph state machine backed by **PostgreSQL as the primary system of record**, **pgvector for dense HNSW retrieval**, native full-text lexical search, SQL Reciprocal Rank Fusion, layout-aware AST document intelligence, Anthropic-style contextual retrieval, sub-second multi-LLM orchestration (Groq LPU + Google Gemini), and real-time observability.
 
 </div>
 
@@ -106,30 +107,36 @@ flowchart TD
 
 ---
 
-### 9. 🏛️ Multi-Tenant Enterprise Isolation & Document Sharing
+### 9. ⚡ Multi-Provider LLM Engine & Sub-Second Execution
+* **Groq LPU Engine (Default)**:
+  * **Generation Tier**: `openai/gpt-oss-120b` (Flagship 120B parameter model delivering sub-second grounded answers at 400+ tokens/sec).
+  * **Auxiliary & Fast Tier**: `openai/gpt-oss-20b` (Sub-300ms evaluation for grading, decomposition, rewriting, and hallucination audits).
+* **Google Gemini 3.5 & 3.7 Tier**:
+  * **Generation**: `gemini-3.5-flash` with automatic failover to `gemini-3.5-flash-lite` (15 RPM tier) on rate limits.
+  * **Fast Auxiliary**: `gemini-3.5-flash-lite` for high-frequency pipeline operations.
+* **Zero Prompt Bleed**: Structured `SystemMessage` and `HumanMessage` isolation ensures system rules never leak into generated answers.
+
+---
+
+### 10. 🏛️ Multi-Tenant Enterprise Isolation & Document Sharing
 * **Institutional Boundaries**: Strict tenant-scoped data isolation across PostgreSQL tables and pgvector embedding spaces.
-* **Public vs Private Knowledge**: Climbers can ingest documents privately or share them with their entire enterprise with a 1-click toggle.
-* **Institution Provisioning**: Multi-tier registration allowing institutions to be registered with customized climber quotas and slug codes.
+* **Role-Based Access Control (RBAC)**: Supports `superadmin`, `admin`, `climber`, and `guest` roles with cascading tenant and user deletion.
+* **Public vs Private Knowledge**: Users can ingest documents privately or share them with their entire enterprise with a 1-click toggle.
+* **Batch Operations**: Multi-select management for users, institutions, and documents with instant vector store synchronization.
 
 ---
 
-### 10. 📊 Dedicated Enterprise Admin Portal (`/admin`)
-* **Executive Analytics & System Usage**: Real-time KPI cards (Climbers, Inferences Today, Chunks, Storage Footprint in MB), 7-day query volume trend bar charts, and top active climbers leaderboard.
-* **Climber Roster & Quota Management**: Full user roster with multi-select checkboxes, batch account deletion, daily inference quota configuration, and role promotion.
-* **Knowledge & Document Management**: Searchable repository of all enterprise documents with file size formatting, chunk counts, sharing status toggle, and batch vector purge.
-* **Feedback & Accuracy Inquiry Lifecycle**: Review climber-submitted accuracy reports, bug tickets, and feature requests. Admins can update statuses (`Open`, `In Review`, `Resolved`) and attach resolution notes directly visible to users.
-
----
-
-### 11. 📖 Corpus-Aware Domain Glossary & Acronym Engine
-* **Automated Initialism & Entity Extraction**: Scans ingested documents for domain acronyms and full expansions (e.g. `HNSW`, `PEAS`, `CRAG`, `DSU`) with heuristic prefix-stripping and validation.
-* **Dynamic Query Expansion**: Enriches reformulated queries with contextual acronym expansions from the active document corpus during multi-hop retrieval.
+### 11. 📊 Dedicated Enterprise Admin Portal (`/admin`)
+* **Executive Analytics & System Usage**: Real-time KPI cards (Climbers, Inferences Today, Chunks, Storage Footprint in MB), query volume trend charts, and active climbers leaderboard.
+* **Roster & Quota Management**: Full user roster with multi-select checkboxes, batch account deletion, daily inference quota configuration, and role promotion.
+* **Institution Management**: Multi-select batch institution deletion with automatic cascade cleanup of all associated users and documents.
+* **Feedback & Accuracy Inquiry Lifecycle**: Review user-submitted accuracy reports, bug tickets, and feature requests with status tracking (`Open`, `In Review`, `Resolved`).
 
 ---
 
 ### 12. ⚡ Semantic Vector Query Cache (pgvector)
 * **Vector Sub-Millisecond Short-Circuit**: Hashes and embeds incoming queries; if cosine similarity in PostgreSQL `query_cache` is $\ge 0.96$, returns the answer in $<5\text{ms}$.
-* **Persistent Storage**: Verified high-confidence answers ($\text{Score} \ge 60$) are stored asynchronously in PostgreSQL `query_cache`.
+* **Persistent Storage**: Verified high-confidence answers are stored asynchronously in PostgreSQL `query_cache`.
 
 ---
 
@@ -147,7 +154,7 @@ flowchart TD
     
     Grade -->|"Relevant Docs ≥ 1"| ConflictAudit{"Conflict Check<br/>Distinct Sources ≥ 2"}
     ConflictAudit -->|Yes| FlagConflict["Audit Contradictions & Extract Passages"]
-    ConflictAudit -->|No| Generate["Answer Synthesis Node<br/>Groq LPU + Fail-Safe"]
+    ConflictAudit -->|No| Generate["Answer Synthesis Node<br/>Groq LPU / Gemini"]
     FlagConflict --> Generate
     
     Grade -->|"0 Relevant Docs"| RouteCheck{"Loops < Max Loops?"}
@@ -169,7 +176,7 @@ flowchart TD
 * Python 3.11+
 * Node.js 18+ and npm
 * Docker (for PostgreSQL + pgvector)
-* A free [Groq API Key](https://console.groq.com/)
+* A free [Groq API Key](https://console.groq.com/) or [Google AI Studio API Key](https://aistudio.google.com/app/apikey)
 
 ### 2. Start PostgreSQL + pgvector Database
 ```bash
@@ -192,7 +199,7 @@ pip install -r requirements.txt
 
 # Configure environment variables
 cp .env.example .env
-# Edit .env and insert your GROQ_API_KEY
+# Edit .env and insert your GROQ_API_KEY or GOOGLE_API_KEY
 
 # Initialize or verify PostgreSQL schema
 uv run python -c "import asyncio; from app.db.database import init_db; asyncio.run(init_db())"
@@ -209,7 +216,7 @@ cd ..
 ### 5. Running Locally
 ```bash
 # Start backend API (FastAPI + LangGraph + PostgreSQL)
-uvicorn api:app --reload --port 8000
+uv run uvicorn api:app --reload --port 8000
 
 # In a second terminal, start Vite frontend dev server (optional for hot reload)
 cd frontend
@@ -221,7 +228,7 @@ Open **`http://localhost:5173`** (or `http://localhost:8000` for the production 
 
 ## 🧪 Benchmarking & Diagnostics
 
-### Run Full Pytest Regression Suite
+### Run Full Pytest Regression Suite (30/30 Passing)
 ```bash
 uv run pytest -v
 ```
@@ -242,9 +249,13 @@ python eval/evaluate.py
 
 | Variable | Description | Default |
 |---|---|---|
-| `GROQ_API_KEY` | **Required**: Groq Cloud API Key | — |
-| `GROQ_MODEL` | Primary synthesis model | `openai/gpt-oss-120b` |
+| `LLM_PROVIDER` | Active LLM backend (`groq` or `gemini`) | `groq` |
+| `GROQ_API_KEY` | Groq Cloud API Key | — |
+| `GROQ_MODEL` | Primary synthesis model on Groq | `openai/gpt-oss-120b` |
 | `GROQ_FAST_MODEL` | Ultra-fast model for grading & contextualization | `openai/gpt-oss-20b` |
+| `GOOGLE_API_KEY` | Google AI Studio API Key | — |
+| `GEMINI_MODEL` | Primary synthesis model on Google | `gemini-3.5-flash` |
+| `GEMINI_FAST_MODEL` | Fast auxiliary model on Google | `gemini-3.5-flash-lite` |
 | `DATABASE_URL` | PostgreSQL asyncpg connection string | `postgresql+asyncpg://ridge:ridge@localhost:5433/ridge` |
 | `DATABASE_URL_SYNC` | PostgreSQL sync connection string | `postgresql://ridge:ridge@localhost:5433/ridge` |
 | `EMBEDDING_MODEL` | Local HuggingFace sentence transformer | `BAAI/bge-large-en-v1.5` |
@@ -252,8 +263,8 @@ python eval/evaluate.py
 | `ENABLE_CONTEXTUAL_RETRIEVAL` | Toggle Anthropic-style situated chunk context | `true` |
 | `ENABLE_HIERARCHICAL_SUMMARIES` | Toggle document executive summary indexing | `true` |
 | `RETRIEVAL_BACKEND` | Active retrieval engine | `pgvector` |
-| `RETRIEVER_K` | Top documents to keep after FlashRank re-ranking | `4` |
-| `RETRIEVER_FETCH_K` | Candidate chunks fetched per retrieval call | `25` |
+| `RETRIEVER_K` | Top documents to keep after FlashRank re-ranking | `6` |
+| `RETRIEVER_FETCH_K` | Candidate chunks fetched per retrieval call | `60` |
 | `RERANK_MODEL` | FlashRank re-ranking cross-encoder model | `ms-marco-MiniLM-L-12-v2` |
 | `MAX_REWRITE_LOOPS` | Max query reformulation attempts | `1` |
 | `AUTH_ENABLED` | Toggle user authentication and tenant isolation | `true` |
@@ -269,22 +280,25 @@ Ridge/
 ├── api.py                      # FastAPI backend & SSE streaming endpoints
 ├── auth.py                     # JWT authentication, RBAC & multi-tenancy
 ├── rag_ingest.py               # Structure-aware document ingestion orchestrator
-├── parent_store.py             # Small-to-Big parent section store
-├── query_cache.py              # Vector query cache helper
-├── glossary.py                 # Domain acronym & entity glossary engine
 ├── requirements.txt            # Python backend dependencies
 ├── pyproject.toml              # Project metadata & dependencies
 ├── app/
+│   ├── api/                    # Modular FastAPI REST & SSE routers
 │   ├── db/                     # PostgreSQL + pgvector data architecture
 │   │   ├── database.py         # Async engine, session factories & idempotent migrations
 │   │   ├── models/             # SQLAlchemy ORM models (Tenant, User, Document, Chunk, Table, Figure, IngestionRun)
-│   │   └── repositories/       # Isolated data access repositories (feedback, tenant, doc, glossary)
+│   │   └── repositories/       # Data access repositories (tenant, user, doc, feedback, glossary)
 │   ├── document_intelligence/  # Structure-Aware Document Intelligence Engine
 │   │   ├── ast.py              # Unified DocumentAST, PageAST, BlockAST, TableBlock, FigureBlock
 │   │   ├── parser.py           # Multi-format structure parsers (PDF, DOCX, PPTX, XLSX, MD, Web)
 │   │   ├── chunker.py          # StructureAwareChunker (atomic tables, code blocks, figures)
 │   │   ├── dedup.py            # SHA-256 + 64-bit SimHash Deduplicator & Boilerplate Stripper
 │   │   └── summarizer.py       # Hierarchical Document & Section Summarizer
+│   ├── graph/                  # LangGraph CRAG nodes, state, prompts & LLM factory
+│   │   ├── builder.py          # Graph compilation & dynamic conditional routing
+│   │   ├── llm_factory.py      # Unified Groq LPU & Google Gemini multi-tier factory
+│   │   ├── prompts.py          # Structured system prompts & output cleaners
+│   │   └── nodes/              # Individual pipeline node implementations
 │   └── retrieval/              # Industrial-grade hybrid retrieval engine
 │       ├── interface.py        # BaseRetriever & RetrievalCandidate
 │       ├── pgvector_retriever.py # Dense HNSW + FTS + SQL RRF
@@ -296,19 +310,19 @@ Ridge/
 │   ├── evaluate.py             # Automated RAG Triad evaluation harness
 │   ├── gold_dataset.json       # Benchmark ground-truth test cases
 │   └── benchmark_report.md     # Latest benchmark run scorecard
-├── tests/                      # Full automated test suite (29 tests)
+├── tests/                      # Full automated test suite (30/30 passing)
 │   ├── test_db_foundation.py
 │   ├── test_conversations_api.py
 │   ├── test_multi_tenant_isolation.py
 │   ├── test_retrieval_engines.py
 │   └── test_document_intelligence.py
 ├── scripts/                    # Migration, benchmarking & test utilities
-└── frontend/                   # Alpine 2026 React 19 + TypeScript + Vite UI
+└── frontend/                   # React 19 + TypeScript + Vite UI
     ├── src/
     │   ├── App.tsx             # Main application component & state machine
     │   ├── App.css             # Design system tokens & CSS styling
     │   ├── pages/              # Admin Dashboard dedicated full-page router
-    │   └── components/         # FeedbackModal, AuthModal, LangGraphVisualizer, and auxiliary UI
+    │   └── components/         # Modals, Visualizer, Waterfall, and Chat UI
     └── package.json            # Frontend npm dependencies
 ```
 
@@ -316,3 +330,4 @@ Ridge/
 
 ## 📄 License
 MIT License. Built with ❤️ for enterprise-grade, hallucination-resistant research.
+

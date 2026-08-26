@@ -49,7 +49,7 @@ export const getNodeDetails = (nodeName: string): { title: string; desc: string;
     case 'grade_node':
       return { 
         title: 'Relevance Grading', 
-        desc: 'Strict Groq LLM veracity evaluation', 
+        desc: 'Strict LLM veracity evaluation', 
         icon: <ShieldCheck size={13} />, 
         color: 'rust' 
       };
@@ -96,7 +96,8 @@ interface TraceWaterfallProps {
 }
 
 export const TraceWaterfall: React.FC<TraceWaterfallProps> = ({ traces }) => {
-  if (!traces || traces.length === 0) {
+  const validTraces = (traces || []).filter(t => t && t.node && t.node.endsWith('_node'));
+  if (validTraces.length === 0) {
     return (
       <div className="trace-empty-state">
         <Zap size={28} className="text-slate-400 opacity-60" />
@@ -108,7 +109,7 @@ export const TraceWaterfall: React.FC<TraceWaterfallProps> = ({ traces }) => {
 
   return (
     <div className="trace-stepper-list">
-      {traces.map((trace, i) => {
+      {validTraces.map((trace, i) => {
         const nodeInfo = getNodeDetails(trace.node);
         return (
           <div key={i} className="stepper-item">

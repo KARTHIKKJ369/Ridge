@@ -49,19 +49,12 @@ class ContextualRetrievalEngine:
         """Initializes fast LLM using Ridge's existing Groq / LangChain settings."""
         if self._llm is None:
             try:
-                from main import get_settings
-                from langchain_groq import ChatGroq
-
-                settings = get_settings()
-                if settings.get("groq_api_key"):
-                    self._llm = ChatGroq(
-                        api_key=settings["groq_api_key"],
-                        model_name=settings.get("groq_fast_model", "openai/gpt-oss-20b"),
-                        temperature=0.2,
-                        max_tokens=96,
-                        max_retries=1,  # Do not loop in long retries
-                        timeout=5.0,    # Fast failover to deterministic fallback
-                    )
+                from app.graph.llm_factory import create_llm
+                self._llm = create_llm(
+                    temperature=0.2,
+                    max_tokens=96,
+                    is_fast_model=True,
+                )
             except Exception as e:
                 logger.warning(f"Fast LLM initialization note for Contextual Retrieval: {e}")
         return self._llm

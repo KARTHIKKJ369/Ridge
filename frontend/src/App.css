@@ -2556,14 +2556,20 @@ textarea:focus-visible,
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
 }
 
 .grader-badge {
+  flex-shrink: 0;
   font-family: var(--font-mono);
-  font-size: 0.7rem;
+  font-size: 0.68rem;
   font-weight: 700;
-  padding: 2px 6px;
+  padding: 3px 6px;
   border-radius: var(--radius-xs);
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
 }
 
 .grader-badge.pass {
@@ -2577,8 +2583,29 @@ textarea:focus-visible,
 }
 
 .grader-source-name {
-  font-size: 0.78rem;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 0.72rem;
+  font-weight: 500;
   color: var(--recall-text-muted);
+  max-width: 175px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  margin-left: auto;
+  text-align: right;
+}
+
+.grader-source-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.inline-doc-icon {
+  flex-shrink: 0;
+  opacity: 0.6;
 }
 
 .grader-rationale-box {
@@ -6799,7 +6826,538 @@ svg.error-icon {
   transform: translateY(-1px);
 }
 
+/* ==========================================================================
+   Sidebar Conversation Search & Keyboard Shortcut Triggers
+   ========================================================================== */
+.sidebar-search-box {
+  padding: 8px 12px;
+  margin-bottom: 4px;
+}
 
+.sidebar-search-inner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--recall-surface);
+  border: 1px solid var(--recall-border);
+  border-radius: var(--radius-sm, 8px);
+  padding: 6px 10px;
+  transition: all var(--transition-fast);
+}
 
+.sidebar-search-inner:focus-within {
+  border-color: var(--recall-accent);
+  box-shadow: 0 0 0 2px var(--recall-accent-subtle);
+}
 
+.sidebar-search-icon {
+  color: var(--recall-text-muted);
+  flex-shrink: 0;
+}
+
+.sidebar-search-input {
+  flex: 1;
+  background: transparent;
+  border: none;
+  outline: none;
+  font-size: 0.8rem;
+  color: var(--recall-text-primary);
+  font-family: inherit;
+  width: 100%;
+}
+
+.sidebar-search-input::placeholder {
+  color: var(--recall-text-muted);
+  opacity: 0.7;
+}
+
+.sidebar-search-kbd {
+  font-size: 0.68rem;
+  font-family: var(--font-mono);
+  background: var(--recall-surface-hover);
+  border: 1px solid var(--recall-border);
+  padding: 2px 5px;
+  border-radius: 4px;
+  color: var(--recall-text-muted);
+  line-height: 1;
+}
+
+.sidebar-search-clear {
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--recall-text-muted);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2px;
+  border-radius: 4px;
+}
+
+.sidebar-search-clear:hover {
+  color: var(--recall-text-primary);
+  background: var(--recall-surface-hover);
+}
+
+.sidebar-section-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 12px;
+}
+
+.sidebar-shortcuts-trigger {
+  background: none;
+  border: none;
+  color: var(--recall-text-muted);
+  cursor: pointer;
+  padding: 3px 6px;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  transition: all var(--transition-fast);
+}
+
+.sidebar-shortcuts-trigger:hover {
+  color: var(--recall-accent);
+  background: var(--recall-accent-subtle);
+}
+
+.empty-search-sessions {
+  padding: 20px 12px;
+  text-align: center;
+  font-size: 0.78rem;
+  color: var(--recall-text-muted);
+}
+
+/* ==========================================================================
+   Document Previewer & Source Viewer Modal
+   ========================================================================== */
+.document-viewer-modal-card {
+  max-width: 900px !important;
+  width: 92vw !important;
+  max-height: 88vh !important;
+  display: flex;
+  flex-direction: column;
+}
+
+.doc-viewer-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 20px;
+  border-bottom: 1px solid var(--recall-border);
+  background: var(--recall-surface-elevated);
+  flex-wrap: wrap;
+}
+
+.doc-tab-buttons {
+  display: flex;
+  gap: 6px;
+}
+
+.doc-tab-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: var(--radius-sm, 8px);
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--recall-text-secondary);
+  font-size: 0.78rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.doc-tab-btn.active {
+  background: var(--recall-surface);
+  border-color: var(--recall-border);
+  color: var(--recall-accent);
+  box-shadow: var(--shadow-sm);
+  font-weight: 600;
+}
+
+.doc-viewer-search {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--recall-surface);
+  border: 1px solid var(--recall-border);
+  border-radius: var(--radius-sm, 8px);
+  padding: 4px 10px;
+  width: 240px;
+}
+
+.doc-search-input {
+  background: transparent;
+  border: none;
+  outline: none;
+  font-size: 0.78rem;
+  color: var(--recall-text-primary);
+  width: 100%;
+}
+
+.doc-viewer-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 20px !important;
+}
+
+.doc-reader-container {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.referenced-highlight-banner {
+  background: rgba(217, 119, 6, 0.08);
+  border: 1px solid rgba(217, 119, 6, 0.28);
+  border-radius: var(--radius-sm, 8px);
+  padding: 12px 16px;
+  animation: fadeIn 0.25s ease-out;
+}
+
+.highlight-banner-header {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--crag-grade-medium, #D97706);
+  margin-bottom: 6px;
+}
+
+.highlight-banner-text {
+  font-family: var(--font-sans);
+  font-size: 0.84rem;
+  line-height: 1.6;
+  color: var(--recall-text-primary);
+  white-space: pre-wrap;
+  word-break: break-word;
+  margin: 0;
+}
+
+.doc-reader-text-wrapper {
+  background: var(--recall-surface);
+  border: 1px solid var(--recall-border);
+  border-radius: var(--radius-sm, 8px);
+  padding: 20px;
+}
+
+.doc-full-text-content {
+  font-family: var(--font-sans);
+  font-size: 0.88rem;
+  line-height: 1.7;
+  color: var(--recall-text-primary);
+  white-space: pre-wrap;
+  word-break: break-word;
+  margin: 0;
+}
+
+.doc-chunks-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.doc-chunk-card {
+  background: var(--recall-surface);
+  border: 1px solid var(--recall-border);
+  border-radius: var(--radius-sm, 8px);
+  padding: 14px 16px;
+  transition: all var(--transition-fast);
+  cursor: pointer;
+}
+
+.doc-chunk-card:hover {
+  border-color: var(--recall-border-strong);
+  background: var(--recall-surface-hover);
+}
+
+.doc-chunk-card.active {
+  border-color: var(--recall-accent);
+  box-shadow: 0 0 0 1px var(--recall-accent);
+}
+
+.chunk-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.chunk-index-badge {
+  font-size: 0.72rem;
+  font-weight: 600;
+  background: var(--recall-surface-subtle);
+  color: var(--recall-accent);
+  padding: 2px 8px;
+  border-radius: 4px;
+}
+
+.chunk-copy-btn {
+  background: none;
+  border: none;
+  color: var(--recall-text-muted);
+  cursor: pointer;
+  padding: 4px;
+  border-radius: 4px;
+}
+
+.chunk-copy-btn:hover {
+  color: var(--recall-text-primary);
+  background: var(--recall-surface-hover);
+}
+
+.chunk-card-text {
+  font-size: 0.82rem;
+  line-height: 1.55;
+  color: var(--recall-text-secondary);
+  margin: 0;
+}
+
+.doc-viewer-loading, .doc-viewer-error {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 48px 20px;
+  text-align: center;
+  color: var(--recall-text-muted);
+}
+
+/* ==========================================================================
+   Keyboard Shortcuts Modal
+   ========================================================================== */
+.shortcuts-modal-card {
+  max-width: 580px !important;
+}
+
+.shortcuts-table {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.shortcut-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  background: var(--recall-surface);
+  border: 1px solid var(--recall-border);
+  border-radius: var(--radius-sm, 8px);
+  gap: 14px;
+}
+
+.shortcut-desc {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.shortcut-text {
+  font-size: 0.82rem;
+  font-weight: 500;
+  color: var(--recall-text-primary);
+}
+
+.shortcut-cat-chip {
+  font-size: 0.68rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  background: var(--recall-surface-hover);
+  color: var(--recall-text-muted);
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+
+.shortcut-keys {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.shortcut-kbd {
+  font-family: var(--font-mono);
+  font-size: 0.76rem;
+  font-weight: 600;
+  background: var(--recall-surface-elevated);
+  border: 1px solid var(--recall-border-strong);
+  border-bottom-width: 2px;
+  padding: 3px 7px;
+  border-radius: 5px;
+  color: var(--recall-text-primary);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+}
+
+.shortcut-kbd-inline {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  font-weight: 600;
+  background: var(--recall-surface-hover);
+  border: 1px solid var(--recall-border);
+  padding: 2px 5px;
+  border-radius: 4px;
+}
+
+.kbd-plus {
+  font-size: 0.7rem;
+  color: var(--recall-text-muted);
+}
+
+/* ==========================================================================
+   Document Search Mark Highlights & Controls
+   ========================================================================== */
+.doc-search-mark {
+  background: rgba(245, 158, 11, 0.35);
+  color: inherit;
+  padding: 1px 3px;
+  border-radius: 3px;
+  border: 1px solid rgba(245, 158, 11, 0.5);
+  box-shadow: 0 0 4px rgba(245, 158, 11, 0.3);
+}
+
+.doc-search-mark.current {
+  background: #f59e0b;
+  color: #000000;
+  font-weight: 700;
+  border-color: #d97706;
+  box-shadow: 0 0 8px rgba(245, 158, 11, 0.7);
+}
+
+.doc-viewer-search-wrapper {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.doc-search-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+}
+
+.doc-search-count {
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: var(--recall-text-muted);
+  background: var(--recall-surface-subtle);
+  padding: 2px 6px;
+  border-radius: 4px;
+  white-space: nowrap;
+}
+
+.doc-nav-btn {
+  background: none;
+  border: none;
+  color: var(--recall-text-secondary);
+  cursor: pointer;
+  padding: 3px 5px;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all var(--transition-fast);
+}
+
+.doc-nav-btn:hover:not(:disabled) {
+  background: var(--recall-surface-hover);
+  color: var(--recall-text-primary);
+}
+
+.doc-nav-btn:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+
+.doc-viewer-footer {
+  padding: 12px 20px !important;
+  border-top: 1px solid var(--recall-border);
+  background: var(--recall-surface-elevated);
+}
+
+/* ==========================================================================
+   Super Admin Multi-Institution Selector Bar
+   ========================================================================== */
+.admin-multi-tenant-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  background: var(--recall-surface-subtle);
+  border: 1px solid var(--recall-border);
+  border-radius: var(--radius-sm, 8px);
+  margin-bottom: 12px;
+  flex-wrap: wrap;
+}
+
+.multi-tenant-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--recall-text-secondary);
+}
+
+.multi-tenant-chips-list {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.multi-tenant-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 10px;
+  font-size: 0.76rem;
+  font-weight: 500;
+  border-radius: 6px;
+  background: var(--recall-surface);
+  border: 1px solid var(--recall-border);
+  color: var(--recall-text-secondary);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.multi-tenant-chip:hover {
+  border-color: var(--recall-border-strong);
+  color: var(--recall-text-primary);
+  background: var(--recall-surface-hover);
+}
+
+.multi-tenant-chip.active {
+  background: var(--recall-accent-subtle);
+  border-color: var(--recall-accent);
+  color: var(--recall-accent);
+  font-weight: 600;
+}
+
+.chip-check-icon {
+  color: var(--recall-accent);
+}
+
+.multi-tenant-clear-btn {
+  background: none;
+  border: none;
+  font-size: 0.72rem;
+  color: var(--recall-text-muted);
+  cursor: pointer;
+  padding: 2px 6px;
+  text-decoration: underline;
+}
+
+.multi-tenant-clear-btn:hover {
+  color: var(--recall-text-primary);
+}
 

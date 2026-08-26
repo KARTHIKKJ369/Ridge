@@ -63,3 +63,37 @@ async def test_conversation_lifecycle_api(auth_headers):
         # 6. Delete conversation
         del_resp = await client.delete(f"/api/conversations/{conv_id}", headers=auth_headers)
         assert del_resp.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_document_content_preview_api(auth_headers):
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        # Ingest a test document
+        ingest_res = await client.post(
+            "/ingest",
+            json={"text_or_url": "Deep Learning Architecture for Ridge RAG State Machines.", "is_shared": True},
+            headers=auth_headers,
+        )
+        assert ingest_res.status_code == 200
+
+        # Query document content
+        content_res = await client.get(
+            "/api/v1/documents/content?source=Deep Learning Architecture for Ridge RAG State Machines.",
+            headers=auth_headers,
+        )
+        assert content_res.status_code == 200
+        data = content_res.json()
+        assert "full_text" in data
+        assert "chunks" in data
+        assert "Deep Learning" in data["full_text"]
+
+
+@pytest.mark.asyncio
+async def test_websocket_chat_ping():
+    from starlette.testclient import TestClient
+    with TestClient(app) as client:
+        with client.websocket_connect("/ws/chat") as websocket:
+            websocket.send_json({"action": "ping"})
+            data = websocket.receive_json()
+            assert data == {"type": "pong"}

@@ -2,19 +2,25 @@
 # Ridge: Core Agentic RAG & Graph Orchestration
 # ------------------------------------------------------------------------------
 langgraph>=1.2.11
+langchain>=0.3.0
 langchain-core>=0.3.0
 langchain-community>=0.4.2
 langchain-groq>=1.1.3
+groq>=0.37.1
+langchain-google-genai>=2.0.0
+google-genai>=2.20.0
 langchain-huggingface>=1.2.2
 langchain-text-splitters>=1.1.2
+langfuse>=2.0.0
 pydantic>=2.10.0
+pydantic-settings>=2.0.0
 
 # ------------------------------------------------------------------------------
 # Vector Embeddings, Re-Ranking, & Vector Store
 # ------------------------------------------------------------------------------
 sentence-transformers>=5.7.0
 flashrank>=0.2.10
-
+rank-bm25>=0.2.2
 
 # ------------------------------------------------------------------------------
 # Web Search & Scraper Tools
@@ -40,13 +46,14 @@ youtube-transcript-api>=1.2.4
 rapidocr-onnxruntime>=1.4.4
 
 # ------------------------------------------------------------------------------
-# Backend API, Authentication & Session Security
+# Backend API, Authentication, Security & Rate Limiting
 # ------------------------------------------------------------------------------
 fastapi>=0.141.1
 uvicorn[standard]>=0.52.3
 python-multipart>=0.0.32
 python-dotenv>=1.2.2
 pyjwt[crypto]>=2.8.0
+slowapi>=0.1.10
 typing-extensions>=4.16.0
 
 # ------------------------------------------------------------------------------
@@ -57,3 +64,9 @@ asyncpg>=0.30.0
 psycopg2-binary>=2.9.0
 alembic>=1.14.0
 pgvector>=0.3.0
+
+# ------------------------------------------------------------------------------
+# Testing & Quality Assurance
+# ------------------------------------------------------------------------------
+pytest>=9.0.0
+pytest-asyncio>=1.4.0

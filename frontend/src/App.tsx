@@ -34,8 +34,6 @@ import {
   Shield,
   Users,
   Sliders,
-  UserCheck,
-  UserX,
   Crown,
   Edit3,
   Paperclip,
@@ -64,6 +62,8 @@ import {
   NotebookLMSourcesDeck,
   NotebookLMSourceModal,
 } from './components/chat/NotebookLMCitations';
+import { ShortcutsModal } from './components/modals/ShortcutsModal';
+import { DocumentViewerModal } from './components/modals/DocumentViewerModal';
 import './App.css';
 
 
@@ -301,6 +301,7 @@ type AuthConfig = {
 export interface KBSource {
   source: string;
   name: string;
+  filename?: string;
   type: string;
   h1: string;
   chunk_count: number;
@@ -345,14 +346,14 @@ const getNodeDetails = (nodeName: string): { title: string; desc: string; icon: 
     case 'retrieve_node':
       return { 
         title: 'Hybrid Retrieval', 
-        desc: 'Dense Chroma HNSW + Sparse BM25 with RRF & FlashRank', 
+        desc: 'Dense pgvector HNSW + Sparse GIN FTS with RRF & FlashRank', 
         icon: <Search size={13} />, 
         color: 'teal' 
       };
     case 'grade_node':
       return { 
         title: 'Relevance Grading', 
-        desc: 'Strict Groq LLM hallucination and veracity evaluation', 
+        desc: 'Strict LLM veracity and grounding evaluation', 
         icon: <ShieldCheck size={13} />, 
         color: 'rust' 
       };
@@ -428,7 +429,7 @@ const ChatMessageItem = React.memo(({
 }: ChatMessageItemProps) => {
 
   const isAssistant = msg.role === 'assistant';
-  const msgTraces = msg.traces || [];
+  const msgTraces = (msg.traces || []).filter(t => t && t.node && t.node.endsWith('_node'));
   const latestTraceWithGrades = [...msgTraces].reverse().find(t => t.doc_grades && t.doc_grades.length > 0);
   const msgGrades: any[] = latestTraceWithGrades?.doc_grades || [];
   const totalPipelineLatency = msgTraces.reduce((sum, t) => sum + (t.latency_ms || 0), 0);
@@ -1057,6 +1058,8 @@ export default function App() {
   const [isAddUserModalOpen, setIsAddUserModalOpen] = useState(false);
   const [isCreateTenantModalOpen, setIsCreateTenantModalOpen] = useState(false);
   const [adminTenantFilter, setAdminTenantFilter] = useState('');
+  const [adminSelectedTenants, setAdminSelectedTenants] = useState<string[]>([]);
+  const [selectedTenantRowIds, setSelectedTenantRowIds] = useState<string[]>([]);
   const [adminTenantsList, setAdminTenantsList] = useState<TenantItem[]>([]);
   const [newUsername, setNewUsername] = useState('');
   const [newEmail, setNewEmail] = useState('');
@@ -1087,6 +1090,10 @@ export default function App() {
   const [activeArtifactTab, setActiveArtifactTab] = useState<'trace' | 'knowledge' | 'grader'>('trace');
   const [isFeedbackOpen, setIsFeedbackOpen] = useState(false);
   const [feedbackTargetContext, setFeedbackTargetContext] = useState<FeedbackTargetContext | null>(null);
+  const [isShortcutsOpen, setIsShortcutsOpen] = useState(false);
+  const [previewDocument, setPreviewDocument] = useState<{ source: string; highlightText?: string; docId?: string } | null>(null);
+  const [conversationSearchQuery, setConversationSearchQuery] = useState('');
+  const convSearchInputRef = useRef<HTMLInputElement>(null);
 
 
 
@@ -1374,14 +1381,26 @@ export default function App() {
     setTimeout(() => setToast(null), 3500);
   };
 
-  // Keyboard Shortcuts (Command+K for new ascent, Esc to stop/close)
+  // Keyboard Shortcuts (Command+K new chat, Command+/ search, ? cheat-sheet, Esc stop/close)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement;
+      const isInput = target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable);
+
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
         e.preventDefault();
         handleNewChat();
-      }
-      if (e.key === 'Escape') {
+      } else if ((e.metaKey || e.ctrlKey) && e.key === '/') {
+        e.preventDefault();
+        setIsSidebarOpen(true);
+        setTimeout(() => convSearchInputRef.current?.focus(), 60);
+      } else if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === 'l') {
+        e.preventDefault();
+        setTheme(prev => prev === 'stone' ? 'void' : (prev === 'void' ? 'rust' : 'stone'));
+      } else if (e.key === '?' && !isInput && !e.metaKey && !e.ctrlKey && !e.altKey) {
+        e.preventDefault();
+        setIsShortcutsOpen(prev => !prev);
+      } else if (e.key === 'Escape') {
         if (isLoading) {
           handleStopGeneration();
         }
@@ -1389,6 +1408,8 @@ export default function App() {
         setIsExportOpen(false);
         setIsAdminModalOpen(false);
         setSelectedSourceModal(null);
+        setPreviewDocument(null);
+        setIsShortcutsOpen(false);
         if (window.innerWidth < 768) {
           setIsSidebarOpen(false);
           setIsArtifactsOpen(false);
@@ -1528,6 +1549,67 @@ export default function App() {
     } catch (e) {
       showToast('Error updating institution status', 'error');
     }
+  };
+
+  const handleBulkToggleTenantStatus = async (tenantIds: string[], newStatus: boolean) => {
+    if (tenantIds.length === 0) return;
+    try {
+      const promises = tenantIds.map(tId =>
+        fetchWithAuth(`/api/admin/tenants/${tId}/status`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ is_active: newStatus })
+        })
+      );
+      await Promise.all(promises);
+      showToast(`${tenantIds.length} institutions ${newStatus ? 'activated' : 'suspended'}`, 'success');
+      setAdminTenantsList(prev =>
+        prev.map(t => tenantIds.includes(t.id) ? { ...t, is_active: newStatus } : t)
+      );
+      setSelectedTenantRowIds([]);
+    } catch (e) {
+      showToast('Error updating institutions in bulk', 'error');
+    }
+  };
+
+  const handleBulkDeleteTenants = (tenantIds: string[]) => {
+    if (tenantIds.length === 0) return;
+    const nonDefaultIds = tenantIds.filter(id => {
+      const t = adminTenantsList.find(item => item.id === id);
+      return t && t.slug !== 'default';
+    });
+    if (nonDefaultIds.length === 0) {
+      showToast('Cannot delete the primary system root institution.', 'error');
+      return;
+    }
+    setConfirmDialog({
+      open: true,
+      title: `Delete ${nonDefaultIds.length} Institutions & All Members`,
+      message: `Permanently delete ${nonDefaultIds.length} selected institutions and ALL of their associated members/climbers, knowledge bases, documents, and chunks? This operation cannot be undone.`,
+      danger: true,
+      onConfirm: async () => {
+        setConfirmDialog(d => ({ ...d, open: false }));
+        try {
+          const res = await fetchWithAuth('/api/admin/tenants/bulk-delete', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ tenant_ids: nonDefaultIds })
+          });
+          if (res.ok) {
+            const data = await res.json();
+            showToast(`${data.deleted_count || nonDefaultIds.length} institutions and all associated users deleted`, 'success');
+            setAdminTenantsList(prev => prev.filter(t => !nonDefaultIds.includes(t.id)));
+            setSelectedTenantRowIds([]);
+            fetchAdminData();
+          } else {
+            const err = await res.json();
+            showToast(err.detail || 'Failed to delete selected institutions', 'error');
+          }
+        } catch (e) {
+          showToast('Error deleting selected institutions', 'error');
+        }
+      }
+    });
   };
 
   const handleDeleteTenant = (tenantId: string, tenantName: string) => {
@@ -2635,7 +2717,7 @@ export default function App() {
 
   // Last assistant traces for Stepper & Artifacts
   const lastAssistantMessage = messages.filter(m => m.role === 'assistant').pop();
-  const activeTraces = lastAssistantMessage?.traces || [];
+  const activeTraces = (lastAssistantMessage?.traces || []).filter(t => t && t.node && t.node.endsWith('_node'));
   const isCurrentlyStreaming = lastAssistantMessage?.isStreaming;
 
   const lastWebTrace = activeTraces.find(t => t.node === 'web_search_node' && t.doc_grades && t.doc_grades.length > 0);
@@ -2727,11 +2809,59 @@ export default function App() {
           </div>
         </div>
 
+        {/* Real-time Conversation Search */}
+        <div className="sidebar-search-box">
+          <div className="sidebar-search-inner">
+            <Search size={13} className="sidebar-search-icon" />
+            <input
+              ref={convSearchInputRef}
+              type="text"
+              className="sidebar-search-input"
+              placeholder="Search inquiries... (⌘/)"
+              value={conversationSearchQuery}
+              onChange={(e) => setConversationSearchQuery(e.target.value)}
+            />
+            {conversationSearchQuery ? (
+              <button
+                type="button"
+                className="sidebar-search-clear"
+                onClick={() => setConversationSearchQuery('')}
+                title="Clear search"
+              >
+                <X size={12} />
+              </button>
+            ) : (
+              <kbd className="sidebar-search-kbd">⌘/</kbd>
+            )}
+          </div>
+        </div>
+
         {/* Recent Ascents */}
         <div className="sidebar-section recents-section">
-          <div className="sidebar-section-title">Recent inquiries</div>
+          <div className="sidebar-section-title-row">
+            <div className="sidebar-section-title">
+              {conversationSearchQuery ? `Matches (${sessions.filter(s => {
+                const q = conversationSearchQuery.toLowerCase();
+                return s.title.toLowerCase().includes(q) || s.messages.some(m => m.content.toLowerCase().includes(q));
+              }).length})` : 'Recent inquiries'}
+            </div>
+            <button
+              type="button"
+              className="sidebar-shortcuts-trigger"
+              onClick={() => setIsShortcutsOpen(true)}
+              title="Keyboard shortcuts (?)"
+            >
+              <Command size={12} />
+            </button>
+          </div>
           <div className="sessions-list">
-            {sessions.map(s => (
+            {sessions
+              .filter(s => {
+                if (!conversationSearchQuery.trim()) return true;
+                const q = conversationSearchQuery.toLowerCase();
+                return s.title.toLowerCase().includes(q) || s.messages.some(m => m.content.toLowerCase().includes(q));
+              })
+              .map(s => (
               <div 
                 key={s.id} 
                 className={`session-item ${s.id === activeSessionId ? 'active' : ''}`}
@@ -2753,6 +2883,15 @@ export default function App() {
                 </button>
               </div>
             ))}
+            {sessions.filter(s => {
+              if (!conversationSearchQuery.trim()) return true;
+              const q = conversationSearchQuery.toLowerCase();
+              return s.title.toLowerCase().includes(q) || s.messages.some(m => m.content.toLowerCase().includes(q));
+            }).length === 0 && (
+              <div className="empty-search-sessions">
+                <span>No inquiries matched "{conversationSearchQuery}"</span>
+              </div>
+            )}
           </div>
         </div>
 
@@ -3343,42 +3482,54 @@ export default function App() {
                           (s.h1 && s.h1.toLowerCase().includes(query))
                         );
                       })
-                      .map((src, i) => (
-                        <div key={i} className="kb-source-card">
-                          <div className="source-card-header">
-                            <div className="source-icon-wrap">
-                              {getSourceIcon(src.source, src.type)}
+                      .map((src, i) => {
+                        const displayName = src.name || src.filename || src.source || (src.sample ? src.sample.slice(0, 45) + '...' : 'Knowledge Document');
+                        return (
+                          <div 
+                            key={i} 
+                            className="kb-source-card"
+                            onClick={() => setPreviewDocument({ source: src.source || displayName })}
+                            style={{ cursor: 'pointer' }}
+                            title="Click to open Full Document Preview"
+                          >
+                            <div className="source-card-header">
+                              <div className="source-icon-wrap">
+                                {getSourceIcon(src.source || displayName, src.type)}
+                              </div>
+                              <div className="source-title-group">
+                                <span className="source-card-name" title={src.source || displayName}>
+                                  {displayName}
+                                </span>
+                                <span className="source-chunk-badge">
+                                  {src.chunk_count} {src.chunk_count === 1 ? 'chunk' : 'chunks'}
+                                </span>
+                              </div>
+                              <button 
+                                className="source-delete-btn"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleDeleteKBSource(src.source || displayName, displayName, src.ids);
+                                }}
+                                disabled={deletingSource === (src.source || displayName)}
+                                title={`Delete ${displayName}`}
+                                aria-label={`Delete ${displayName}`}
+                              >
+                                {deletingSource === (src.source || displayName) ? (
+                                  <RotateCw size={14} className="spin-slow" />
+                                ) : (
+                                  <Trash2 size={14} />
+                                )}
+                              </button>
                             </div>
-                            <div className="source-title-group">
-                              <span className="source-card-name" title={src.source}>
-                                {src.name}
-                              </span>
-                              <span className="source-chunk-badge">
-                                {src.chunk_count} {src.chunk_count === 1 ? 'chunk' : 'chunks'}
-                              </span>
-                            </div>
-                            <button 
-                              className="source-delete-btn"
-                              onClick={() => handleDeleteKBSource(src.source, src.name, src.ids)}
-                              disabled={deletingSource === src.source}
-                              title={`Delete ${src.name}`}
-                              aria-label={`Delete ${src.name}`}
-                            >
-                              {deletingSource === src.source ? (
-                                <RotateCw size={14} className="spin-slow" />
-                              ) : (
-                                <Trash2 size={14} />
-                              )}
-                            </button>
-                          </div>
 
-                          {src.sample && (
-                            <p className="source-preview-snippet">
-                              "{src.sample.replace(/\n+/g, ' ')}..."
-                            </p>
-                          )}
-                        </div>
-                      ))}
+                            {src.sample && (
+                              <p className="source-preview-snippet">
+                                "{src.sample.replace(/\n+/g, ' ')}"
+                              </p>
+                            )}
+                          </div>
+                        );
+                      })}
                   </div>
                 )}
               </div>
@@ -3435,8 +3586,19 @@ export default function App() {
                     <div className="grader-cards-list">
                     {allDocGrades.map((g: any, idx: number) => {
                       const isPass = g.score === 'yes';
+                      const rawSource = (g.source ? g.source.split('/').pop() : `Chunk #${idx + 1}`) || '';
+                      const displayTitle = rawSource
+                        .replace(/^tmp[a-zA-Z0-9_-]+\.[a-zA-Z0-9]+$/gi, 'Indexed Document')
+                        .replace(/\.[a-zA-Z0-9]+$/i, '')
+                        .replace(/[_-]+/g, ' ');
                       return (
-                        <div key={idx} className={`grader-detail-card ${isPass ? 'pass' : 'fail'}`}>
+                        <div 
+                          key={idx} 
+                          className={`grader-detail-card ${isPass ? 'pass' : 'fail'}`}
+                          onClick={() => setPreviewDocument({ source: g.source || displayTitle })}
+                          style={{ cursor: 'pointer' }}
+                          title="Click to view full document in previewer"
+                        >
                           <div className="grader-card-header">
                             <span className={`grader-badge ${isPass ? 'pass' : 'fail'}`}>
                               <span className="badge-icon-inline">
@@ -3444,8 +3606,9 @@ export default function App() {
                               </span>
                               {isPass ? 'VERIFIED RELEVANT' : 'FILTERED OUT (CRUX)'}
                             </span>
-                            <span className="grader-source-name">
-                              {g.source ? g.source.split('/').pop() : `Chunk #${idx + 1}`}
+                            <span className="grader-source-name" title={g.source || displayTitle}>
+                              <FileText size={12} className="inline-doc-icon" />
+                              <span className="grader-source-text">{displayTitle}</span>
                             </span>
                           </div>
                           {g.rationale && (
@@ -3693,8 +3856,29 @@ export default function App() {
         <NotebookLMSourceModal
           citation={selectedSourceModal}
           onClose={() => setSelectedSourceModal(null)}
+          onOpenViewer={(src, text) => {
+            setSelectedSourceModal(null);
+            setPreviewDocument({ source: src, highlightText: text });
+          }}
         />
       )}
+
+      {/* Full Document Viewer Modal */}
+      {previewDocument && (
+        <DocumentViewerModal
+          sourceName={previewDocument.source}
+          docId={previewDocument.docId}
+          highlightText={previewDocument.highlightText}
+          onClose={() => setPreviewDocument(null)}
+          fetchWithAuth={fetchWithAuth}
+        />
+      )}
+
+      {/* Keyboard Shortcuts Cheat-Sheet Modal */}
+      <ShortcutsModal
+        isOpen={isShortcutsOpen}
+        onClose={() => setIsShortcutsOpen(false)}
+      />
 
 
       {/* Side-by-Side Conflict Diff Viewer Modal */}
@@ -3930,27 +4114,6 @@ export default function App() {
                       )}
                     </div>
 
-                    {(user?.role === 'superadmin' || adminStats?.is_superadmin) && adminTenantsList.length > 0 && (
-                      <div className="admin-tenant-switcher-wrap">
-                        <Building2 size={14} className="tenant-switch-icon" />
-                        <select
-                          className="admin-tenant-switcher-select"
-                          value={adminTenantFilter}
-                          onChange={e => {
-                            setAdminTenantFilter(e.target.value);
-                            fetchAdminData(e.target.value);
-                          }}
-                        >
-                          <option value="">All Enterprises (Global)</option>
-                          {adminTenantsList.map(t => (
-                            <option key={t.id} value={t.id}>
-                              {t.name} (@{t.slug})
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-                    )}
-
                     <div className="admin-actions-group">
                       <button
                         className="admin-add-user-btn"
@@ -3982,6 +4145,52 @@ export default function App() {
                     </div>
                   </div>
 
+                  {/* Multi-Institution Filter Bar for Superadmins */}
+                  {(user?.role === 'superadmin' || adminStats?.is_superadmin) && adminTenantsList.length > 0 && (
+                    <div className="admin-multi-tenant-bar">
+                      <div className="multi-tenant-label">
+                        <Building2 size={13} className="text-teal" />
+                        <span>Filter Institutions:</span>
+                      </div>
+                      <div className="multi-tenant-chips-list">
+                        <button
+                          type="button"
+                          className={`multi-tenant-chip ${adminSelectedTenants.length === 0 ? 'active' : ''}`}
+                          onClick={() => setAdminSelectedTenants([])}
+                        >
+                          All Institutions ({adminTenantsList.length})
+                        </button>
+                        {adminTenantsList.map(t => {
+                          const isSelected = adminSelectedTenants.includes(t.id);
+                          return (
+                            <button
+                              key={t.id}
+                              type="button"
+                              className={`multi-tenant-chip ${isSelected ? 'active' : ''}`}
+                              onClick={() => {
+                                setAdminSelectedTenants(prev =>
+                                  isSelected ? prev.filter(id => id !== t.id) : [...prev, t.id]
+                                );
+                              }}
+                              title={`Click to ${isSelected ? 'remove' : 'include'} ${t.name}`}
+                            >
+                              <span>{t.name}</span>
+                              {isSelected && <Check size={11} className="chip-check-icon" />}
+                            </button>
+                          );
+                        })}
+                        {adminSelectedTenants.length > 0 && (
+                          <button
+                            type="button"
+                            className="multi-tenant-clear-btn"
+                            onClick={() => setAdminSelectedTenants([])}
+                          >
+                            Reset
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  )}
 
               {/* Users Table */}
               <div className="admin-table-container">
@@ -4022,6 +4231,9 @@ export default function App() {
                             title="Select all visible"
                             checked={(() => {
                               const visible = adminUsers.filter(u => {
+                                if (adminSelectedTenants.length > 0 && (!u.tenant_id || !adminSelectedTenants.includes(u.tenant_id))) {
+                                  return false;
+                                }
                                 const q = adminSearch.toLowerCase();
                                 return (
                                   u.username.toLowerCase().includes(q) ||
@@ -4034,6 +4246,9 @@ export default function App() {
                             })()}
                             onChange={e => {
                               const visible = adminUsers.filter(u => {
+                                if (adminSelectedTenants.length > 0 && (!u.tenant_id || !adminSelectedTenants.includes(u.tenant_id))) {
+                                  return false;
+                                }
                                 const q = adminSearch.toLowerCase();
                                 return (
                                   u.username.toLowerCase().includes(q) ||
@@ -4055,7 +4270,7 @@ export default function App() {
                           />
                         </th>
                         <th>Climber</th>
-                        {(user?.role === 'superadmin' || adminStats?.is_superadmin) && !adminTenantFilter && <th>Enterprise</th>}
+                        {(user?.role === 'superadmin' || adminStats?.is_superadmin) && <th>Enterprise</th>}
                         <th>Email</th>
                         <th>Role</th>
                         <th>Status</th>
@@ -4067,6 +4282,9 @@ export default function App() {
                     <tbody>
                       {adminUsers
                         .filter(u => {
+                          if (adminSelectedTenants.length > 0 && (!u.tenant_id || !adminSelectedTenants.includes(u.tenant_id))) {
+                            return false;
+                          }
                           const query = adminSearch.toLowerCase();
                           return (
                             u.username.toLowerCase().includes(query) ||
@@ -4086,52 +4304,59 @@ export default function App() {
                                   className="admin-checkbox"
                                   checked={selectedUserIds.has(u.id)}
                                   onChange={e => {
-                                    setSelectedUserIds(prev => {
-                                      const n = new Set(prev);
-                                      e.target.checked ? n.add(u.id) : n.delete(u.id);
-                                      return n;
-                                    });
+                                    const next = new Set(selectedUserIds);
+                                    if (e.target.checked) {
+                                      next.add(u.id);
+                                    } else {
+                                      next.delete(u.id);
+                                    }
+                                    setSelectedUserIds(next);
                                   }}
+                                  aria-label={`Select user ${u.username}`}
                                 />
                               ) : (
-                                <span className="checkbox-placeholder" />
+                                <span className="cell-dash" title={u.role === 'superadmin' ? 'Superadmin accounts cannot be bulk deleted' : 'Your account'}>—</span>
                               )}
                             </td>
                             <td className="user-profile-cell">
                               <div className="user-table-avatar">
-                                {u.username.charAt(0).toUpperCase()}
+                                {u.role === 'superadmin' ? <Crown size={14} className="text-amber" /> : <User size={14} />}
                               </div>
                               <div className="user-name-stack">
                                 <span className="u-name">{u.name || u.username}</span>
-                                <span className="u-id">@{u.username}</span>
+                                <span className="u-handle">@{u.username}</span>
                               </div>
                             </td>
 
-                            {user?.role === 'superadmin' && !adminTenantFilter && (
-                              <td className="user-tenant-cell">
-                                <span className="tenant-table-badge" title={`Tenant: ${u.tenant_name || 'Default'}`}>
-                                  <Building2 size={12} />
-                                  <span>{u.tenant_name || 'Default'}</span>
+                            {(user?.role === 'superadmin' || adminStats?.is_superadmin) && (
+                              <td className="tenant-col-cell">
+                                <span className="tenant-tag-badge">
+                                  {u.tenant_name || u.tenant_slug || 'Global System'}
                                 </span>
                               </td>
                             )}
 
-                            <td className="user-email-cell">{u.email}</td>
+                            <td>
+                              <span className="user-email-text">{u.email}</span>
+                            </td>
 
                             <td>
                               {u.role === 'superadmin' ? (
-                                <span className="role-chip-static superadmin" title="Platform SuperAdmin">
-                                  <Crown size={12} />
-                                  <span>SuperAdmin</span>
+                                <span className="role-badge superadmin">
+                                  <Crown size={11} />
+                                  <span>superadmin</span>
                                 </span>
                               ) : (
                                 <button
-                                  className={`role-chip-btn ${u.role === 'admin' ? 'admin' : 'user'}`}
+                                  type="button"
+                                  className={`role-badge ${u.role}`}
+                                  style={{ cursor: 'pointer' }}
                                   onClick={() => handleUpdateRole(u.id, u.role)}
-                                  title={`Click to promote/demote between Admin and Member`}
+                                  title="Click to toggle Member / Admin role"
                                 >
-                                  {u.role === 'admin' ? <Crown size={12} /> : <User size={12} />}
-                                  <span>{u.role === 'admin' ? 'Admin' : 'Member'}</span>
+                                  {u.role === 'admin' && <Shield size={11} />}
+                                  {u.role === 'user' && <User size={11} />}
+                                  <span>{u.role}</span>
                                 </button>
                               )}
                             </td>
@@ -4139,85 +4364,81 @@ export default function App() {
                             <td>
                               {u.role === 'superadmin' ? (
                                 <span className="status-chip-static active">
-                                  <UserCheck size={12} />
-                                  <span>Active</span>
+                                  <ShieldCheck size={12} />
+                                  <span>Immutable</span>
                                 </span>
                               ) : (
                                 <button
                                   className={`status-chip-btn ${u.is_active ? 'active' : 'suspended'}`}
                                   onClick={() => handleUpdateStatus(u.id, u.is_active)}
-                                  title={`Click to ${u.is_active ? 'suspend' : 'activate'} account`}
+                                  title={`Click to ${u.is_active ? 'suspend' : 'activate'} climber`}
                                 >
-                                  {u.is_active ? <UserCheck size={12} /> : <UserX size={12} />}
+                                  {u.is_active ? <Check size={12} /> : <X size={12} />}
                                   <span>{u.is_active ? 'Active' : 'Suspended'}</span>
                                 </button>
                               )}
                             </td>
 
                             <td>
-                              {editingLimitUserId === u.id ? (
-                                <div className="quota-edit-form">
+                              {u.role === 'superadmin' ? (
+                                <span className="unlimited-quota-badge">Unlimited</span>
+                              ) : editingLimitUserId === u.id ? (
+                                <div className="quota-edit-inline">
                                   <input
                                     type="number"
                                     value={tempLimitValue}
                                     onChange={e => setTempLimitValue(Math.max(1, parseInt(e.target.value) || 1))}
-                                    min={1}
-                                    max={1000000}
                                     className="quota-edit-input"
                                     autoFocus
+                                    style={{ width: '50px', padding: '2px 4px', fontSize: '0.78rem' }}
                                   />
                                   <button
-                                    className="quota-save-btn"
+                                    className="quota-edit-btn"
                                     onClick={() => handleSaveLimit(u.id, tempLimitValue)}
-                                    title="Save quota limit"
+                                    title="Save"
                                   >
-                                    <Check size={13} />
+                                    <Check size={12} />
                                   </button>
                                   <button
-                                    className="quota-cancel-btn"
+                                    className="quota-edit-btn"
                                     onClick={() => setEditingLimitUserId(null)}
                                     title="Cancel"
                                   >
-                                    <X size={13} />
+                                    <X size={12} />
                                   </button>
                                 </div>
                               ) : (
-                                <div
-                                  className="quota-display-badge"
-                                  onClick={() => {
-                                    if (u.role !== 'superadmin') {
+                                <div className="quota-edit-inline">
+                                  <span className="quota-num">{u.daily_request_limit}</span>
+                                  <button
+                                    className="quota-edit-btn"
+                                    onClick={() => {
                                       setEditingLimitUserId(u.id);
                                       setTempLimitValue(u.daily_request_limit || 50);
-                                    }
-                                  }}
-                                  title={u.role === 'superadmin' ? 'Unlimited SuperAdmin quota' : 'Click to change daily quota limit'}
-                                >
-                                  <span>{u.role === 'superadmin' || u.role === 'admin' ? 'Unlimited' : `${u.daily_request_limit} / day`}</span>
-                                  {u.role !== 'superadmin' && <Sliders size={12} className="quota-edit-icon" />}
+                                    }}
+                                    title="Edit daily prompt quota"
+                                  >
+                                    <Edit3 size={12} />
+                                  </button>
                                 </div>
                               )}
                             </td>
 
                             <td className="usage-cell">
                               <span className="usage-number">{u.requests_today}</span>
-                              <span className="usage-sub">requests</span>
+                              <span className="usage-sub">ascents</span>
                             </td>
 
                             <td className="actions-cell">
-                              <button
-                                className="user-delete-action-btn"
-                                onClick={() => handleDeleteUser(u.id, u.username)}
-                                disabled={u.id === user?.id || u.role === 'superadmin'}
-                                title={
-                                  u.id === user?.id
-                                    ? 'Cannot delete your own account'
-                                    : u.role === 'superadmin'
-                                    ? 'Cannot delete SuperAdmin'
-                                    : 'Delete user and purge data'
-                                }
-                              >
-                                <Trash2 size={14} />
-                              </button>
+                              {u.role !== 'superadmin' && u.id !== user?.id && (
+                                <button
+                                  className="action-delete-btn"
+                                  onClick={() => handleDeleteUser(u.id, u.username)}
+                                  title={`Delete ${u.username}`}
+                                >
+                                  <Trash2 size={13} />
+                                </button>
+                              )}
                             </td>
                           </tr>
                         ))}
@@ -4228,15 +4449,16 @@ export default function App() {
             </>
           )}
 
-          {/* VIEW 2: INSTITUTIONS & ENTERPRISES TAB (SuperAdmin only) */}
+          {/* VIEW 2: INSTITUTIONS & ENTERPRISES TAB (SUPERADMIN ONLY) */}
           {adminActiveTab === 'tenants' && (
             <>
+              {/* Controls bar: Search, Provision Institution & Refresh */}
               <div className="admin-controls-bar">
                 <div className="admin-search-wrap">
                   <Search size={15} className="search-icon" />
                   <input
                     type="text"
-                    placeholder="Search institutions by name or slug..."
+                    placeholder="Search institutions by name or slug code..."
                     value={adminSearch}
                     onChange={e => setAdminSearch(e.target.value)}
                     className="admin-search-input"
@@ -4257,7 +4479,7 @@ export default function App() {
                       setNewTenantSlug('');
                       setNewTenantMaxUsers(50);
                     }}
-                    title="Provision a new enterprise institution workspace"
+                    title="Provision a new isolated organization"
                   >
                     <Building2 size={14} />
                     <span>Provision Institution</span>
@@ -4277,9 +4499,81 @@ export default function App() {
 
               {/* Institutions Table */}
               <div className="admin-table-container">
+                {/* Bulk Institutions Action Bar */}
+                {selectedTenantRowIds.length > 0 && (
+                  <div className="bulk-action-bar">
+                    <span className="bulk-count">{selectedTenantRowIds.length} institutions selected</span>
+                    <button
+                      className="bulk-delete-btn"
+                      style={{ background: 'var(--recall-accent)' }}
+                      onClick={() => handleBulkToggleTenantStatus(selectedTenantRowIds, true)}
+                    >
+                      <Check size={13} />
+                      <span>Activate ({selectedTenantRowIds.length})</span>
+                    </button>
+                    <button
+                      className="bulk-delete-btn"
+                      onClick={() => handleBulkToggleTenantStatus(selectedTenantRowIds, false)}
+                    >
+                      <X size={13} />
+                      <span>Suspend ({selectedTenantRowIds.length})</span>
+                    </button>
+                    <button
+                      className="bulk-delete-btn"
+                      style={{ background: '#ef4444', color: '#ffffff' }}
+                      onClick={() => handleBulkDeleteTenants(selectedTenantRowIds)}
+                      title="Permanently delete selected institutions and all their members"
+                    >
+                      <Trash2 size={13} />
+                      <span>Delete ({selectedTenantRowIds.length}) & Users</span>
+                    </button>
+                    <button
+                      className="bulk-clear-btn"
+                      style={{ color: 'var(--recall-accent)' }}
+                      onClick={() => {
+                        setAdminSelectedTenants(selectedTenantRowIds);
+                        setAdminActiveTab('users');
+                      }}
+                    >
+                      <span>Filter Climbers ({selectedTenantRowIds.length})</span>
+                    </button>
+                    <button
+                      className="bulk-clear-btn"
+                      onClick={() => setSelectedTenantRowIds([])}
+                    >
+                      <X size={13} />
+                      <span>Clear</span>
+                    </button>
+                  </div>
+                )}
                 <table className="admin-users-table">
                   <thead>
                     <tr>
+                      <th className="checkbox-col">
+                        <input
+                          type="checkbox"
+                          className="admin-checkbox"
+                          title="Select all visible institutions"
+                          checked={(() => {
+                            const visible = adminTenantsList.filter(t => {
+                              const q = adminSearch.toLowerCase();
+                              return t.name.toLowerCase().includes(q) || t.slug.toLowerCase().includes(q);
+                            });
+                            return visible.length > 0 && visible.every(t => selectedTenantRowIds.includes(t.id));
+                          })()}
+                          onChange={e => {
+                            const visible = adminTenantsList.filter(t => {
+                              const q = adminSearch.toLowerCase();
+                              return t.name.toLowerCase().includes(q) || t.slug.toLowerCase().includes(q);
+                            });
+                            if (e.target.checked) {
+                              setSelectedTenantRowIds(visible.map(t => t.id));
+                            } else {
+                              setSelectedTenantRowIds([]);
+                            }
+                          }}
+                        />
+                      </th>
                       <th>Institution</th>
                       <th>Slug Code</th>
                       <th>Status</th>
@@ -4298,7 +4592,23 @@ export default function App() {
                         );
                       })
                       .map(t => (
-                        <tr key={t.id} className={t.is_active === false ? 'user-row-inactive' : ''}>
+                        <tr key={t.id} className={`${t.is_active === false ? 'user-row-inactive' : ''} ${selectedTenantRowIds.includes(t.id) ? 'user-row-selected' : ''}`}>
+                          <td className="checkbox-col">
+                            <input
+                              type="checkbox"
+                              className="admin-checkbox"
+                              checked={selectedTenantRowIds.includes(t.id)}
+                              onChange={e => {
+                                if (e.target.checked) {
+                                  setSelectedTenantRowIds(prev => [...prev, t.id]);
+                                } else {
+                                  setSelectedTenantRowIds(prev => prev.filter(id => id !== t.id));
+                                }
+                              }}
+                              aria-label={`Select institution ${t.name}`}
+                            />
+                          </td>
+
                           <td className="user-profile-cell">
                             <div className="user-table-avatar text-teal">
                               <Building2 size={15} />
@@ -4347,22 +4657,22 @@ export default function App() {
                               <button
                                 className="btn-ghost-sm"
                                 onClick={() => {
-                                  setAdminTenantFilter(t.id);
+                                  setAdminSelectedTenants([t.id]);
                                   setAdminActiveTab('users');
                                   fetchAdminData(t.id);
                                 }}
-                                title="View members belonging to this institution"
+                                title="View Climbers in this Institution"
                               >
-                                <Users size={13} />
-                                <span>Members</span>
+                                <Users size={12} />
+                                <span>View Members</span>
                               </button>
                               {t.slug !== 'default' && (
                                 <button
-                                  className="user-delete-action-btn"
+                                  className="action-delete-btn"
                                   onClick={() => handleDeleteTenant(t.id, t.name)}
-                                  title="Permanently delete institution and purge all data"
+                                  title={`Delete Institution "${t.name}"`}
                                 >
-                                  <Trash2 size={14} />
+                                  <Trash2 size={13} />
                                 </button>
                               )}
                             </div>
